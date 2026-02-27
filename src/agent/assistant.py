@@ -22,7 +22,7 @@ def get_assistant(session_id: str) -> Agent:
     """
     Retorna a instância do agente configurada para uma sessão específica (ex: número do WhatsApp).
     """
-    db_path = os.getenv("AGNO_DB_PATH", "sessions.db")
+    db_url = os.getenv("AGNO_DB_URL", "sqlite:///sessions.db")
     
     # Importação atrasada para evitar erro se a ferramenta ainda não estiver pronta
     try:
@@ -31,11 +31,22 @@ def get_assistant(session_id: str) -> Agent:
     except ImportError:
         tools = []
     
+    # Se estiver usando Turso/libsql, precisaremos ajustar o prefixo para sqlite+libsql://
+    if db_url.startswith("libsql://") or db_url.startswith("https://"):
+        auth_token = os.getenv("AGNO_DB_AUTH_TOKEN", "")
+        # O SQLAlchemy com driver libsql precisa do auth token na URL se não for localhost
+        if auth_token:
+            db_url = db_url.replace("libsql://", f"sqlite+libsql://") + f"?authToken={auth_token}"
+        else:
+            db_url = db_url.replace("libsql://", f"sqlite+libsql://")
+    elif not db_url.startswith("sqlite"):
+        db_url = f"sqlite:///{db_url}"
+    
     return Agent(
         name="Assistente do Diario Teq",
         model=get_model(),
         session_id=session_id,
-        db=SqliteDb(db_file=db_path),
+        db=SqliteDb(db_url=db_url, table_name="sessions"),
         add_datetime_to_context=True,
         add_history_to_context=True,
         num_history_runs=5,
