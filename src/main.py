@@ -172,7 +172,17 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                 if data.get("event") != "messages.upsert":
                     return {"status": "success"}
 
-                # Ignora updates e recibos de leitura (só processa mensagem de fato)
+                # Previne duplicidade de eventos "upsert" vazios ou de status
+                msg_status = evo_data.get("status", "")
+                if msg_status in ["DELIVERY_ACK", "READ", "PLAYED", "SERVER_ACK"]:
+                    print(f"[DEBUG] Ignorando webhook de status: {msg_status}")
+                    return {"status": "success"}
+
+                # Ignora se for apenas uma atualização da mensagem (ex: mensagem entregue/lida) e não uma inserção
+                if data.get("data", {}).get("messageType") == "protocolMessage":
+                    return {"status": "success"}
+                    
+                # A Evolution API em "messages.upsert" pode mandar mensagens de outros tipos no futuro, vamos focar só nos necessários
                 if evo_data.get("messageType") not in ["conversation", "extendedTextMessage", "audioMessage"]:
                     return {"status": "success"}
                     
