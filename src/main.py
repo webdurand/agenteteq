@@ -156,17 +156,8 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
             if "key" in evo_data and "message" in evo_data:
                 key = evo_data["key"]
                 
-                # Previne loop: ignora mensagens que nós mesmos enviamos
                 if key.get("fromMe"):
-                    return {"status": "success"} 
-                    
-                # Previne duplicidade: Evita processar eventos de atualização de status de mensagem (ex: mensagem lida/entregue)
-                if data.get("event") != "messages.upsert":
-                    return {"status": "success"}
-                    
-                # Só processar se for uma mensagem do tipo 'notify' (nova mensagem do usuário)
-                if data.get("type") != "notify":
-                     return {"status": "success"}
+                    return {"status": "success"} # Ignora mensagens enviadas por nós mesmos
                     
                 from_number = key.get("remoteJid", "").split("@")[0]
                 message_id = key.get("id")
@@ -191,10 +182,6 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                     normalized_message["audio"] = {"id": base64_data}
                 
                 if normalized_message["type"] != "unknown":
-                    # Checagem extra de segurança contra mensagens vazias
-                    if normalized_message["type"] == "text" and not normalized_message.get("text", {}).get("body", "").strip():
-                         return {"status": "success"}
-                    
                     print(f"[IN] Mensagem recebida (Evolution) de {from_number} (Tipo: {normalized_message['type']})")
                     background_tasks.add_task(process_whatsapp_message, normalized_message, from_number)
 
