@@ -14,7 +14,7 @@ class WhatsAppClient:
             "Content-Type": "application/json",
         }
 
-    async def send_text_message(self, to_number: str, text: str) -> dict:
+    async def send_text_message(self, to_number: str, text: str, reply_to_message_id: Optional[str] = None) -> dict:
         """
         Envia uma mensagem de texto para um número.
         """
@@ -26,6 +26,9 @@ class WhatsAppClient:
             "type": "text",
             "text": {"body": text},
         }
+        
+        if reply_to_message_id:
+            payload["context"] = {"message_id": reply_to_message_id}
 
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, headers=self._get_headers())

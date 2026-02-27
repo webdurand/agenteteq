@@ -31,10 +31,10 @@ def verify_webhook(
     raise HTTPException(status_code=403, detail="Token de verificação inválido")
 
 async def process_whatsapp_message(message: dict, from_number: str):
+    message_id = message.get("id")
     try:
         agent = get_assistant(session_id=from_number)
         msg_type = message.get("type")
-        message_id = message.get("id")
         
         if msg_type == "audio":
             # Aciona o indicador de que está processando o áudio
@@ -69,7 +69,7 @@ async def process_whatsapp_message(message: dict, from_number: str):
                 print(f"[TESTE LOCAL] O Agente responderia para {from_number}: {response.content}")
             else:
                 print(f"[OUT] Enviando resposta (áudio) para {from_number}: {response.content[:100]}...")
-                await whatsapp_client.send_text_message(from_number, response.content)
+                await whatsapp_client.send_text_message(from_number, response.content, reply_to_message_id=message_id)
             
         elif msg_type == "text":
             if message_id:
@@ -86,7 +86,7 @@ async def process_whatsapp_message(message: dict, from_number: str):
                 print(f"[TESTE LOCAL] O Agente responderia para {from_number}: {response.content}")
             else:
                 print(f"[OUT] Enviando texto para {from_number}: {response.content[:100]}...")
-                await whatsapp_client.send_text_message(from_number, response.content)
+                await whatsapp_client.send_text_message(from_number, response.content, reply_to_message_id=message_id)
             
     except Exception as e:
         print(f"[ERROR] Falha ao processar a mensagem de {from_number}: {e}")
@@ -97,7 +97,7 @@ async def process_whatsapp_message(message: dict, from_number: str):
                 print("[TESTE LOCAL] Ignorando envio de mensagem de erro para número dummy.")
             else:
                 print(f"[OUT] Enviando mensagem de fallback (erro) para {from_number}")
-                await whatsapp_client.send_text_message(from_number, "Desculpe, ocorreu um erro interno ao processar sua mensagem.")
+                await whatsapp_client.send_text_message(from_number, "Desculpe, ocorreu um erro interno ao processar sua mensagem.", reply_to_message_id=message_id)
         except Exception as e2:
             print(f"[ERROR] Falha ao tentar enviar mensagem de fallback para o Whatsapp: {e2}")
 
@@ -119,10 +119,23 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                 from_number = message["from"]
                 msg_type = message.get("type", "unknown")
                 
-                print(f"[IN] Mensagem recebida de {from_number} (Tipo: {msg_type})")
+                # Vamos tentar pegar o wa_id do contacts também, que costuma ser mais confiável
+                wa_id = from_number
+                if "contacts" in value and len(value["contacts"]) > 0:
+                    wa_id = value["contacts"][0].get("wa_id", from_number)
+                
+                print(f"[IN] Mensagem recebida de {from_number} (wa_id: {wa_id}, Tipo: {msg_type})")
                 
                 # Executa o processamento em background para não travar o webhook da Meta
-                background_tasks.add_task(process_whatsapp_message, message, from_number)
+                background_tasks.add_task(process_whatsapp_message, message, wa_id)
+            
+            elif "statuses" in value:
+                status = value["statuses"][0]
+                status_val = status.get("status")
+                recipient_id = status.get("recipient_id")
+                print(f"[STATUS] Mensagem para {recipient_id} mudou para: {status_val}")
+                if "errors" in status:
+                    print(f"[ERROR] Detalhes do erro no status: {status['errors']}")
 
     except Exception as e:
         print(f"[ERROR] Falha ao parsear webhook: {e}")
