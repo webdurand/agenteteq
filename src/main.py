@@ -53,20 +53,32 @@ async def process_whatsapp_message(message: dict, from_number: str):
                 prompt = f"O autor enviou um áudio com a seguinte transcrição:\n\n{transcription}"
                 response = agent.run(prompt)
             
-            await whatsapp_client.send_text_message(from_number, response.content)
+            # Checa se é um número dummy do simulador da Meta para não tentar responder e tomar 401
+            if from_number in ["16315551181", "16505551111"]:
+                print(f"[TESTE LOCAL] O Agente responderia para {from_number}: {response.content}")
+            else:
+                await whatsapp_client.send_text_message(from_number, response.content)
             
         elif msg_type == "text":
             text_body = message["text"]["body"]
             
             response = agent.run(text_body)
             
-            await whatsapp_client.send_text_message(from_number, response.content)
+            # Checa se é um número dummy do simulador da Meta para não tentar responder e tomar 401
+            if from_number in ["16315551181", "16505551111"]:
+                print(f"[TESTE LOCAL] O Agente responderia para {from_number}: {response.content}")
+            else:
+                await whatsapp_client.send_text_message(from_number, response.content)
             
     except Exception as e:
         print(f"Erro ao processar a mensagem: {e}")
         # Apenas tenta enviar se tivermos as credenciais válidas e não for o banco falhando antes
         try:
-            await whatsapp_client.send_text_message(from_number, "Desculpe, ocorreu um erro interno ao processar sua mensagem.")
+            # Em modo de teste de webhook da Meta (com números dummy), pular envio
+            if from_number in ["16315551181", "16505551111"]:
+                print("Modo de teste: Ignorando envio de mensagem de erro para número dummy.")
+            else:
+                await whatsapp_client.send_text_message(from_number, "Desculpe, ocorreu um erro interno ao processar sua mensagem.")
         except Exception as e2:
             print(f"Erro ao tentar enviar mensagem de fallback para o Whatsapp: {e2}")
 
