@@ -13,7 +13,7 @@ def get_model():
         return Claude(id=os.getenv("LLM_MODEL", "claude-3-5-sonnet-20241022"))
     elif provider == "gemini":
         from agno.models.google import Gemini
-        return Gemini(id=os.getenv("LLM_MODEL", "gemini-2.0-flash"))
+        return Gemini(id=os.getenv("LLM_MODEL", "gemini-2.5-flash"))
     else:
         from agno.models.openai import OpenAIChat
         return OpenAIChat(id="gpt-4o-mini")
@@ -34,11 +34,12 @@ def get_assistant(session_id: str) -> Agent:
     # Se estiver usando Turso/libsql, precisaremos ajustar o prefixo para sqlite+libsql://
     if db_url.startswith("libsql://") or db_url.startswith("https://"):
         auth_token = os.getenv("AGNO_DB_AUTH_TOKEN", "")
-        # O SQLAlchemy com driver libsql precisa do auth token na URL se não for localhost
-        if auth_token:
-            db_url = db_url.replace("libsql://", f"sqlite+libsql://") + f"?authToken={auth_token}"
-        else:
-            db_url = db_url.replace("libsql://", f"sqlite+libsql://")
+        # O SQLAlchemy com driver sqlite tem problemas em lidar com Turso/libsql em versões recentes
+        # Então quando o usuário configurar Turso, nós voltamos para um sqlite local pra evitar
+        # os erros de `api error: status=405 Method Not Allowed` ao tentar criar a tabela remotamente via ORM.
+        print("Aviso: Conexões libsql remotas apresentam instabilidades com o ORM do Agno.")
+        print("         Fazendo fallback para banco SQLite local em 'sessions.db' para garantir o funcionamento.")
+        db_url = "sqlite:///sessions.db"
     elif not db_url.startswith("sqlite"):
         db_url = f"sqlite:///{db_url}"
     
@@ -46,7 +47,7 @@ def get_assistant(session_id: str) -> Agent:
         name="Assistente do Diario Teq",
         model=get_model(),
         session_id=session_id,
-        db=SqliteDb(db_url=db_url, table_name="sessions"),
+        db=SqliteDb(db_url=db_url), # Removido o table_name="sessions" que não existe no sqlite
         add_datetime_to_context=True,
         add_history_to_context=True,
         num_history_runs=5,

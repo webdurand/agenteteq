@@ -64,7 +64,11 @@ async def process_whatsapp_message(message: dict, from_number: str):
             
     except Exception as e:
         print(f"Erro ao processar a mensagem: {e}")
-        await whatsapp_client.send_text_message(from_number, "Desculpe, ocorreu um erro ao processar sua mensagem.")
+        # Apenas tenta enviar se tivermos as credenciais válidas e não for o banco falhando antes
+        try:
+            await whatsapp_client.send_text_message(from_number, "Desculpe, ocorreu um erro interno ao processar sua mensagem.")
+        except Exception as e2:
+            print(f"Erro ao tentar enviar mensagem de fallback para o Whatsapp: {e2}")
 
 @app.post("/webhook/whatsapp")
 async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
