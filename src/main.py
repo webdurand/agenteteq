@@ -126,6 +126,9 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
     """
     data = await request.json()
     
+    # LOG DEBUG TEMPORÁRIO PARA INVESTIGAR DUPLICIDADE
+    print(f"[DEBUG RAW WEBHOOK] {data}")
+    
     try:
         # Padrão Meta API
         if "entry" in data:
