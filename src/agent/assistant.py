@@ -11,6 +11,9 @@ def get_model():
     elif provider == "anthropic":
         from agno.models.anthropic import Claude
         return Claude(id=os.getenv("LLM_MODEL", "claude-3-5-sonnet-20241022"))
+    elif provider == "gemini":
+        from agno.models.google import Gemini
+        return Gemini(id=os.getenv("LLM_MODEL", "gemini-2.0-flash"))
     else:
         from agno.models.openai import OpenAIChat
         return OpenAIChat(id="gpt-4o-mini")

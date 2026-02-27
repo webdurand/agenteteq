@@ -40,10 +40,18 @@ async def process_whatsapp_message(message: dict, from_number: str):
             media_url = await whatsapp_client.get_media_url(audio_id)
             audio_bytes = await whatsapp_client.download_media(media_url)
             
-            transcription = await transcriber.transcribe(audio_bytes)
+            provider = os.getenv("LLM_PROVIDER", "openai").lower()
             
-            prompt = f"O autor enviou um áudio com a seguinte transcrição:\n\n{transcription}"
-            response = agent.run(prompt)
+            if provider == "gemini":
+                # O Gemini suporta áudio nativamente (multimodal)
+                from agno.media import Audio
+                prompt = "O autor enviou um áudio. Por favor, ouça e prepare uma sugestão de post para o blog, ou me faça perguntas caso falte alguma informação importante no áudio."
+                response = agent.run(prompt, audio=[Audio(content=audio_bytes)])
+            else:
+                # Fallback para serviços de transcrição de terceiros (Whisper, Groq, etc)
+                transcription = await transcriber.transcribe(audio_bytes)
+                prompt = f"O autor enviou um áudio com a seguinte transcrição:\n\n{transcription}"
+                response = agent.run(prompt)
             
             await whatsapp_client.send_text_message(from_number, response.content)
             

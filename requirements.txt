@@ -1,4 +1,5 @@
 fastapi[standard]
-agno
+agno[sqlite]
 httpx
 python-dotenv
+google-genai
