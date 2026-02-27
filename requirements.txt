@@ -1,0 +1,4 @@
+fastapi
+agno
+httpx
+python-dotenv
