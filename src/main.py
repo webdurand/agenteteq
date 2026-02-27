@@ -7,6 +7,9 @@ load_dotenv()
 from src.integrations.whatsapp import whatsapp_client
 from src.integrations.transcriber import transcriber
 from src.agent.assistant import get_assistant
+import asyncio
+from src.memory.knowledge import get_vector_db
+from src.memory.extractor import extract_and_save_facts
 
 app = FastAPI(title="Agente WhatsApp - Diario Teq")
 
@@ -52,14 +55,16 @@ async def process_whatsapp_message(message: dict, from_number: str):
                 from agno.media import Audio
                 prompt = "O autor enviou um áudio. Por favor, ouça e prepare uma sugestão de post para o blog, ou me faça perguntas caso falte alguma informação importante no áudio."
                 print(f"[PROCESS] Enviando áudio multimodal para o Agente Agno (Gemini)")
-                response = agent.run(prompt, audio=[Audio(content=audio_bytes)])
+                response = agent.run(prompt, audio=[Audio(content=audio_bytes)], knowledge_filters={"user_id": from_number})
+                asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, prompt, response.content))
             else:
                 print(f"[PROCESS] Iniciando transcrição de áudio com provedor: {provider}")
                 transcription = await transcriber.transcribe(audio_bytes)
                 print(f"[PROCESS] Transcrição concluída: {transcription[:100]}...")
                 
                 prompt = f"O autor enviou um áudio com a seguinte transcrição:\n\n{transcription}"
-                response = agent.run(prompt)
+                response = agent.run(prompt, knowledge_filters={"user_id": from_number})
+                asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, transcription, response.content))
             
             if from_number in ["16315551181", "16505551111"]:
                 print(f"[TESTE LOCAL] O Agente responderia para {from_number}: {response.content}")
@@ -75,7 +80,22 @@ async def process_whatsapp_message(message: dict, from_number: str):
             text_body = message["text"]["body"]
             print(f"[PROCESS] Texto extraído da mensagem: {text_body[:50]}...")
             
-            response = agent.run(text_body)
+            # Injecting context if memory_mode is always-on
+            memory_mode = os.getenv("MEMORY_MODE", "agentic").lower()
+            if memory_mode == "always-on":
+                vector_db = get_vector_db()
+                if vector_db:
+                    try:
+                        results = vector_db.search(query=text_body, limit=3, filters={"user_id": from_number})
+                        if results:
+                            memories = "\n".join([f"- {doc.content}" for doc in results])
+                            context_text = f"\n\n[Contexto da Memória para considerar:\n{memories}]"
+                            text_body += context_text
+                    except Exception as e:
+                        print(f"[ERROR] Falha ao buscar memórias always-on: {e}")
+            
+            response = agent.run(text_body, knowledge_filters={"user_id": from_number})
+            asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, text_body, response.content))
             
             if from_number in ["16315551181", "16505551111"]:
                 print(f"[TESTE LOCAL] O Agente responderia para {from_number}: {response.content}")

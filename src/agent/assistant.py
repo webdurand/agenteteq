@@ -1,6 +1,8 @@
 import os
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
+from src.memory.knowledge import get_knowledge_base
+from src.tools.memory_manager import add_memory, delete_memory, list_memories
 
 def get_model():
     provider = os.getenv("LLM_PROVIDER", "openai").lower()
@@ -27,9 +29,12 @@ def get_assistant(session_id: str) -> Agent:
     # Importação atrasada para evitar erro se a ferramenta ainda não estiver pronta
     try:
         from src.tools.blog_publisher import publish_post
-        tools = [publish_post]
+        tools = [publish_post, add_memory, delete_memory, list_memories]
     except ImportError:
-        tools = []
+        tools = [add_memory, delete_memory, list_memories]
+        
+    knowledge_base = get_knowledge_base()
+    search_knowledge = os.getenv("MEMORY_MODE", "agentic").lower() == "agentic" and knowledge_base is not None
     
     # Se estiver usando Turso/libsql, precisaremos ajustar o prefixo para sqlite+libsql://
     if db_url.startswith("libsql://") or db_url.startswith("https://"):
@@ -48,6 +53,8 @@ def get_assistant(session_id: str) -> Agent:
         model=get_model(),
         session_id=session_id,
         db=SqliteDb(db_url=db_url), # Removido o table_name="sessions" que não existe no sqlite
+        knowledge=knowledge_base,
+        search_knowledge=search_knowledge,
         add_datetime_to_context=True,
         add_history_to_context=True,
         num_history_runs=5,

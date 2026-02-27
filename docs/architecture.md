@@ -26,6 +26,7 @@ O Agente Agno possui ferramentas para coletar informações faltantes com o usu�
 - **Python & FastAPI**: Fornecem agilidade e facilidade para hospedar webhooks.
 - **Agno**: Framework para construção de agentes stateful.
 - **Identidade e Onboarding Determinístico**: Reduz custos de LLM e garante uma experiência controlada ao coletar os dados iniciais do usuário.
+- **Módulo de Memória**: Utiliza NeonDB com PgVector e a Knowledge Base do Agno para armazenar memórias do usuário em background e injetar contexto de forma "Agentic" ou "Always-on".
 - **Desacoplamento**: Tanto o LLM do agente quanto a API de transcrição podem ser trocados alterando apenas a injeção de dependência/variáveis de ambiente, tornando o sistema Future-proof.
 - **Armazenamento de Sessão**: Agno SqliteDb para manter histórico por telefone do usuário.
 - **Integração Git Local**: Para simplicidade, o agente faz interações git nativas via shell no repositório irmão para publicar o post.

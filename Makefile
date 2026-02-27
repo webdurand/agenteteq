@@ -10,3 +10,6 @@ dev:
 
 start:
 	.venv/bin/fastapi run src/main.py --port $${PORT:-8000} --host 0.0.0.0
+
+test-cli:
+	PYTHONPATH=. .venv/bin/python src/testing/cli.py

@@ -1,8 +1,12 @@
 fastapi[standard]
 agno[sqlite]
+agno[pgvector]
 httpx
 python-dotenv
 google-genai
 libsql-client
 sqlalchemy-libsql
 uvicorn
+psycopg2-binary
+pgvector
+rich
