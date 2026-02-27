@@ -14,8 +14,9 @@ def extract_and_save_facts(user_id: str, message: str, response: str) -> None:
         return
         
     prompt = f"""
-Analise a seguinte interação entre um usuário e um assistente de IA.
-Sua tarefa é extrair fatos permanentes ou preferências explícitas sobre o usuário, se houverem.
+Analise a seguinte interação entre um usuário (o autor da mensagem) e um assistente de IA.
+Sua tarefa é extrair fatos permanentes ou preferências explícitas **SOBRE O USUÁRIO**, baseando-se **apenas no que o usuário disse** (a resposta do assistente serve apenas de contexto).
+NÃO extraia fatos sobre o que o assistente é capaz de fazer, nem assuma que o usuário é dono de sistemas que o assistente menciona, a menos que o usuário tenha dito isso explicitamente.
 Exemplos de fatos a extrair: "O usuário gosta de títulos curtos", "O usuário tem uma empresa chamada XYZ", "O usuário não gosta de emojis".
 NÃO extraia fatos temporários ou irrelevantes para o futuro.
 Se houver algum fato a ser memorizado, retorne APENAS a string com o fato.
