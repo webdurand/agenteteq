@@ -1,18 +1,26 @@
 import os
-import subprocess
-from datetime import datetime
+import base64
 import re
+from datetime import datetime
+import httpx
 
 def publish_post(title: str, content: str) -> str:
     """
-    Ferramenta responsável por materializar o arquivo do post no blog
-    e acionar um push na main.
+    Ferramenta responsável por criar o arquivo do post diretamente no repositório do blog
+    no GitHub via API, acionando o deploy na Vercel indiretamente.
 
     Parâmetros:
     - title: O título do post (será usado para gerar o nome do arquivo).
     - content: O conteúdo do post em markdown (.mdx), incluindo o frontmatter necessário.
     """
-    # 1. Gerar o nome do arquivo (YYYY-MM-DD-slug.mdx)
+    # 1. Obter configurações do ambiente
+    github_token = os.environ.get("GITHUB_TOKEN")
+    github_repo = os.environ.get("GITHUB_REPO", "webdurand/diario-teq")
+    
+    if not github_token:
+        return "Erro: GITHUB_TOKEN não está configurado nas variáveis de ambiente. Não é possível publicar o post no GitHub."
+        
+    # 2. Gerar o nome do arquivo (YYYY-MM-DD-slug.mdx)
     today = datetime.now().strftime("%Y-%m-%d")
     
     # Criar um slug simples a partir do título
@@ -21,32 +29,34 @@ def publish_post(title: str, content: str) -> str:
     slug = slug.strip('-')
     
     filename = f"{today}-{slug}.mdx"
+    file_path = f"content/posts/{filename}"
     
-    # O diretório esperado é o irmão "diarioteq" -> content/posts
-    # A raiz do backend atual é "agenteteq", então base_dir aponta para diario-teq/diarioteq
-    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../diarioteq"))
-    posts_dir = os.path.join(base_dir, "content", "posts")
+    # 3. Preparar a chamada para a API do GitHub
+    api_url = f"https://api.github.com/repos/{github_repo}/contents/{file_path}"
     
-    # Verifica se o diretório existe
-    if not os.path.exists(posts_dir):
-        return f"Erro: O diretório do blog não foi encontrado em {posts_dir}."
-        
-    filepath = os.path.join(posts_dir, filename)
+    headers = {
+        "Authorization": f"Bearer {github_token}",
+        "Accept": "application/vnd.github.v3+json",
+        "X-GitHub-Api-Version": "2022-11-28"
+    }
     
-    # 2. Escrever o conteúdo no arquivo
+    # O conteúdo precisa estar em base64
+    content_base64 = base64.b64encode(content.encode('utf-8')).decode('utf-8')
+    
+    payload = {
+        "message": f"post: novo devlog automático - {title}",
+        "content": content_base64,
+        "branch": "main"  # ou a branch padrão
+    }
+    
+    # 4. Fazer a requisição para o GitHub
     try:
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(content)
+        response = httpx.put(api_url, headers=headers, json=payload, timeout=20.0)
+        
+        if response.status_code in (201, 200):
+            return f"Sucesso! Post '{title}' publicado no arquivo {filename} no repositório {github_repo} via GitHub API."
+        else:
+            return f"Erro ao publicar no GitHub. Status: {response.status_code}. Detalhes: {response.text}"
+            
     except Exception as e:
-        return f"Erro ao criar o arquivo do post: {str(e)}"
-        
-    # 3. Executar os comandos git
-    try:
-        subprocess.run(["git", "add", filepath], cwd=base_dir, check=True, capture_output=True)
-        subprocess.run(["git", "commit", "-m", f"docs(blog): post automático - {title}"], cwd=base_dir, check=True, capture_output=True)
-        subprocess.run(["git", "push", "origin", "main"], cwd=base_dir, check=True, capture_output=True)
-        
-        return f"Sucesso! Post '{title}' publicado no arquivo {filename} e enviado para o GitHub."
-    except subprocess.CalledProcessError as e:
-        error_msg = e.stderr.decode('utf-8') if e.stderr else str(e)
-        return f"Erro ao fazer commit/push do post. O arquivo foi criado localmente. Erro: {error_msg}"
+        return f"Erro de conexão ao tentar publicar na API do GitHub: {str(e)}"

@@ -18,8 +18,9 @@ O Agente Agno possui ferramentas para coletar informações faltantes com o usu�
    - Pode conversar com o usuário, pedindo mais detalhes ou gerando uma sugestão de post.
    - Aguarda a confirmação do usuário (sim/não ou ajustes).
 6. **Ferramenta de Publicação**: Após aprovação final, o Agente aciona a ferramenta que:
-   - Gera um arquivo `YYYY-MM-DD-slug.mdx` no diretório `../diarioteq/content/posts/`.
-   - Executa os comandos git (`add`, `commit` e `push origin main`) no repositório `../diarioteq/`.
+   - Gera o conteúdo e converte para base64.
+   - Utiliza a **GitHub REST API** para criar ou atualizar o arquivo `YYYY-MM-DD-slug.mdx` diretamente no repositório remoto do blog (ex. `webdurand/diario-teq`), no diretório `content/posts/`.
+   - Essa ação dispara automaticamente um deploy na Vercel (onde o blog está hospedado), sem depender de acessos ao sistema de arquivos local.
 
 ## Decisões Técnicas
 
@@ -29,6 +30,6 @@ O Agente Agno possui ferramentas para coletar informações faltantes com o usu�
 - **Módulo de Memória**: Utiliza NeonDB com PgVector e a Knowledge Base do Agno para armazenar memórias do usuário em background e injetar contexto de forma "Agentic" ou "Always-on".
 - **Desacoplamento**: Tanto o LLM do agente quanto a API de transcrição podem ser trocados alterando apenas a injeção de dependência/variáveis de ambiente, tornando o sistema Future-proof.
 - **Armazenamento de Sessão**: Agno SqliteDb para manter histórico por telefone do usuário.
-- **Integração Git Local**: Para simplicidade, o agente faz interações git nativas via shell no repositório irmão para publicar o post.
+- **Integração via GitHub API**: A publicação do blog foi migrada de comandos git locais para a GitHub API (`httpx.put`), permitindo que a API e o blog sejam deployados em servidores diferentes e desacoplados (ex: backend na Koyeb, frontend na Vercel).
 
 *(Este arquivo deve ser atualizado sempre que novas ferramentas, rotas ou fluxos forem adicionados)*
