@@ -12,10 +12,12 @@ from src.memory.knowledge import get_vector_db
 from src.memory.extractor import extract_and_save_facts
 
 import time
+import hashlib
+import json
 
 app = FastAPI(title="Agente WhatsApp - Diario Teq")
 
-# Cache simples para evitar processamento duplicado da mesma mensagem
+# Cache para evitar processamento duplicado da mesma mensagem
 processed_message_ids = {}
 
 VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "meu_token_super_secreto")
@@ -182,12 +184,18 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                     
                 message_id = key.get("id")
                 
-                # Previne duplicidade usando cache de IDs (a Evolution manda o mesmo messages.upsert múltiplas vezes)
+                # Previne duplicidade usando um hash do conteúdo da mensagem + ID para maior precisão (caso a Evolution reenvie)
+                msg_content = ""
+                if evo_data.get("messageType") in ["conversation", "extendedTextMessage"]:
+                    msg_content = evo_data.get("message", {}).get("conversation", "") or evo_data.get("message", {}).get("extendedTextMessage", {}).get("text", "")
+                
+                dedup_key = f"{message_id}_{hashlib.md5(msg_content.encode()).hexdigest()}"
+                
                 if message_id:
-                    if message_id in processed_message_ids:
-                        print(f"[DEBUG] Mensagem {message_id} ignorada (duplicada/já processada)")
+                    if dedup_key in processed_message_ids:
+                        print(f"[DEBUG] Mensagem {dedup_key} ignorada (duplicada/já processada)")
                         return {"status": "success"}
-                    processed_message_ids[message_id] = time.time()
+                    processed_message_ids[dedup_key] = time.time()
                     
                     if len(processed_message_ids) > 1000:
                         sorted_keys = sorted(processed_message_ids.keys(), key=lambda k: processed_message_ids[k])
