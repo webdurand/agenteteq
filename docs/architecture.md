@@ -7,15 +7,17 @@ O Agente Agno possui ferramentas para coletar informações faltantes com o usu�
 
 ## Fluxo Principal
 
-1. **Webhook (FastAPI)**: Recebe payload da Meta (WhatsApp Cloud API) com um áudio.
-2. **Integração WhatsApp**: Faz o download da mídia do áudio e permite enviar mensagens de texto (respostas/confirmações).
-3. **Transcrição (Desacoplada)**: Lê o áudio e transforma em texto. O serviço é parametrizado via `.env` (ex. Whisper, Groq, Gemini) para permitir fácil troca.
-4. **Agente (Agno)**:
-   - Recebe a transcrição.
+1. **Webhook (FastAPI)**: Recebe payload da Meta (WhatsApp Cloud API) com um áudio ou texto.
+2. **Módulo de Identidade (Determinístico)**: Antes de acionar a IA, o sistema verifica o número de telefone no banco de dados. Se for um usuário novo, realiza um onboarding determinístico pedindo o nome. Se já for cadastrado, injeta as preferências no contexto do agente.
+3. **Integração WhatsApp**: Faz o download da mídia do áudio e permite enviar mensagens de texto (respostas/confirmações).
+4. **Transcrição (Desacoplada)**: Lê o áudio e transforma em texto. O serviço é parametrizado via `.env` (ex. Whisper, Groq, Gemini) para permitir fácil troca.
+5. **Agente (Agno)**:
+   - Recebe a transcrição ou texto.
    - Possui estado (histórico) salvo em SQLite (Agno SqliteDb), usando o número de WhatsApp como `session_id`.
+   - É instanciado com o contexto do usuário fornecido pelo Módulo de Identidade.
    - Pode conversar com o usuário, pedindo mais detalhes ou gerando uma sugestão de post.
    - Aguarda a confirmação do usuário (sim/não ou ajustes).
-5. **Ferramenta de Publicação**: Após aprovação final, o Agente aciona a ferramenta que:
+6. **Ferramenta de Publicação**: Após aprovação final, o Agente aciona a ferramenta que:
    - Gera um arquivo `YYYY-MM-DD-slug.mdx` no diretório `../diarioteq/content/posts/`.
    - Executa os comandos git (`add`, `commit` e `push origin main`) no repositório `../diarioteq/`.
 
@@ -23,6 +25,7 @@ O Agente Agno possui ferramentas para coletar informações faltantes com o usu�
 
 - **Python & FastAPI**: Fornecem agilidade e facilidade para hospedar webhooks.
 - **Agno**: Framework para construção de agentes stateful.
+- **Identidade e Onboarding Determinístico**: Reduz custos de LLM e garante uma experiência controlada ao coletar os dados iniciais do usuário.
 - **Desacoplamento**: Tanto o LLM do agente quanto a API de transcrição podem ser trocados alterando apenas a injeção de dependência/variáveis de ambiente, tornando o sistema Future-proof.
 - **Armazenamento de Sessão**: Agno SqliteDb para manter histórico por telefone do usuário.
 - **Integração Git Local**: Para simplicidade, o agente faz interações git nativas via shell no repositório irmão para publicar o post.
