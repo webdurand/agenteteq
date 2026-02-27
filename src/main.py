@@ -172,14 +172,8 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                 if data.get("event") != "messages.upsert":
                     return {"status": "success"}
 
-                # Previne duplicidade de eventos "upsert" vazios ou de status
-                msg_status = evo_data.get("status", "")
-                if msg_status in ["DELIVERY_ACK", "READ", "PLAYED", "SERVER_ACK"]:
-                    print(f"[DEBUG] Ignorando webhook de status: {msg_status}")
-                    return {"status": "success"}
-
-                # Ignora se for apenas uma atualização da mensagem (ex: mensagem entregue/lida) e não uma inserção
-                if data.get("data", {}).get("messageType") == "protocolMessage":
+                # Ignora protocolMessages (ex: mensagem apagada, etc)
+                if evo_data.get("messageType") == "protocolMessage":
                     return {"status": "success"}
                     
                 # A Evolution API em "messages.upsert" pode mandar mensagens de outros tipos no futuro, vamos focar só nos necessários
@@ -188,16 +182,14 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                     
                 message_id = key.get("id")
                 
-                # Previne duplicidade usando cache de IDs
+                # Previne duplicidade usando cache de IDs (a Evolution manda o mesmo messages.upsert múltiplas vezes)
                 if message_id:
                     if message_id in processed_message_ids:
-                        print(f"[PROCESS] Mensagem {message_id} ignorada (duplicada/já processada)")
+                        print(f"[DEBUG] Mensagem {message_id} ignorada (duplicada/já processada)")
                         return {"status": "success"}
                     processed_message_ids[message_id] = time.time()
                     
-                    # Limpa o cache se ficar muito grande para evitar vazamento de memória
                     if len(processed_message_ids) > 1000:
-                        # Mantém apenas os 500 mais recentes
                         sorted_keys = sorted(processed_message_ids.keys(), key=lambda k: processed_message_ids[k])
                         for k in sorted_keys[:-500]:
                             del processed_message_ids[k]
