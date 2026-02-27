@@ -11,7 +11,12 @@ import asyncio
 from src.memory.knowledge import get_vector_db
 from src.memory.extractor import extract_and_save_facts
 
+import time
+
 app = FastAPI(title="Agente WhatsApp - Diario Teq")
+
+# Cache simples para evitar processamento duplicado da mesma mensagem
+processed_message_ids = {}
 
 VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "meu_token_super_secreto")
 
@@ -159,8 +164,23 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                 if key.get("fromMe"):
                     return {"status": "success"} # Ignora mensagens enviadas por nós mesmos
                     
-                from_number = key.get("remoteJid", "").split("@")[0]
                 message_id = key.get("id")
+                
+                # Previne duplicidade usando cache de IDs
+                if message_id:
+                    if message_id in processed_message_ids:
+                        print(f"[PROCESS] Mensagem {message_id} ignorada (duplicada/já processada)")
+                        return {"status": "success"}
+                    processed_message_ids[message_id] = time.time()
+                    
+                    # Limpa o cache se ficar muito grande para evitar vazamento de memória
+                    if len(processed_message_ids) > 1000:
+                        # Mantém apenas os 500 mais recentes
+                        sorted_keys = sorted(processed_message_ids.keys(), key=lambda k: processed_message_ids[k])
+                        for k in sorted_keys[:-500]:
+                            del processed_message_ids[k]
+
+                from_number = key.get("remoteJid", "").split("@")[0]
                 message_type = evo_data.get("messageType", "")
                 
                 normalized_message = {
