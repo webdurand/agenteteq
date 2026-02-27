@@ -164,8 +164,17 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
             if "key" in evo_data and "message" in evo_data:
                 key = evo_data["key"]
                 
+                # Previne loop: ignora mensagens que nós mesmos enviamos
                 if key.get("fromMe"):
-                    return {"status": "success"} # Ignora mensagens enviadas por nós mesmos
+                    return {"status": "success"} 
+
+                # Processa APENAS se for o evento correto de nova mensagem
+                if data.get("event") != "messages.upsert":
+                    return {"status": "success"}
+
+                # Ignora updates e recibos de leitura (só processa mensagem de fato)
+                if evo_data.get("messageType") not in ["conversation", "extendedTextMessage", "audioMessage"]:
+                    return {"status": "success"}
                     
                 message_id = key.get("id")
                 
