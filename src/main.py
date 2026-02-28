@@ -43,8 +43,44 @@ def verify_webhook(
 async def process_whatsapp_message(message: dict, from_number: str):
     message_id = message.get("id")
     try:
-        agent = get_assistant(session_id=from_number)
+        from src.memory.identity import get_user, create_user, update_user_name
+        
+        user = get_user(from_number)
         msg_type = message.get("type")
+        
+        if not user:
+            print(f"[ONBOARDING] Usuário novo: {from_number}. Solicitando nome.")
+            create_user(from_number)
+            await whatsapp_client.send_text_message(
+                from_number, 
+                "Olá! Parece que é a sua primeira vez por aqui. Como você se chama?", 
+                reply_to_message_id=message_id
+            )
+            return
+            
+        if user["onboarding_step"] == "asking_name":
+            if msg_type == "text":
+                name = message["text"]["body"].strip()
+                update_user_name(from_number, name)
+                print(f"[ONBOARDING] Usuário {from_number} registrado como {name}.")
+                
+                from src.tools.memory_manager import add_memory
+                add_memory(f"O nome do usuário é {name}", from_number)
+                
+                await whatsapp_client.send_text_message(
+                    from_number, 
+                    f"Prazer em te conhecer, {name}! Agora você pode me enviar áudios ou textos para começarmos.", 
+                    reply_to_message_id=message_id
+                )
+            else:
+                await whatsapp_client.send_text_message(
+                    from_number, 
+                    "Por favor, digite apenas o seu nome para continuarmos.", 
+                    reply_to_message_id=message_id
+                )
+            return
+
+        agent = get_assistant(session_id=from_number)
         
         if msg_type == "audio":
             if message_id:
@@ -219,8 +255,12 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                     
                 elif message_type == "audioMessage":
                     normalized_message["type"] = "audio"
-                    # Se usarmos webhook_base64 no Evolution, ele vem no campo 'base64'
-                    base64_data = evo_data.get("base64", "")
+                    # Se usarmos webhook_base64 no Evolution, ele vem no campo 'base64' (ou dentro de message)
+                    base64_data = evo_data.get("base64", "") or msg_content.get("base64", "")
+                    
+                    if not base64_data:
+                        print(f"[WARNING] Base64 não encontrado no payload de áudio da Evolution. O webhook pode não estar com webhook_base64=true.")
+                    
                     normalized_message["audio"] = {"id": base64_data}
                 
                 if normalized_message["type"] != "unknown":
