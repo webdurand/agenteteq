@@ -144,7 +144,7 @@ class EvolutionWhatsAppClient:
                 presence_url = f"{self.api_url}/chat/sendPresence/{self.instance_name}"
                 presence_payload = {
                     "number": to_number,
-                    "delay": 5000,
+                    "delay": 25000,
                     "presence": "recording" if is_audio else "composing"
                 }
                 
@@ -157,9 +157,23 @@ class EvolutionWhatsAppClient:
 
     async def get_media_url(self, media_base64: str) -> Optional[str]:
         """
-        No caso da Evolution API, para simplificar e suportar webhook_base64,
-        esperamos receber a string base64 inteira do webhook.
+        No caso da Evolution API, suportamos base64 via webhook ou
+        buscamos via API (getBase64FromMediaMessage) se passarmos o objeto de mensagem em JSON.
         """
+        if media_base64 and media_base64.startswith("{"):
+            import json
+            try:
+                payload = json.loads(media_base64)
+                url = f"{self.api_url}/chat/getBase64FromMediaMessage/{self.instance_name}"
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(url, json=payload, headers=self._get_headers())
+                    response.raise_for_status()
+                    data = response.json()
+                    return data.get("base64")
+            except Exception as e:
+                print(f"Erro ao buscar base64 via API (Evolution): {e}")
+                return ""
+                
         return media_base64
 
     async def download_media(self, media_base64: str) -> bytes:

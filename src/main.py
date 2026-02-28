@@ -84,8 +84,8 @@ async def process_whatsapp_message(message: dict, from_number: str):
         
         if msg_type == "audio":
             if message_id:
-                print(f"[OUT] Enviando indicador 'gravando áudio...' para {from_number}")
-                await whatsapp_client.mark_message_as_read_and_typing(message_id, from_number, is_audio=True)
+                print(f"[OUT] Enviando indicador 'digitando...' para {from_number}")
+                await whatsapp_client.mark_message_as_read_and_typing(message_id, from_number, is_audio=False)
                 
             audio_id = message["audio"]["id"]
             print(f"[PROCESS] Baixando áudio ID/Base64: {audio_id[:50]}")
@@ -259,7 +259,8 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                     base64_data = evo_data.get("base64", "") or msg_content.get("base64", "")
                     
                     if not base64_data:
-                        print(f"[WARNING] Base64 não encontrado no payload de áudio da Evolution. O webhook pode não estar com webhook_base64=true.")
+                        print(f"[WARNING] Base64 não encontrado no payload. Usando mensagem completa para baixar mídia.")
+                        base64_data = json.dumps({"message": msg_content})
                     
                     normalized_message["audio"] = {"id": base64_data}
                 
