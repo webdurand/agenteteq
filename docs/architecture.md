@@ -87,7 +87,7 @@ Mensagem do usuário
 - **Python & FastAPI**: Fornecem agilidade e facilidade para hospedar webhooks.
 - **Agno**: Framework para construção de agentes stateful.
 - **Agno Team**: Usado para orquestração multi-agent nativa (em vez de implementar ThreadPoolExecutor custom). Suporta execução paralela no modo `broadcast`.
-- **Identidade e Onboarding Determinístico**: Reduz custos de LLM e garante uma experiência controlada ao coletar os dados iniciais do usuário. A checagem de identidade é feita antes de instanciar o agente, usando um banco de dados SQLite local simples (`users.db` via `src/memory/identity.py`).
+- **Identidade e Onboarding Determinístico**: Reduz custos de LLM e garante uma experiência controlada ao coletar os dados iniciais do usuário. A checagem de identidade usa PostgreSQL (NeonDB via `DATABASE_URL`) quando disponível, caindo para SQLite local apenas em ambiente sem banco externo. Isso garante que o usuário seja reconhecido mesmo após restarts do servidor.
 - **Módulo de Memória**: Utiliza NeonDB com PgVector e a Knowledge Base do Agno para armazenar memórias do usuário em background e injetar contexto de forma "Agentic" ou "Always-on".
 - **Desacoplamento**: LLM, transcrição, WhatsApp provider, search provider e scraper provider são todos configuráveis via `.env`. Trocar qualquer um exige apenas mudar a variável de ambiente.
 - **Injeção de contexto por factory**: Tools que precisam de contexto do usuário (notifier, user_id) são criadas por factories no orchestrator e injetadas via `extra_tools`, mantendo o `get_assistant()` agnóstico ao contexto da requisição.

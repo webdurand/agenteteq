@@ -81,9 +81,10 @@ def fetch_page_raw(url: str) -> str:
 def create_web_search_tool(notifier: StatusNotifier):
     """
     Cria a tool web_search com StatusNotifier injetado.
-    Notifica o usuário na primeira busca da conversa.
+    A deduplicação de mensagens é gerenciada pelo próprio StatusNotifier,
+    então a mesma mensagem nunca é enviada duas vezes na mesma conversa,
+    independente de quantas tools a usem.
     """
-    already_notified = [False]
 
     def web_search(query: str, max_results: int = 5) -> str:
         """
@@ -91,9 +92,7 @@ def create_web_search_tool(notifier: StatusNotifier):
         Use para buscar informações atualizadas, notícias, fatos ou
         qualquer coisa que precise de dados recentes da web.
         """
-        if not already_notified[0]:
-            notifier.notify("Beleza, vou dar uma olhada e já te respondo!")
-            already_notified[0] = True
+        notifier.notify("Beleza, vou dar uma olhada e já te respondo!")
         return web_search_raw(query, max_results)
 
     return web_search
@@ -102,9 +101,7 @@ def create_web_search_tool(notifier: StatusNotifier):
 def create_fetch_page_tool(notifier: StatusNotifier):
     """
     Cria a tool fetch_page com StatusNotifier injetado.
-    Notifica o usuário na primeira leitura de página da conversa.
     """
-    already_notified = [False]
 
     def fetch_page(url: str) -> str:
         """
@@ -112,9 +109,7 @@ def create_fetch_page_tool(notifier: StatusNotifier):
         Use quando precisar detalhar o conteúdo de um link específico encontrado
         em uma busca ou fornecido pelo usuário.
         """
-        if not already_notified[0]:
-            notifier.notify("Beleza, vou dar uma olhada e já te respondo!")
-            already_notified[0] = True
+        notifier.notify("Beleza, vou dar uma olhada e já te respondo!")
         return fetch_page_raw(url)
 
     return fetch_page

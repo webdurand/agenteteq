@@ -16,9 +16,19 @@ class StatusNotifier:
         self.to_number = to_number
         self.reply_to_message_id = reply_to_message_id
         self.provider = os.getenv("WHATSAPP_PROVIDER", "meta").lower()
+        # Rastreia mensagens já enviadas nesta conversa para evitar duplicatas.
+        # Como a instância é compartilhada por todas as tools da mesma requisição,
+        # a deduplicação é automática independente de qual tool notifica.
+        self._sent_messages: set[str] = set()
 
     def notify(self, message: str) -> None:
-        """Envia mensagem de status síncrona via WhatsApp (Meta ou Evolution)."""
+        """
+        Envia mensagem de status síncrona via WhatsApp (Meta ou Evolution).
+        Mensagens idênticas são enviadas apenas uma vez por conversa.
+        """
+        if message in self._sent_messages:
+            return
+        self._sent_messages.add(message)
         try:
             if self.provider == "evolution":
                 self._send_evolution(message)
