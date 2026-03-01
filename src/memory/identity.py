@@ -1,11 +1,12 @@
 import os
 import sqlite3
+from datetime import datetime, timezone
 from typing import Optional
 
 # ---------------------------------------------------------------------------
-# Conexão: usa NeonDB (PostgreSQL) quando DATABASE_URL estiver configurado,
-# caso contrário cai para SQLite local (útil para testes sem banco externo).
-# Isso mantém a identidade do usuário persistente entre restarts do Koyeb.
+# Conexao: usa NeonDB (PostgreSQL) quando DATABASE_URL estiver configurado,
+# caso contrario cai para SQLite local (util para testes sem banco externo).
+# Isso mantem a identidade do usuario persistente entre restarts do Koyeb.
 # ---------------------------------------------------------------------------
 
 def _get_db_url() -> Optional[str]:
@@ -34,8 +35,13 @@ def _init_pg():
             CREATE TABLE IF NOT EXISTS users (
                 phone_number TEXT PRIMARY KEY,
                 name TEXT,
-                onboarding_step TEXT DEFAULT 'pending'
+                onboarding_step TEXT DEFAULT 'pending',
+                last_seen_at TIMESTAMPTZ
             )
+        """))
+        # Adiciona coluna se ja existir a tabela sem ela (migracao segura)
+        conn.execute(__import__("sqlalchemy").text("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ
         """))
         conn.commit()
 
@@ -51,9 +57,15 @@ def _init_sqlite():
         CREATE TABLE IF NOT EXISTS users (
             phone_number TEXT PRIMARY KEY,
             name TEXT,
-            onboarding_step TEXT DEFAULT 'pending'
+            onboarding_step TEXT DEFAULT 'pending',
+            last_seen_at TEXT
         )
     """)
+    # Adiciona coluna se ja existir a tabela sem ela (migracao segura)
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN last_seen_at TEXT")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -76,21 +88,31 @@ def get_user(phone_number: str) -> Optional[dict]:
             engine = _get_pg_engine()
             with engine.connect() as conn:
                 row = conn.execute(
-                    text("SELECT phone_number, name, onboarding_step FROM users WHERE phone_number = :p"),
+                    text("SELECT phone_number, name, onboarding_step, last_seen_at FROM users WHERE phone_number = :p"),
                     {"p": phone_number}
                 ).fetchone()
             if row:
-                return {"phone_number": row[0], "name": row[1], "onboarding_step": row[2]}
+                return {
+                    "phone_number": row[0],
+                    "name": row[1],
+                    "onboarding_step": row[2],
+                    "last_seen_at": row[3],
+                }
         else:
             conn = _get_sqlite_conn()
             c = conn.cursor()
-            c.execute("SELECT phone_number, name, onboarding_step FROM users WHERE phone_number = ?", (phone_number,))
+            c.execute("SELECT phone_number, name, onboarding_step, last_seen_at FROM users WHERE phone_number = ?", (phone_number,))
             row = c.fetchone()
             conn.close()
             if row:
-                return {"phone_number": row[0], "name": row[1], "onboarding_step": row[2]}
+                return {
+                    "phone_number": row[0],
+                    "name": row[1],
+                    "onboarding_step": row[2],
+                    "last_seen_at": row[3],
+                }
     except Exception as e:
-        print(f"[IDENTITY] Erro ao buscar usuário {phone_number}: {e}")
+        print(f"[IDENTITY] Erro ao buscar usuario {phone_number}: {e}")
     return None
 
 
@@ -112,7 +134,7 @@ def create_user(phone_number: str):
             conn.commit()
             conn.close()
     except Exception as e:
-        print(f"[IDENTITY] Erro ao criar usuário {phone_number}: {e}")
+        print(f"[IDENTITY] Erro ao criar usuario {phone_number}: {e}")
 
 
 def update_user_name(phone_number: str, name: str):
@@ -134,3 +156,47 @@ def update_user_name(phone_number: str, name: str):
             conn.close()
     except Exception as e:
         print(f"[IDENTITY] Erro ao atualizar nome de {phone_number}: {e}")
+
+
+def update_last_seen(phone_number: str):
+    """Atualiza o timestamp da ultima mensagem recebida do usuario."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        if _use_postgres():
+            from sqlalchemy import text
+            engine = _get_pg_engine()
+            with engine.connect() as conn:
+                conn.execute(
+                    text("UPDATE users SET last_seen_at = :t WHERE phone_number = :p"),
+                    {"t": now_iso, "p": phone_number}
+                )
+                conn.commit()
+        else:
+            conn = _get_sqlite_conn()
+            conn.execute("UPDATE users SET last_seen_at = ? WHERE phone_number = ?", (now_iso, phone_number))
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        print(f"[IDENTITY] Erro ao atualizar last_seen_at de {phone_number}: {e}")
+
+
+def is_new_session(user: dict, threshold_hours: int = 4) -> bool:
+    """
+    Retorna True se o usuario ficou mais de threshold_hours sem enviar mensagens
+    (ou se nao tem last_seen_at registrado), indicando que deve receber uma saudacao.
+    """
+    last_seen = user.get("last_seen_at")
+    if not last_seen:
+        return True
+    try:
+        if isinstance(last_seen, str):
+            last_dt = datetime.fromisoformat(last_seen)
+        else:
+            last_dt = last_seen
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
+        elapsed_hours = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
+        return elapsed_hours >= threshold_hours
+    except Exception as e:
+        print(f"[IDENTITY] Erro ao calcular is_new_session: {e}")
+        return False

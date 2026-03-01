@@ -9,7 +9,7 @@ from src.integrations.whatsapp import whatsapp_client
 from src.integrations.transcriber import transcriber
 from src.integrations.status_notifier import StatusNotifier
 from src.agent.assistant import get_assistant
-from src.memory.identity import get_user, create_user, update_user_name
+from src.memory.identity import get_user, create_user, update_user_name, update_last_seen, is_new_session
 from src.memory.knowledge import get_vector_db
 from src.memory.extractor import extract_and_save_facts
 from src.tools.memory_manager import add_memory
@@ -183,6 +183,28 @@ def parse_webhook_payload(data: dict) -> list:
     return events
 
 
+GREETING_INJECTION = (
+    "[INSTRUCAO DE SISTEMA: O usuario ficou mais de 4 horas sem enviar mensagens e optou por comecar uma conversa nova. "
+    "Comece com uma saudacao descontraida. "
+    "ANTES de responder, consulte suas memorias (search_knowledge) para saber quais informacoes o usuario quer no cumprimento. "
+    "Por padrao (sem preferencias salvas), inclua: previsao do tempo (use get_weather — busque a cidade nas memorias; "
+    "se nao souber, pergunte de forma natural) e tarefas pendentes (use list_tasks). "
+    "Integre tudo de forma fluida e casual, sem parecer uma lista robotica. "
+    "Mensagem real do usuario: ]"
+)
+
+CONTINUATION_INJECTION = (
+    "[INSTRUCAO DE SISTEMA: O usuario quer continuar a conversa anterior. "
+    "Consulte o historico da sessao e mencione em 1 linha de forma casual o que voces estavam discutindo "
+    "(ex: 'ah certo, a gente tava falando de [assunto]...'), "
+    "depois responda a mensagem do usuario normalmente. "
+    "Mensagem do usuario: ]"
+)
+
+# Guarda a mensagem original do usuario enquanto aguarda a resposta de 'continuar ou novo?'
+# Chave: numero do usuario | Valor: texto da mensagem original
+pending_session_choices: dict[str, str] = {}
+
 async def orchestrate_message(event: dict):
     from_number = event["from_number"]
     message_id = event["id"]
@@ -192,15 +214,15 @@ async def orchestrate_message(event: dict):
     try:
         user = get_user(from_number)
         
-        print(f"[PROCESS] Iniciando orquestração da mensagem {message_id} de {from_number}")
+        print(f"[PROCESS] Iniciando orquestracao da mensagem {message_id} de {from_number}")
         
         # Fluxo de Onboarding
         if not user:
-            print(f"[ONBOARDING] Usuário não encontrado no banco local: {from_number}. Iniciando registro.")
+            print(f"[ONBOARDING] Usuario nao encontrado no banco local: {from_number}. Iniciando registro.")
             create_user(from_number)
             await whatsapp_client.send_text_message(
                 from_number, 
-                "Olá! Parece que é a sua primeira vez por aqui. Como você se chama?", 
+                "Oi! Parece que e a sua primeira vez por aqui 👋 Como voce se chama?", 
                 reply_to_message_id=message_id
             )
             return
@@ -209,23 +231,79 @@ async def orchestrate_message(event: dict):
             if msg_type == "text":
                 name = raw_msg["text"]["body"].strip()
                 update_user_name(from_number, name)
-                print(f"[ONBOARDING] Usuário {from_number} registrado como {name}.")
-                add_memory(f"O nome do usuário é {name}", from_number)
+                print(f"[ONBOARDING] Usuario {from_number} registrado como {name}.")
+                add_memory(f"O nome do usuario e {name}", from_number)
+                update_last_seen(from_number)
                 
                 await whatsapp_client.send_text_message(
                     from_number, 
-                    f"Prazer em te conhecer, {name}! Como posso te ajudar hoje?", 
+                    f"Prazer, {name}! To por aqui pra ajudar no que precisar 😄",
                     reply_to_message_id=message_id
                 )
             else:
                 await whatsapp_client.send_text_message(
                     from_number, 
-                    "Por favor, digite apenas o seu nome para continuarmos.", 
+                    "Me manda so o seu nome pra a gente comecar!",
                     reply_to_message_id=message_id
                 )
             return
 
-        print(f"[OUT] Enviando indicador de digitando/gravando para {from_number}")
+        # --- Resposta ao "continuar ou novo?" ---
+        # Prioridade maxima: usuario estava aguardando resposta da pergunta de sessao
+        if from_number in pending_session_choices and msg_type == "text":
+            original_message = pending_session_choices.pop(from_number)
+            response_text = raw_msg["text"]["body"].strip().lower()
+
+            yes_keywords = {"sim", "s", "yes", "continuar", "continua", "pode", "bora", "claro", "vamos", "quero"}
+            is_yes = any(response_text == kw or response_text.startswith(kw + " ") for kw in yes_keywords)
+
+            injection = CONTINUATION_INJECTION if is_yes else GREETING_INJECTION
+            log_label = "continuacao" if is_yes else "nova sessao (usuario recusou)"
+            print(f"[SESSION] Usuario {from_number} escolheu: {log_label}.")
+
+            await whatsapp_client.mark_message_as_read_and_typing(message_id, from_number, is_audio=False)
+            notifier = StatusNotifier(to_number=from_number, reply_to_message_id=message_id)
+            search_tools = [
+                create_web_search_tool(notifier),
+                create_fetch_page_tool(notifier),
+                create_deep_research_tool(notifier, from_number),
+            ]
+            agent = get_assistant(session_id=from_number, extra_tools=search_tools)
+            await process_text_message(from_number, message_id, {"text": {"body": original_message}}, agent, injection=injection)
+            update_last_seen(from_number)
+            return
+
+        # --- Deteccao de nova sessao (>4h sem contato) ---
+        if is_new_session(user, threshold_hours=4):
+            if msg_type == "text":
+                # Guarda a mensagem original e pergunta ao usuario o que prefere
+                original_text = raw_msg["text"]["body"]
+                pending_session_choices[from_number] = original_text
+                update_last_seen(from_number)  # Evita re-disparar a pergunta na resposta seguinte
+                print(f"[SESSION] Nova sessao detectada para {from_number}. Perguntando ao usuario.")
+                await whatsapp_client.send_text_message(
+                    from_number,
+                    "Ei, passou um tempinho desde nossa ultima conversa 👀 Quer continuar de onde a gente parou, ou prefere comecar uma conversa nova?",
+                    reply_to_message_id=message_id,
+                )
+                return
+            else:
+                # Audio: pula a pergunta, vai direto pro greeting
+                print(f"[SESSION] Nova sessao (audio) para {from_number}. Aplicando greeting injection.")
+                await whatsapp_client.mark_message_as_read_and_typing(message_id, from_number, is_audio=False)
+                notifier = StatusNotifier(to_number=from_number, reply_to_message_id=message_id)
+                search_tools = [
+                    create_web_search_tool(notifier),
+                    create_fetch_page_tool(notifier),
+                    create_deep_research_tool(notifier, from_number),
+                ]
+                agent = get_assistant(session_id=from_number, extra_tools=search_tools)
+                await process_audio_message(from_number, message_id, raw_msg, agent, injection=GREETING_INJECTION)
+                update_last_seen(from_number)
+                return
+
+        # --- Fluxo normal (sessao ativa, <4h) ---
+        print(f"[OUT] Enviando indicador de digitando para {from_number}")
         await whatsapp_client.mark_message_as_read_and_typing(message_id, from_number, is_audio=False)
 
         notifier = StatusNotifier(to_number=from_number, reply_to_message_id=message_id)
@@ -241,18 +319,20 @@ async def orchestrate_message(event: dict):
             await process_audio_message(from_number, message_id, raw_msg, agent)
         elif msg_type == "text":
             await process_text_message(from_number, message_id, raw_msg, agent)
+
+        update_last_seen(from_number)
             
     except Exception as e:
-        print(f"[ERROR] Falha na orquestração para {from_number}: {e}")
+        print(f"[ERROR] Falha na orquestracao para {from_number}: {e}")
         try:
             if from_number not in ["16315551181", "16505551111"]:
-                await whatsapp_client.send_text_message(from_number, "Desculpe, ocorreu um erro interno ao processar sua mensagem.", reply_to_message_id=message_id)
+                await whatsapp_client.send_text_message(from_number, "Eita, deu um erro interno aqui. Tenta de novo em breve!", reply_to_message_id=message_id)
         except Exception as e2:
             print(f"[ERROR] Falha ao enviar erro para WhatsApp: {e2}")
 
-async def process_audio_message(from_number: str, message_id: str, raw_msg: dict, agent):
+async def process_audio_message(from_number: str, message_id: str, raw_msg: dict, agent, injection: str | None = None):
     audio_id = raw_msg["audio"]["id"]
-    print(f"[PROCESS] Baixando áudio...")
+    print(f"[PROCESS] Baixando audio...")
     media_url = await whatsapp_client.get_media_url(audio_id)
     audio_bytes = await whatsapp_client.download_media(media_url)
     
@@ -260,16 +340,20 @@ async def process_audio_message(from_number: str, message_id: str, raw_msg: dict
     
     if provider == "gemini":
         from agno.media import Audio
-        prompt = "O usuário enviou este áudio. Responda naturalmente ao que foi dito."
-        print(f"[PROCESS] Enviando áudio multimodal para Gemini")
-        response = agent.run(prompt, audio=[Audio(content=audio_bytes)], knowledge_filters={"user_id": from_number})
-        asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, "Áudio do usuário", response.content))
+        base_prompt = "O usuario enviou este audio. Responda naturalmente ao que foi dito."
+        if injection:
+            base_prompt = injection + " " + base_prompt
+        print(f"[PROCESS] Enviando audio multimodal para Gemini")
+        response = agent.run(base_prompt, audio=[Audio(content=audio_bytes)], knowledge_filters={"user_id": from_number})
+        asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, "Audio do usuario", response.content))
     else:
-        print(f"[PROCESS] Transcrevendo áudio com: {provider}")
+        print(f"[PROCESS] Transcrevendo audio com: {provider}")
         transcription = await transcriber.transcribe(audio_bytes)
-        print(f"[PROCESS] Transcrição concluída: {transcription[:100]}...")
+        print(f"[PROCESS] Transcricao concluida: {transcription[:100]}...")
         
-        prompt = f"O usuário enviou um áudio com a seguinte transcrição:\n\n{transcription}"
+        prompt = f"O usuario enviou um audio com a seguinte transcricao:\n\n{transcription}"
+        if injection:
+            prompt = injection + "\n\n" + prompt
         response = agent.run(prompt, knowledge_filters={"user_id": from_number})
         asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, transcription, response.content))
     
@@ -277,7 +361,7 @@ async def process_audio_message(from_number: str, message_id: str, raw_msg: dict
         print(f"[OUT] Enviando resposta para {from_number}")
         await whatsapp_client.send_text_message(from_number, response.content, reply_to_message_id=message_id)
 
-async def process_text_message(from_number: str, message_id: str, raw_msg: dict, agent):
+async def process_text_message(from_number: str, message_id: str, raw_msg: dict, agent, injection: str | None = None):
     text_body = raw_msg["text"]["body"]
     print(f"[PROCESS] Texto recebido: {text_body[:50]}...")
     
@@ -290,10 +374,13 @@ async def process_text_message(from_number: str, message_id: str, raw_msg: dict,
                 results = vector_db.search(query=text_body, limit=3, filters={"user_id": from_number})
                 if results:
                     memories = "\n".join([f"- {doc.content}" for doc in results])
-                    context_text = f"\n\n[Contexto da Memória para considerar:\n{memories}]"
+                    context_text = f"\n\n[Contexto da Memoria para considerar:\n{memories}]"
                     text_body += context_text
             except Exception as e:
-                print(f"[ERROR] Falha ao buscar memórias always-on: {e}")
+                print(f"[ERROR] Falha ao buscar memorias always-on: {e}")
+
+    if injection:
+        text_body = injection + "\n\n" + text_body
     
     response = agent.run(text_body, knowledge_filters={"user_id": from_number})
     asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, text_body, response.content))

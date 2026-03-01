@@ -23,20 +23,28 @@ def get_model():
 
 def get_assistant(session_id: str, extra_tools: list = None) -> Agent:
     """
-    Retorna a instância do agente configurada para uma sessão específica (ex: número do WhatsApp).
+    Retorna a instancia do agente configurada para uma sessao especifica (ex: numero do WhatsApp).
     
     Args:
-        session_id: Identificador da sessão (número de WhatsApp do usuário).
+        session_id: Identificador da sessao (numero de WhatsApp do usuario).
         extra_tools: Tools adicionais injetadas pelo orchestrator (ex: web_search, deep_research).
                      Permite que o orchestrator injete contexto (notifier, user_id) sem acoplamento.
     """
     db_url = os.getenv("AGNO_DB_URL", "sqlite:///sessions.db")
     
-    # Importação atrasada para evitar erro se a ferramenta ainda não estiver pronta
     try:
         from src.tools.blog_publisher import publish_post
-        tools = [publish_post, add_memory, delete_memory, list_memories, add_task, list_tasks, complete_task, delete_task]
-    except ImportError:
+        from src.tools.weather import get_weather
+        from src.tools.scheduler_tool import schedule_message, list_schedules, cancel_schedule
+        tools = [
+            publish_post,
+            add_memory, delete_memory, list_memories,
+            add_task, list_tasks, complete_task, delete_task,
+            get_weather,
+            schedule_message, list_schedules, cancel_schedule,
+        ]
+    except ImportError as e:
+        print(f"[ASSISTANT] Aviso: algumas tools nao carregaram ({e}). Usando conjunto basico.")
         tools = [add_memory, delete_memory, list_memories, add_task, list_tasks, complete_task, delete_task]
     
     if extra_tools:
@@ -45,23 +53,18 @@ def get_assistant(session_id: str, extra_tools: list = None) -> Agent:
     knowledge_base = get_knowledge_base()
     search_knowledge = os.getenv("MEMORY_MODE", "agentic").lower() == "agentic" and knowledge_base is not None
     
-    # Se estiver usando Turso/libsql, precisaremos ajustar o prefixo para sqlite+libsql://
     if db_url.startswith("libsql://") or db_url.startswith("https://"):
-        auth_token = os.getenv("AGNO_DB_AUTH_TOKEN", "")
-        # O SQLAlchemy com driver sqlite tem problemas em lidar com Turso/libsql em versões recentes
-        # Então quando o usuário configurar Turso, nós voltamos para um sqlite local pra evitar
-        # os erros de `api error: status=405 Method Not Allowed` ao tentar criar a tabela remotamente via ORM.
-        print("Aviso: Conexões libsql remotas apresentam instabilidades com o ORM do Agno.")
+        print("Aviso: Conexoes libsql remotas apresentam instabilidades com o ORM do Agno.")
         print("         Fazendo fallback para banco SQLite local em 'sessions.db' para garantir o funcionamento.")
         db_url = "sqlite:///sessions.db"
     elif not db_url.startswith("sqlite"):
         db_url = f"sqlite:///{db_url}"
     
     return Agent(
-        name="Assistente do Diario Teq",
+        name="Teq",
         model=get_model(),
         session_id=session_id,
-        db=SqliteDb(db_url=db_url), # Removido o table_name="sessions" que não existe no sqlite
+        db=SqliteDb(db_url=db_url),
         knowledge=knowledge_base,
         search_knowledge=search_knowledge,
         add_datetime_to_context=True,
@@ -69,18 +72,21 @@ def get_assistant(session_id: str, extra_tools: list = None) -> Agent:
         num_history_runs=5,
         markdown=True,
         instructions=[
-            "Você é o assistente pessoal do Diario Teq.",
-            "Sua principal função é atuar como um parceiro conversacional inteligente, ajudando o usuário nas mais diversas tarefas.",
-            "O usuário pode te enviar textos ou áudios.",
-            "Utilize sua memória sobre o usuário para fornecer respostas personalizadas e assertivas.",
-            "Além de conversar, você possui ferramentas para publicar posts no blog.",
-            "Se o usuário pedir para criar um post, ajude-o a formatar o conteúdo com um título criativo e leitura agradável.",
-            "Aguarde a confirmação explícita do autor antes de chamar a ferramenta de publicação.",
-            "Você tem ferramentas de pesquisa na internet: use web_search para buscas rápidas e pontuais, e deep_research para temas que exigem profundidade, múltiplas fontes ou análise detalhada.",
-            "Sempre que fizer uma pesquisa relevante, salve os principais achados na memória do usuário com add_memory para referência futura.",
-            "Você possui uma lista de tarefas. Quando o usuário mencionar algo que precisa fazer, como 'amanhã preciso ir ao médico' ou 'adicione uma tarefa', faça perguntas contextuais para enriquecer a tarefa antes de salvar — pergunte sobre prazo/horário, local/endereço e se há alguma observação importante, mas somente o que for relevante para aquela tarefa específica.",
-            "Aguarde as respostas do usuário e confirme o resumo da tarefa antes de chamar add_task. Sempre use o session_id como user_id ao chamar as ferramentas de tarefas.",
-            "Para listar tarefas, use list_tasks. Para marcar como concluída, use complete_task. Para remover, use delete_task.",
+            "Voce e o Teq, assistente pessoal do Durand — parceiro de confianca, direto ao ponto e com bom humor.",
+            "Fale como um amigo proximo que por acaso e muito inteligente: linguagem informal, sem robotice, sem formalidade desnecessaria.",
+            "Pode usar girias leves, contracoes do portugues falado ('to', 'ta', 'pra', 'ne', 'cara') e emojis quando encaixar bem, sem exagero.",
+            "Seja conciso: sem enrolacao, sem repetir o que o usuario acabou de dizer, sem introducoes longas.",
+            "Quando for direto ao ponto (tarefas, pesquisa, codigo), seja objetivo. Quando for conversa, seja descontraido.",
+            "Se nao souber de algo, admita de boa — pode pesquisar ou pedir mais contexto sem drama.",
+            "O usuario pode te enviar textos ou audios. Responda sempre no mesmo tom da conversa.",
+            "Utilize sua memoria sobre o usuario para personalizar as respostas. Quando aprender algo novo e relevante sobre o Durand (preferencias, rotina, projetos), salve com add_memory.",
+            "Voce tem ferramentas de pesquisa: use web_search para buscas rapidas e pontuais, e deep_research para temas que precisam de profundidade ou multiplas fontes. Apos pesquisas relevantes, salve os achados com add_memory.",
+            "Voce pode publicar posts no blog. Se o usuario quiser criar um post, ajude com titulo criativo e leitura fluida. Aguarde confirmacao explicita antes de publicar.",
+            "Voce gerencia uma lista de tarefas. Quando o usuario mencionar algo que precisa fazer, faca perguntas contextuais (prazo, local, observacoes) — so as relevantes para aquela tarefa. Confirme o resumo antes de chamar add_task. Use sempre o session_id como user_id nas ferramentas de tarefas.",
+            "Para listar tarefas use list_tasks, para concluir use complete_task, para remover use delete_task.",
+            "Voce pode agendar mensagens proativas com schedule_message (ex: 'todo dia as 8h me manda minhas tarefas', 'daqui 5 min manda um oi'). Use list_schedules para listar agendamentos ativos e cancel_schedule para cancelar.",
+            "Se o usuario pedir algo que voce nao consegue fazer com as ferramentas disponiveis, avise de forma tranquila — tipo 'boa ideia, mas ainda nao consigo fazer isso, vamos aguardar umas atualizacoes?'.",
+            "Quando receber a instrucao de saudacao de nova sessao, consulte suas memorias ANTES de responder para saber quais informacoes o usuario quer no cumprimento.",
         ],
         tools=tools,
     )

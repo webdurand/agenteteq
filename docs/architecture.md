@@ -2,21 +2,23 @@
 
 ## Visão Geral
 
-O `agenteteq` é uma API em Python baseada no FastAPI responsável por receber webhooks do WhatsApp, processar áudios utilizando serviços de transcrição, e alimentar um Agente Agno.
-O Agente Agno possui ferramentas para conversar, publicar posts no blog, gerenciar memória, pesquisar na web, realizar pesquisas profundas com múltiplos sub-agentes e gerenciar uma lista de tarefas pessoal.
+O `agenteteq` é uma API em Python baseada no FastAPI responsável por receber webhooks do WhatsApp, processar áudios utilizando serviços de transcrição, e alimentar um Agente Agno chamado **Teq**.
+O Teq possui ferramentas para conversar de forma descontraída, publicar posts no blog, gerenciar memória, pesquisar na web, realizar pesquisas profundas com múltiplos sub-agentes, gerenciar uma lista de tarefas pessoal, consultar previsão do tempo e agendar mensagens proativas.
 
 ## Fluxo Principal
 
 1. **Webhook (FastAPI)**: Recebe payload da Meta (WhatsApp Cloud API) com um áudio ou texto.
-2. **Módulo de Identidade (Determinístico)**: Antes de acionar a IA, o sistema verifica o número de telefone no banco de dados. Se for um usuário novo, realiza um onboarding determinístico pedindo o nome. Se já for cadastrado, injeta as preferências no contexto do agente.
-3. **Integração WhatsApp**: Faz o download da mídia do áudio e permite enviar mensagens de texto (respostas/confirmações). A integração é **plug-and-play**, permitindo usar a **API Oficial da Meta** ou a **Evolution API** (configurável via `.env` na variável `WHATSAPP_PROVIDER`).
-4. **Transcrição (Desacoplada)**: Lê o áudio e transforma em texto. O serviço é parametrizado via `.env` (ex. Whisper, Groq, Gemini) para permitir fácil troca.
-5. **Agente (Agno)**:
-   - Recebe a transcrição ou texto.
+2. **Módulo de Identidade (Determinístico)**: Antes de acionar a IA, o sistema verifica o número de telefone no banco de dados. Se for um usuário novo, realiza um onboarding determinístico pedindo o nome. Se já for cadastrado, verifica `last_seen_at` para detectar nova sessão.
+3. **Detecção de Nova Sessão**: Se o usuário ficou mais de 4 horas sem enviar mensagens, o orchestrator injeta um contexto especial (`GREETING_INJECTION`) no prompt, instruindo o Teq a iniciar com uma saudação personalizada. O Teq consulta as memórias do usuário para saber quais informações incluir (por padrão: previsão do tempo + tarefas pendentes; configurável via conversa).
+4. **Integração WhatsApp**: Faz o download da mídia do áudio e permite enviar mensagens de texto (respostas/confirmações). A integração é **plug-and-play**, permitindo usar a **API Oficial da Meta** ou a **Evolution API** (configurável via `.env` na variável `WHATSAPP_PROVIDER`).
+5. **Transcrição (Desacoplada)**: Lê o áudio e transforma em texto. O serviço é parametrizado via `.env` (ex. Whisper, Groq, Gemini) para permitir fácil troca.
+6. **Agente Teq (Agno)**:
+   - Recebe a transcrição ou texto (com possível GREETING_INJECTION prefixado).
    - Possui estado (histórico) salvo em SQLite (Agno SqliteDb), usando o número de WhatsApp como `session_id`.
    - É instanciado com ferramentas contextuais injetadas pelo orchestrator (notifier, search tools).
-   - Pode conversar, pesquisar na web, publicar posts no blog e gerenciar memórias.
-6. **Ferramenta de Publicação**: Após aprovação final, o Agente aciona a ferramenta que:
+   - Pode conversar de forma descontraída, pesquisar na web, publicar posts no blog, gerenciar memórias, consultar tempo e agendar mensagens.
+7. **Atualização de last_seen_at**: Após cada mensagem processada com sucesso, o orchestrator atualiza o `last_seen_at` do usuário no banco.
+8. **Ferramenta de Publicação**: Após aprovação final, o Agente aciona a ferramenta que:
    - Gera o conteúdo e converte para base64.
    - Utiliza a **GitHub REST API** para criar ou atualizar o arquivo `YYYY-MM-DD-slug.mdx` diretamente no repositório remoto do blog (ex. `webdurand/diario-teq`), no diretório `content/posts/`.
    - Essa ação dispara automaticamente um deploy na Vercel.
@@ -123,6 +125,94 @@ O agente faz perguntas contextuais antes de salvar a tarefa (prazo, local, obser
 - Não precisa de `notifier` nem de factory, pois a interação é síncrona e conversacional (o agente faz as perguntas, não a tool).
 - O `whatsapp.py` (orchestrator) não foi alterado: as tools são registradas diretamente no `get_assistant()`.
 
+## Personalidade do Agente (Teq)
+
+O agente tem tom descontraído e informal, como um amigo próximo e inteligente. As instruções de personalidade estão em `src/agent/assistant.py` no parâmetro `instructions[]` do `Agent`. Principais características:
+
+- Linguagem informal brasileira, contrações naturais, emojis com moderação
+- Conciso e direto ao ponto; sem introduções longas ou repetições
+- Usa ferramentas de memória para personalizar as respostas ao longo do tempo
+
+## Previsão do Tempo (`src/tools/weather.py`)
+
+Ferramenta `get_weather(city)` que consulta `wttr.in` (gratuito, sem API key). Retorna temperatura atual, sensação térmica, umidade, vento e previsão dos próximos 2 dias em português. Usada tanto na saudação automática quanto em consultas diretas do usuário.
+
+## Motor de Agendamento (`src/scheduler/`)
+
+Permite que o Teq envie mensagens proativas sem precisar de input do usuário.
+
+### Componentes
+
+| Arquivo | Responsabilidade |
+|---------|-----------------|
+| `src/scheduler/engine.py` | Singleton do APScheduler com SQLite job store (`scheduler.db`). Iniciado/parado via lifespan do FastAPI. |
+| `src/scheduler/dispatcher.py` | Função `dispatch_proactive_message(user_phone, task_instructions)` executada pelo scheduler. Cria um Agno Agent, roda as instruções e envia o resultado via WhatsApp. |
+| `src/tools/scheduler_tool.py` | Tools para o agente: `schedule_message`, `list_schedules`, `cancel_schedule`. |
+
+### Tipos de Gatilho
+
+| trigger_type | Parâmetro | Exemplo de uso |
+|---|---|---|
+| `date` | `run_date` (ISO 8601) | "daqui 5 minutos manda um oi" |
+| `cron` | `cron_expression` (5 campos) | "todo dia às 8h me manda as tarefas" |
+| `interval` | `interval_minutes` (int) | "a cada 30 minutos verifica algo" |
+
+### Fluxo de Agendamento
+
+```
+Usuário: "todo dia às 8h me manda tarefas e tempo"
+       ↓
+Teq chama schedule_message(trigger_type="cron", cron_expression="0 8 * * *", ...)
+       ↓
+APScheduler persiste job no scheduler.db
+       ↓
+Todo dia às 8h: scheduler dispara → dispatcher.py
+       ↓
+Cria Agno Agent com session_id=user_phone
+       ↓
+agent.run(task_instructions) → resposta
+       ↓
+whatsapp_client.send_text_message(user_phone, resposta)
+```
+
+### Decisão Técnica: APScheduler + Agno
+
+O Agno não oferece scheduling nativo baseado em relógio (cron/interval/date). O APScheduler complementa o Agno: cuida do gatilho de tempo, enquanto o Agno cuida da execução inteligente da tarefa. O job store SQLite garante que os agendamentos sobrevivam a restarts do servidor.
+
+## Detecção de Nova Sessão com Escolha do Usuário
+
+Adicionada coluna `last_seen_at` na tabela `users`. Funções em `src/memory/identity.py`:
+- `update_last_seen(phone)`: atualiza o timestamp após cada mensagem processada
+- `is_new_session(user, threshold_hours=4)`: retorna `True` se o usuário ficou mais de 4h sem contato
+
+### Fluxo de nova sessão (texto)
+
+```
+Usuário envia mensagem após >4h
+       ↓
+Orchestrator (determinístico, sem LLM) pergunta:
+"Ei, passou um tempinho... quer continuar ou começar conversa nova?"
+       ↓
+Mensagem original guardada em pending_session_choices[phone]
+last_seen_at atualizado (evita re-disparar a pergunta)
+       ↓
+Usuário responde:
+  "sim/bora/claro/..."  →  CONTINUATION_INJECTION: agente resume tópico anterior + responde mensagem original
+  "não/nova/..."        →  GREETING_INJECTION: agente saúda com tempo/tarefas/preferências + responde mensagem original
+  mensagem diferente    →  tratado como "não" (discard original, processa nova mensagem com GREETING_INJECTION)
+```
+
+### Fluxo de nova sessão (áudio)
+
+Para áudio, pula a pergunta e aplica `GREETING_INJECTION` diretamente (transcrever para guardar ficaria complexo).
+
+### Preferências de cumprimento
+
+As preferências são controladas pelo usuário via conversa e armazenadas na memória vetorial:
+- "todo dia adicione as notícias no meu cumprimento" → agente salva em `add_memory` → próximas saudações incluem notícias
+- "tira as notícias do cumprimento" → agente usa `list_memories` + `delete_memory` → saudações voltam ao padrão
+- O Agno (`search_knowledge=True`) encontra essas preferências automaticamente antes de cada saudação
+
 ## Decisões Técnicas
 
 - **Python & FastAPI**: Fornecem agilidade e facilidade para hospedar webhooks.
@@ -145,5 +235,6 @@ O agente faz perguntas contextuais antes de salvar a tarefa (prazo, local, obser
 | Busca web | `SEARCH_PROVIDER` | `duckduckgo` | `duckduckgo`, `tavily`, `exa`, `serper`, `brave` |
 | Scraping | `SCRAPER_PROVIDER` | `newspaper4k` | `newspaper4k`, `crawl4ai` |
 | Memória | `MEMORY_MODE` | `agentic` | `agentic`, `always-on` |
+| Agendamentos | `scheduler.db` | SQLite local | — (persistência automática) |
 
 *(Este arquivo deve ser atualizado sempre que novas ferramentas, rotas ou fluxos forem adicionados)*
