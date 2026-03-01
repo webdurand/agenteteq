@@ -3,6 +3,7 @@ from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from src.memory.knowledge import get_knowledge_base
 from src.tools.memory_manager import add_memory, delete_memory, list_memories
+from src.tools.task_manager import add_task, list_tasks, complete_task, delete_task
 
 def get_model():
     provider = os.getenv("LLM_PROVIDER", "openai").lower()
@@ -34,9 +35,9 @@ def get_assistant(session_id: str, extra_tools: list = None) -> Agent:
     # Importação atrasada para evitar erro se a ferramenta ainda não estiver pronta
     try:
         from src.tools.blog_publisher import publish_post
-        tools = [publish_post, add_memory, delete_memory, list_memories]
+        tools = [publish_post, add_memory, delete_memory, list_memories, add_task, list_tasks, complete_task, delete_task]
     except ImportError:
-        tools = [add_memory, delete_memory, list_memories]
+        tools = [add_memory, delete_memory, list_memories, add_task, list_tasks, complete_task, delete_task]
     
     if extra_tools:
         tools.extend(extra_tools)
@@ -77,6 +78,9 @@ def get_assistant(session_id: str, extra_tools: list = None) -> Agent:
             "Aguarde a confirmação explícita do autor antes de chamar a ferramenta de publicação.",
             "Você tem ferramentas de pesquisa na internet: use web_search para buscas rápidas e pontuais, e deep_research para temas que exigem profundidade, múltiplas fontes ou análise detalhada.",
             "Sempre que fizer uma pesquisa relevante, salve os principais achados na memória do usuário com add_memory para referência futura.",
+            "Você possui uma lista de tarefas. Quando o usuário mencionar algo que precisa fazer, como 'amanhã preciso ir ao médico' ou 'adicione uma tarefa', faça perguntas contextuais para enriquecer a tarefa antes de salvar — pergunte sobre prazo/horário, local/endereço e se há alguma observação importante, mas somente o que for relevante para aquela tarefa específica.",
+            "Aguarde as respostas do usuário e confirme o resumo da tarefa antes de chamar add_task. Sempre use o session_id como user_id ao chamar as ferramentas de tarefas.",
+            "Para listar tarefas, use list_tasks. Para marcar como concluída, use complete_task. Para remover, use delete_task.",
         ],
         tools=tools,
     )

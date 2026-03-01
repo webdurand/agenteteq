@@ -3,7 +3,7 @@
 ## Visão Geral
 
 O `agenteteq` é uma API em Python baseada no FastAPI responsável por receber webhooks do WhatsApp, processar áudios utilizando serviços de transcrição, e alimentar um Agente Agno.
-O Agente Agno possui ferramentas para conversar, publicar posts no blog, gerenciar memória, pesquisar na web e realizar pesquisas profundas com múltiplos sub-agentes.
+O Agente Agno possui ferramentas para conversar, publicar posts no blog, gerenciar memória, pesquisar na web, realizar pesquisas profundas com múltiplos sub-agentes e gerenciar uma lista de tarefas pessoal.
 
 ## Fluxo Principal
 
@@ -81,6 +81,47 @@ Mensagem do usuário
 - **`create_deep_research_tool(notifier, user_id)`**: factory que compõe os módulos acima
 - Fluxo: notifica → busca inicial → agente decisor → (se necessário) Team broadcast → salva na memória
 - Sub-agentes do Team recebem `get_search_toolkit()` + `get_scraper_toolkit()` para pesquisa paralela
+
+## Lista de Tarefas (`src/tools/task_manager.py`)
+
+Ferramenta para gerenciar tarefas pessoais do usuário via WhatsApp.
+
+### Funções
+
+| Função | Descrição |
+|--------|-----------|
+| `add_task(user_id, title, description, due_date, location, notes)` | Cria uma nova tarefa para o usuário |
+| `list_tasks(user_id, status)` | Lista tarefas filtrando por `pending`, `done` ou `all` |
+| `complete_task(user_id, task_id)` | Marca uma tarefa como concluída |
+| `delete_task(user_id, task_id)` | Remove uma tarefa |
+
+### Banco de Dados
+
+Tabela `tasks` no mesmo banco já utilizado por `identity.py` (PostgreSQL via `DATABASE_URL` ou SQLite local):
+
+```sql
+CREATE TABLE tasks (
+    id          INTEGER/SERIAL PRIMARY KEY,
+    user_id     TEXT NOT NULL,   -- número de telefone (WhatsApp)
+    title       TEXT NOT NULL,
+    description TEXT,
+    due_date    TEXT,            -- texto livre ou ISO 8601
+    location    TEXT,
+    notes       TEXT,
+    status      TEXT DEFAULT 'pending',  -- 'pending' | 'done'
+    created_at  TEXT NOT NULL
+)
+```
+
+### Fluxo de Interação
+
+O agente faz perguntas contextuais antes de salvar a tarefa (prazo, local, observações), confirma o resumo com o usuário e só então chama `add_task`. O `user_id` sempre é o `session_id` (número de WhatsApp), garantindo isolamento entre usuários.
+
+### Decisão Técnica
+
+- Reutiliza o mesmo banco e padrão de conexão do `identity.py` — sem novo banco, sem nova dependência.
+- Não precisa de `notifier` nem de factory, pois a interação é síncrona e conversacional (o agente faz as perguntas, não a tool).
+- O `whatsapp.py` (orchestrator) não foi alterado: as tools são registradas diretamente no `get_assistant()`.
 
 ## Decisões Técnicas
 
