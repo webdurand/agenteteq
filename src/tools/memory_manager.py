@@ -24,9 +24,14 @@ def add_memory(fato: str, user_id: str) -> str:
         meta_data={"user_id": user_id}
     )
     
-    # Inserir no banco
-    vector_db.insert(content_hash=str(hash(fato)), documents=[doc])
-    
+    try:
+        vector_db.insert(content_hash=str(hash(fato)), documents=[doc])
+    except Exception as e:
+        err = str(e).lower()
+        if "unique" in err or "duplicate" in err:
+            return f"Fato já existia na memória: {fato}"
+        raise
+
     return f"Fato adicionado com sucesso à memória: {fato}"
 
 def delete_memory(query: str, user_id: str) -> str:

@@ -1,4 +1,4 @@
-.PHONY: setup dev
+.PHONY: setup dev start test-cli front-setup front
 
 setup:
 	python3 -m venv .venv
@@ -13,3 +13,9 @@ start:
 
 test-cli:
 	PYTHONPATH=. .venv/bin/python src/testing/cli.py
+
+front-setup:
+	cd ../agenteteq-front && npm install
+
+front:
+	cd ../agenteteq-front && npm run dev

@@ -45,7 +45,10 @@ class GeminiTTS(BaseTTS):
             )
 
         response = await asyncio.to_thread(_call)
-        pcm_data = response.candidates[0].content.parts[0].inline_data.data
+        part = response.candidates[0].content.parts[0]
+        mime = part.inline_data.mime_type
+        pcm_data = part.inline_data.data
+        print(f"[TTS GEMINI] mime_type={mime} | raw_bytes={len(pcm_data)} | type={type(pcm_data).__name__}")
         return _pcm_to_wav(pcm_data), "audio/wav"
 
 
