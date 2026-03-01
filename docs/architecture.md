@@ -213,6 +213,75 @@ As preferências são controladas pelo usuário via conversa e armazenadas na me
 - "tira as notícias do cumprimento" → agente usa `list_memories` + `delete_memory` → saudações voltam ao padrão
 - O Agno (`search_knowledge=True`) encontra essas preferências automaticamente antes de cada saudação
 
+## Interface Web de Voz (`agenteteq-front`)
+
+Aplicação React separada que permite interação com o Teq via microfone, com resposta em áudio — estilo Jarvis.
+
+### Repositório
+
+`agenteteq-front/` (Vite + React + TypeScript + Tailwind CSS)
+
+### Fluxo
+
+```
+Browser (React)
+  │
+  ├── Microfone → MediaRecorder (.webm/opus)
+  │     ↓ (VAD: silêncio de 1.5s dispara envio automático)
+  │   WebSocket /ws/voice/{phone_number}
+  │     ↓
+  │   Backend:
+  │     ├── STT: Gemini multimodal (LLM_PROVIDER=gemini) ou Whisper
+  │     ├── Agent Teq (mesmas ferramentas e memória do WhatsApp)
+  │     └── TTS: src/integrations/tts.py → áudio WAV/MP3
+  │     ↓
+  │   WebSocket → { type, transcript, text, audio_b64, mime_type }
+  │     ↓
+  └── Reproduz áudio + exibe texto
+```
+
+### Identificação
+
+O usuário informa seu número de telefone na primeira visita (salvo em `localStorage`). Esse número é o `session_id` do Agno, garantindo acesso à mesma memória e histórico do WhatsApp.
+
+### Módulo TTS (`src/integrations/tts.py`)
+
+Interface desacoplada `BaseTTS` com factory `get_tts()`:
+
+| Provider | Variável | Custo | Observação |
+|---|---|---|---|
+| `gemini` (padrão) | `GOOGLE_API_KEY` | Grátis (tier atual) | `gemini-2.5-flash-preview-tts`, voz `Aoede` padrão |
+| `openai` | `OPENAI_API_KEY` | ~$15/1M chars | `tts-1`, vozes configuráveis |
+| `elevenlabs` | `ELEVENLABS_API_KEY` | Pago | `eleven_multilingual_v2` |
+| `browser` | — | Grátis | Web Speech API (`SpeechSynthesisUtterance`) no cliente |
+
+Configuração via `.env`:
+```
+TTS_PROVIDER=gemini   # gemini | openai | elevenlabs | browser
+TTS_VOICE=Aoede       # Gemini: Aoede, Fenrir, Puck | OpenAI: onyx, nova...
+FRONTEND_ORIGIN=http://localhost:5173  # origin do React para CORS
+```
+
+### WebSocketNotifier
+
+Equivalente ao `StatusNotifier` para a interface web. Como `agent.run()` executa em thread via `asyncio.to_thread()`, usa `asyncio.run_coroutine_threadsafe()` para enviar atualizações de status ao cliente em tempo real durante pesquisas.
+
+### Componentes React
+
+| Arquivo | Responsabilidade |
+|---|---|
+| `hooks/useVoiceChat.ts` | WebSocket + MediaRecorder + VAD + reprodução de áudio |
+| `components/Orb.tsx` | Orb animado navy — idle/listening/thinking/speaking |
+| `components/ChatHistory.tsx` | Painel lateral colapsável com histórico |
+| `components/LoginModal.tsx` | Tela de identificação por telefone |
+| `components/OnboardingModal.tsx` | Captura de nome no primeiro acesso |
+
+### Variável de ambiente (frontend)
+
+```
+VITE_WS_URL=ws://localhost:8000   # em produção: wss://seu-dominio.com
+```
+
 ## Decisões Técnicas
 
 - **Python & FastAPI**: Fornecem agilidade e facilidade para hospedar webhooks.
@@ -236,5 +305,6 @@ As preferências são controladas pelo usuário via conversa e armazenadas na me
 | Scraping | `SCRAPER_PROVIDER` | `newspaper4k` | `newspaper4k`, `crawl4ai` |
 | Memória | `MEMORY_MODE` | `agentic` | `agentic`, `always-on` |
 | Agendamentos | `scheduler.db` | SQLite local | — (persistência automática) |
+| TTS | `TTS_PROVIDER` | `gemini` | `gemini`, `openai`, `elevenlabs`, `browser` |
 
 *(Este arquivo deve ser atualizado sempre que novas ferramentas, rotas ou fluxos forem adicionados)*

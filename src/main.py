@@ -1,11 +1,13 @@
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from src.endpoints.whatsapp import router as whatsapp_router
+from src.endpoints.web import router as web_router
 from src.scheduler.engine import start_scheduler, shutdown_scheduler
 
 
@@ -18,7 +20,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Agente WhatsApp - Diario Teq", lifespan=lifespan)
 
+_frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[_frontend_origin, "http://localhost:5173", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(whatsapp_router)
+app.include_router(web_router)
+
 
 @app.get("/")
 def read_root():

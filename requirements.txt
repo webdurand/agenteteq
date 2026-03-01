@@ -17,3 +17,5 @@ lxml_html_clean
 # Agendamento de mensagens proativas
 apscheduler
 sqlalchemy
+# Interface web de voz
+websockets
