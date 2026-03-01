@@ -10,3 +10,7 @@ uvicorn
 psycopg2-binary
 pgvector
 rich
+# Pesquisa web e scraping (providers padrão - gratuitos, sem API key)
+ddgs
+newspaper4k
+lxml_html_clean

@@ -20,9 +20,14 @@ def get_model():
         from agno.models.openai import OpenAIChat
         return OpenAIChat(id="gpt-4o-mini")
 
-def get_assistant(session_id: str) -> Agent:
+def get_assistant(session_id: str, extra_tools: list = None) -> Agent:
     """
     Retorna a instância do agente configurada para uma sessão específica (ex: número do WhatsApp).
+    
+    Args:
+        session_id: Identificador da sessão (número de WhatsApp do usuário).
+        extra_tools: Tools adicionais injetadas pelo orchestrator (ex: web_search, deep_research).
+                     Permite que o orchestrator injete contexto (notifier, user_id) sem acoplamento.
     """
     db_url = os.getenv("AGNO_DB_URL", "sqlite:///sessions.db")
     
@@ -32,6 +37,9 @@ def get_assistant(session_id: str) -> Agent:
         tools = [publish_post, add_memory, delete_memory, list_memories]
     except ImportError:
         tools = [add_memory, delete_memory, list_memories]
+    
+    if extra_tools:
+        tools.extend(extra_tools)
         
     knowledge_base = get_knowledge_base()
     search_knowledge = os.getenv("MEMORY_MODE", "agentic").lower() == "agentic" and knowledge_base is not None
@@ -66,7 +74,9 @@ def get_assistant(session_id: str) -> Agent:
             "Utilize sua memória sobre o usuário para fornecer respostas personalizadas e assertivas.",
             "Além de conversar, você possui ferramentas para publicar posts no blog.",
             "Se o usuário pedir para criar um post, ajude-o a formatar o conteúdo com um título criativo e leitura agradável.",
-            "Aguarde a confirmação explícita do autor antes de chamar a ferramenta de publicação."
+            "Aguarde a confirmação explícita do autor antes de chamar a ferramenta de publicação.",
+            "Você tem ferramentas de pesquisa na internet: use web_search para buscas rápidas e pontuais, e deep_research para temas que exigem profundidade, múltiplas fontes ou análise detalhada.",
+            "Sempre que fizer uma pesquisa relevante, salve os principais achados na memória do usuário com add_memory para referência futura.",
         ],
         tools=tools,
     )

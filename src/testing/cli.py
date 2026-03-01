@@ -10,16 +10,34 @@ load_dotenv()
 from src.agent.assistant import get_assistant
 from src.memory.knowledge import get_vector_db
 from src.memory.extractor import extract_and_save_facts
+from src.integrations.status_notifier import StatusNotifier
+from src.tools.web_search import create_web_search_tool, create_fetch_page_tool
+from src.tools.deep_research import create_deep_research_tool
 
 console = Console()
+
+
+class CliStatusNotifier(StatusNotifier):
+    """Notifier para o CLI: imprime no console em vez de enviar mensagem no WhatsApp."""
+
+    def notify(self, message: str) -> None:
+        console.print(f"[bold yellow][STATUS] {message}[/bold yellow]")
+
 
 async def main():
     console.print("[bold green]=== CLI Test do Agente Diario Teq ===[/bold green]")
     console.print("Digite 'sair' ou 'exit' para encerrar.\n")
 
     session_id = Prompt.ask("Digite o número do seu telefone simulado", default="local_test_user")
-    
-    agent = get_assistant(session_id=session_id)
+
+    notifier = CliStatusNotifier(to_number=session_id)
+    search_tools = [
+        create_web_search_tool(notifier),
+        create_fetch_page_tool(notifier),
+        create_deep_research_tool(notifier, session_id),
+    ]
+
+    agent = get_assistant(session_id=session_id, extra_tools=search_tools)
     memory_mode = os.getenv("MEMORY_MODE", "agentic").lower()
     
     console.print(f"[dim]Sessão iniciada como: {session_id} | Memory Mode: {memory_mode}[/dim]\n")

@@ -7,11 +7,14 @@ from fastapi import APIRouter, Request, HTTPException, Query, BackgroundTasks
 
 from src.integrations.whatsapp import whatsapp_client
 from src.integrations.transcriber import transcriber
+from src.integrations.status_notifier import StatusNotifier
 from src.agent.assistant import get_assistant
 from src.memory.identity import get_user, create_user, update_user_name
 from src.memory.knowledge import get_vector_db
 from src.memory.extractor import extract_and_save_facts
 from src.tools.memory_manager import add_memory
+from src.tools.web_search import create_web_search_tool, create_fetch_page_tool
+from src.tools.deep_research import create_deep_research_tool
 
 router = APIRouter()
 
@@ -224,8 +227,15 @@ async def orchestrate_message(event: dict):
 
         print(f"[OUT] Enviando indicador de digitando/gravando para {from_number}")
         await whatsapp_client.mark_message_as_read_and_typing(message_id, from_number, is_audio=False)
-        
-        agent = get_assistant(session_id=from_number)
+
+        notifier = StatusNotifier(to_number=from_number, reply_to_message_id=message_id)
+        search_tools = [
+            create_web_search_tool(notifier),
+            create_fetch_page_tool(notifier),
+            create_deep_research_tool(notifier, from_number),
+        ]
+
+        agent = get_assistant(session_id=from_number, extra_tools=search_tools)
         
         if msg_type == "audio":
             await process_audio_message(from_number, message_id, raw_msg, agent)
