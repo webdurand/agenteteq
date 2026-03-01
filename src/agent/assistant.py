@@ -32,7 +32,7 @@ def get_assistant(session_id: str, extra_tools: list = None) -> Agent:
     """
     db_url = os.getenv("AGNO_DB_URL", "sqlite:///sessions.db")
     
-    add_task, list_tasks, complete_task, delete_task = create_task_tools(session_id)
+    add_task, list_tasks, complete_task, reopen_task, delete_task = create_task_tools(session_id)
     add_memory, delete_memory, list_memories = create_memory_tools(session_id)
 
     try:
@@ -43,13 +43,13 @@ def get_assistant(session_id: str, extra_tools: list = None) -> Agent:
         tools = [
             publish_post,
             add_memory, delete_memory, list_memories,
-            add_task, list_tasks, complete_task, delete_task,
+            add_task, list_tasks, complete_task, reopen_task, delete_task,
             get_weather,
             schedule_message, list_schedules, cancel_schedule,
         ]
     except ImportError as e:
         print(f"[ASSISTANT] Aviso: algumas tools nao carregaram ({e}). Usando conjunto basico.")
-        tools = [add_memory, delete_memory, list_memories, add_task, list_tasks, complete_task, delete_task]
+        tools = [add_memory, delete_memory, list_memories, add_task, list_tasks, complete_task, reopen_task, delete_task]
     
     if extra_tools:
         tools.extend(extra_tools)
@@ -87,7 +87,7 @@ def get_assistant(session_id: str, extra_tools: list = None) -> Agent:
             "Voce tem ferramentas de pesquisa: use web_search para buscas rapidas e pontuais, e deep_research para temas que precisam de profundidade ou multiplas fontes. Apos pesquisas relevantes, salve os achados com add_memory.",
             "Voce pode publicar posts no blog. Se o usuario quiser criar um post, ajude com titulo criativo e leitura fluida. Aguarde confirmacao explicita antes de publicar.",
             "Voce gerencia uma lista de tarefas. Quando o usuario mencionar algo que precisa fazer, faca perguntas contextuais (prazo, local, observacoes) — so as relevantes para aquela tarefa. Confirme o resumo antes de chamar add_task.",
-            "Para listar tarefas use list_tasks, para concluir use complete_task, para remover use delete_task.",
+            "Para listar tarefas use list_tasks, para concluir use complete_task, para reabrir/marcar como pendente use reopen_task, para remover use delete_task.",
             "Voce pode agendar mensagens proativas com schedule_message (o numero do usuario ja esta configurado automaticamente, nao passe user_phone). Para 'daqui X minutos/horas', use trigger_type='date' com minutes_from_now (ex: minutes_from_now=1 para 'daqui 1 minuto'). Para recorrente, use trigger_type='cron' com cron_expression (ex: '0 8 * * *' para todo dia as 8h UTC). Use list_schedules para listar agendamentos e cancel_schedule para cancelar.",
             "Se o usuario pedir algo que voce nao consegue fazer com as ferramentas disponiveis, avise de forma tranquila — tipo 'boa ideia, mas ainda nao consigo fazer isso, vamos aguardar umas atualizacoes?'.",
             "Quando receber a instrucao de saudacao de nova sessao, consulte suas memorias ANTES de responder para saber quais informacoes o usuario quer no cumprimento.",

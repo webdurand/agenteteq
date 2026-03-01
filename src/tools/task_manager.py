@@ -21,9 +21,14 @@ def _use_postgres() -> bool:
     return bool(os.getenv("DATABASE_URL"))
 
 
+_pg_engine = None
+
 def _get_pg_engine():
-    from sqlalchemy import create_engine
-    return create_engine(_get_db_url())
+    global _pg_engine
+    if _pg_engine is None:
+        from sqlalchemy import create_engine
+        _pg_engine = create_engine(_get_db_url())
+    return _pg_engine
 
 
 def _get_sqlite_conn():
@@ -248,6 +253,49 @@ def complete_task(user_id: str, task_id: int) -> str:
         return f"Erro ao concluir tarefa: {e}"
 
 
+def reopen_task(user_id: str, task_id: int) -> str:
+    """
+    Marca uma tarefa como pendente (incompleta).
+
+    Args:
+        user_id: Número de telefone do usuário (garante que só pode reabrir suas próprias tarefas).
+        task_id: ID numérico da tarefa a ser marcada como pendente.
+
+    Returns:
+        Confirmação ou mensagem de erro.
+    """
+    print(f"[TASKS] reopen_task | user={user_id} | task_id={task_id}")
+    _init_db()
+    try:
+        if _use_postgres():
+            from sqlalchemy import text
+            engine = _get_pg_engine()
+            with engine.connect() as conn:
+                result = conn.execute(
+                    text("UPDATE tasks SET status = 'pending' WHERE id = :id AND user_id = :u"),
+                    {"id": task_id, "u": user_id}
+                )
+                conn.commit()
+                affected = result.rowcount
+        else:
+            conn = _get_sqlite_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE tasks SET status = 'pending' WHERE id = ? AND user_id = ?",
+                (task_id, user_id)
+            )
+            conn.commit()
+            affected = cursor.rowcount
+            conn.close()
+
+        if affected == 0:
+            return f"Tarefa #{task_id} não encontrada."
+        return f"Tarefa #{task_id} marcada como pendente!"
+    except Exception as e:
+        print(f"[TASKS] Erro ao reabrir tarefa: {e}")
+        return f"Erro ao reabrir tarefa: {e}"
+
+
 def delete_task(user_id: str, task_id: int) -> str:
     """
     Remove uma tarefa da lista do usuário.
@@ -301,7 +349,7 @@ def create_task_tools(user_id: str):
         user_id: Numero de telefone do usuario (session_id).
 
     Returns:
-        Tuple com (add_task_tool, list_tasks_tool, complete_task_tool, delete_task_tool).
+        Tuple com (add_task_tool, list_tasks_tool, complete_task_tool, reopen_task_tool, delete_task_tool).
     """
 
     def add_task_tool(
@@ -351,6 +399,18 @@ def create_task_tools(user_id: str):
         """
         return complete_task(user_id, task_id)
 
+    def reopen_task_tool(task_id: int) -> str:
+        """
+        Marca uma tarefa como pendente (incompleta).
+
+        Args:
+            task_id: ID numérico da tarefa a ser marcada como pendente.
+
+        Returns:
+            Confirmação ou mensagem de erro.
+        """
+        return reopen_task(user_id, task_id)
+
     def delete_task_tool(task_id: int) -> str:
         """
         Remove uma tarefa da lista do usuário.
@@ -363,4 +423,4 @@ def create_task_tools(user_id: str):
         """
         return delete_task(user_id, task_id)
 
-    return add_task_tool, list_tasks_tool, complete_task_tool, delete_task_tool
+    return add_task_tool, list_tasks_tool, complete_task_tool, reopen_task_tool, delete_task_tool

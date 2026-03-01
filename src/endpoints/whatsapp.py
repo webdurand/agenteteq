@@ -65,7 +65,7 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
             # Pula status, acks não processáveis ou mensagens enviadas por mim
             if not event.get("should_process", False):
                 reason = event.get("skip_reason", "Desconhecido")
-                if reason not in ["Status message", "Enviado por mim", "Protocol message"]:
+                if reason not in ["Status message", "Enviado por mim", "Protocol message"] and not reason.startswith("Evento não processável"):
                     print(f"[WEBHOOK] Evento ignorado. Motivo: {reason} | ID: {event.get('id', 'N/A')}")
                 continue
                 
