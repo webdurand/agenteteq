@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import base64
 import asyncio
@@ -23,6 +24,28 @@ GREETING_INJECTION = (
     "Integre tudo de forma fluida e casual, sem parecer uma lista robotica. "
     "Mensagem real do usuario: ]"
 )
+
+
+_EMOJI_TAIL_RE = re.compile(
+    r'[\s\U0001F000-\U0001FAFF\U0001F600-\U0001F64F\U0001F900-\U0001F9FF'
+    r'\u2600-\u27BF\uFE00-\uFE0F\u200d\u2764\u2705\u274C\u2728'
+    r'\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF*_)!\s]+$'
+)
+
+
+def _needs_follow_up(text: str) -> bool:
+    """Detect deterministically whether the agent response expects user input.
+
+    Strips trailing emojis / decorations and checks for question marks
+    in the tail of the message — covers cases where the last visible
+    sentence is a CTA like "Manda aí pra mim! 😊" but earlier sentences
+    contain the actual questions.
+    """
+    cleaned = _EMOJI_TAIL_RE.sub('', text.strip())
+    if cleaned.endswith('?'):
+        return True
+    tail = cleaned[-300:] if len(cleaned) > 300 else cleaned
+    return '?' in tail
 
 
 class WebSocketNotifier:
@@ -130,11 +153,15 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts):
 
     audio_b64 = base64.b64encode(audio_out).decode() if audio_out else ""
 
+    follow_up = _needs_follow_up(response.content)
+    print(f"[WEB WS] needs_follow_up={follow_up}")
+
     await websocket.send_json({
         "type": "response",
         "text": response.content,
         "audio_b64": audio_b64,
         "mime_type": mime_type,
+        "needs_follow_up": follow_up,
     })
 
 
@@ -195,6 +222,7 @@ async def voice_websocket(websocket: WebSocket, phone_number: str):
                     print(f"[WEB WS] Cancel recebido do cliente: {phone_number}")
                     await _cancel_task(current_task)
                     current_task = None
+                    await websocket.send_json({"type": "status", "text": ""})
                     continue
 
                 if msg_type == "name":
@@ -310,11 +338,15 @@ async def voice_websocket(websocket: WebSocket, phone_number: str):
                 print(f"[WEB WS] TTS gerado: {len(audio_out)} bytes | mime={mime_type}")
                 audio_b64 = base64.b64encode(audio_out).decode() if audio_out else ""
 
+                follow_up = _needs_follow_up(response.content)
+                print(f"[WEB WS] needs_follow_up={follow_up}")
+
                 await websocket.send_json({
                     "type": "response",
                     "text": response.content,
                     "audio_b64": audio_b64,
                     "mime_type": mime_type,
+                    "needs_follow_up": follow_up,
                 })
                 print(f"[WEB WS] Resposta enviada ao cliente: {phone_number}")
 
