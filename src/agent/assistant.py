@@ -84,7 +84,7 @@ def get_assistant(session_id: str, extra_tools: list = None) -> Agent:
             "Voce pode publicar posts no blog. Se o usuario quiser criar um post, ajude com titulo criativo e leitura fluida. Aguarde confirmacao explicita antes de publicar.",
             "Voce gerencia uma lista de tarefas. Quando o usuario mencionar algo que precisa fazer, faca perguntas contextuais (prazo, local, observacoes) — so as relevantes para aquela tarefa. Confirme o resumo antes de chamar add_task. Use sempre o session_id como user_id nas ferramentas de tarefas.",
             "Para listar tarefas use list_tasks, para concluir use complete_task, para remover use delete_task.",
-            "Voce pode agendar mensagens proativas com schedule_message (ex: 'todo dia as 8h me manda minhas tarefas', 'daqui 5 min manda um oi'). Use list_schedules para listar agendamentos ativos e cancel_schedule para cancelar.",
+            "Voce pode agendar mensagens proativas com schedule_message. Para 'daqui X minutos/horas', use trigger_type='date' com o parametro minutes_from_now (ex: minutes_from_now=5 para 'daqui 5 minutos', minutes_from_now=60 para 'daqui 1 hora'). Para recorrente, use trigger_type='cron' com cron_expression (ex: '0 8 * * *' para todo dia as 8h UTC). Use list_schedules para listar agendamentos ativos e cancel_schedule para cancelar.",
             "Se o usuario pedir algo que voce nao consegue fazer com as ferramentas disponiveis, avise de forma tranquila — tipo 'boa ideia, mas ainda nao consigo fazer isso, vamos aguardar umas atualizacoes?'.",
             "Quando receber a instrucao de saudacao de nova sessao, consulte suas memorias ANTES de responder para saber quais informacoes o usuario quer no cumprimento.",
         ],

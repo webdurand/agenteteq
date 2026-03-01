@@ -93,6 +93,7 @@ def add_task(
     Returns:
         Mensagem de confirmação com o ID da tarefa criada.
     """
+    print(f"[TASKS] add_task | user={user_id} | titulo='{title}' | prazo='{due_date}' | local='{location}'")
     _init_db()
     created_at = datetime.now().isoformat()
     try:
@@ -127,6 +128,7 @@ def add_task(
             task_id = cursor.lastrowid
             conn.commit()
             conn.close()
+        print(f"[TASKS] Tarefa #{task_id} adicionada com sucesso: '{title}'")
         return f"Tarefa #{task_id} adicionada com sucesso: '{title}'."
     except Exception as e:
         print(f"[TASKS] Erro ao adicionar tarefa: {e}")
@@ -145,6 +147,7 @@ def list_tasks(user_id: str, status: str = "pending") -> str:
     Returns:
         Lista formatada das tarefas ou mensagem informando que não há tarefas.
     """
+    print(f"[TASKS] list_tasks | user={user_id} | status={status}")
     _init_db()
     try:
         if _use_postgres():
@@ -213,6 +216,7 @@ def complete_task(user_id: str, task_id: int) -> str:
     Returns:
         Confirmação ou mensagem de erro.
     """
+    print(f"[TASKS] complete_task | user={user_id} | task_id={task_id}")
     _init_db()
     try:
         if _use_postgres():
@@ -255,6 +259,7 @@ def delete_task(user_id: str, task_id: int) -> str:
     Returns:
         Confirmação ou mensagem de erro.
     """
+    print(f"[TASKS] delete_task | user={user_id} | task_id={task_id}")
     _init_db()
     try:
         if _use_postgres():
