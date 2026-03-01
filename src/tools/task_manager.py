@@ -289,3 +289,78 @@ def delete_task(user_id: str, task_id: int) -> str:
     except Exception as e:
         print(f"[TASKS] Erro ao remover tarefa: {e}")
         return f"Erro ao remover tarefa: {e}"
+
+
+def create_task_tools(user_id: str):
+    """
+    Factory que cria as tools de tarefas com o user_id pre-injetado via closure.
+    O LLM nunca precisa fornecer ou conhecer o user_id — identificacao deterministica
+    pelo numero de telefone que chegou no webhook.
+
+    Args:
+        user_id: Numero de telefone do usuario (session_id).
+
+    Returns:
+        Tuple com (add_task_tool, list_tasks_tool, complete_task_tool, delete_task_tool).
+    """
+
+    def add_task_tool(
+        title: str,
+        description: str = "",
+        due_date: str = "",
+        location: str = "",
+        notes: str = "",
+    ) -> str:
+        """
+        Adiciona uma tarefa à lista do usuário.
+
+        Args:
+            title: Título curto e descritivo da tarefa.
+            description: Descrição mais detalhada da tarefa (opcional).
+            due_date: Prazo ou data/hora no formato ISO 8601 ou texto livre (ex: '2026-03-02 10:00'). Opcional.
+            location: Endereço ou local relacionado à tarefa (opcional).
+            notes: Informações adicionais ou observações (opcional).
+
+        Returns:
+            Mensagem de confirmação com o ID da tarefa criada.
+        """
+        return add_task(user_id, title, description, due_date, location, notes)
+
+    def list_tasks_tool(status: str = "pending") -> str:
+        """
+        Lista as tarefas do usuário.
+
+        Args:
+            status: Filtro de status — 'pending' para tarefas abertas, 'done' para concluídas.
+                    Use 'all' para listar todas. Padrão: 'pending'.
+
+        Returns:
+            Lista formatada das tarefas ou mensagem informando que não há tarefas.
+        """
+        return list_tasks(user_id, status)
+
+    def complete_task_tool(task_id: int) -> str:
+        """
+        Marca uma tarefa como concluída.
+
+        Args:
+            task_id: ID numérico da tarefa a ser marcada como concluída.
+
+        Returns:
+            Confirmação ou mensagem de erro.
+        """
+        return complete_task(user_id, task_id)
+
+    def delete_task_tool(task_id: int) -> str:
+        """
+        Remove uma tarefa da lista do usuário.
+
+        Args:
+            task_id: ID numérico da tarefa a ser removida.
+
+        Returns:
+            Confirmação ou mensagem de erro.
+        """
+        return delete_task(user_id, task_id)
+
+    return add_task_tool, list_tasks_tool, complete_task_tool, delete_task_tool

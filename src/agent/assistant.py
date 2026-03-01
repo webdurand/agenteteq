@@ -2,8 +2,8 @@ import os
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from src.memory.knowledge import get_knowledge_base
-from src.tools.memory_manager import add_memory, delete_memory, list_memories
-from src.tools.task_manager import add_task, list_tasks, complete_task, delete_task
+from src.tools.memory_manager import create_memory_tools
+from src.tools.task_manager import create_task_tools
 
 def get_model():
     provider = os.getenv("LLM_PROVIDER", "openai").lower()
@@ -32,6 +32,9 @@ def get_assistant(session_id: str, extra_tools: list = None) -> Agent:
     """
     db_url = os.getenv("AGNO_DB_URL", "sqlite:///sessions.db")
     
+    add_task, list_tasks, complete_task, delete_task = create_task_tools(session_id)
+    add_memory, delete_memory, list_memories = create_memory_tools(session_id)
+
     try:
         from src.tools.blog_publisher import publish_post
         from src.tools.weather import get_weather
@@ -83,7 +86,7 @@ def get_assistant(session_id: str, extra_tools: list = None) -> Agent:
             "Utilize sua memoria sobre o usuario para personalizar as respostas. Quando aprender algo novo e relevante sobre o Durand (preferencias, rotina, projetos), salve com add_memory.",
             "Voce tem ferramentas de pesquisa: use web_search para buscas rapidas e pontuais, e deep_research para temas que precisam de profundidade ou multiplas fontes. Apos pesquisas relevantes, salve os achados com add_memory.",
             "Voce pode publicar posts no blog. Se o usuario quiser criar um post, ajude com titulo criativo e leitura fluida. Aguarde confirmacao explicita antes de publicar.",
-            "Voce gerencia uma lista de tarefas. Quando o usuario mencionar algo que precisa fazer, faca perguntas contextuais (prazo, local, observacoes) — so as relevantes para aquela tarefa. Confirme o resumo antes de chamar add_task. Use sempre o session_id como user_id nas ferramentas de tarefas.",
+            "Voce gerencia uma lista de tarefas. Quando o usuario mencionar algo que precisa fazer, faca perguntas contextuais (prazo, local, observacoes) — so as relevantes para aquela tarefa. Confirme o resumo antes de chamar add_task.",
             "Para listar tarefas use list_tasks, para concluir use complete_task, para remover use delete_task.",
             "Voce pode agendar mensagens proativas com schedule_message (o numero do usuario ja esta configurado automaticamente, nao passe user_phone). Para 'daqui X minutos/horas', use trigger_type='date' com minutes_from_now (ex: minutes_from_now=1 para 'daqui 1 minuto'). Para recorrente, use trigger_type='cron' com cron_expression (ex: '0 8 * * *' para todo dia as 8h UTC). Use list_schedules para listar agendamentos e cancel_schedule para cancelar.",
             "Se o usuario pedir algo que voce nao consegue fazer com as ferramentas disponiveis, avise de forma tranquila — tipo 'boa ideia, mas ainda nao consigo fazer isso, vamos aguardar umas atualizacoes?'.",

@@ -89,3 +89,55 @@ def list_memories(user_id: str) -> str:
             return "Aqui estão as memórias salvas:\n" + "\n".join(memories)
     except Exception as e:
         return f"Erro ao listar memórias: {str(e)}"
+
+
+def create_memory_tools(user_id: str):
+    """
+    Factory que cria as tools de memoria com o user_id pre-injetado via closure.
+    O LLM nunca precisa fornecer ou conhecer o user_id — identificacao deterministica
+    pelo numero de telefone que chegou no webhook.
+
+    Args:
+        user_id: Numero de telefone do usuario (session_id).
+
+    Returns:
+        Tuple com (add_memory_tool, delete_memory_tool, list_memories_tool).
+    """
+
+    def add_memory_tool(fato: str) -> str:
+        """
+        Adiciona um fato ou instrução à memória de longo prazo do usuário.
+        Use esta ferramenta quando o usuário pedir para você lembrar de algo ("Lembre-se que...").
+
+        Args:
+            fato (str): O fato a ser memorizado.
+
+        Returns:
+            str: Mensagem de sucesso confirmando a adição.
+        """
+        return add_memory(fato, user_id)
+
+    def delete_memory_tool(query: str) -> str:
+        """
+        Remove uma memória ou fato específico do usuário.
+        Use quando o usuário pedir para você esquecer algo ("Esqueça que...").
+
+        Args:
+            query (str): O termo ou frase que descreve a memória a ser deletada.
+
+        Returns:
+            str: Mensagem de sucesso ou erro.
+        """
+        return delete_memory(query, user_id)
+
+    def list_memories_tool() -> str:
+        """
+        Lista todos os fatos memorizados sobre o usuário.
+        Use esta ferramenta quando o usuário perguntar o que você sabe sobre ele.
+
+        Returns:
+            str: Uma lista em formato de texto com todos os fatos.
+        """
+        return list_memories(user_id)
+
+    return add_memory_tool, delete_memory_tool, list_memories_tool
