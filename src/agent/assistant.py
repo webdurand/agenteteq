@@ -35,7 +35,8 @@ def get_assistant(session_id: str, extra_tools: list = None) -> Agent:
     try:
         from src.tools.blog_publisher import publish_post
         from src.tools.weather import get_weather
-        from src.tools.scheduler_tool import schedule_message, list_schedules, cancel_schedule
+        from src.tools.scheduler_tool import create_scheduler_tools
+        schedule_message, list_schedules, cancel_schedule = create_scheduler_tools(session_id)
         tools = [
             publish_post,
             add_memory, delete_memory, list_memories,
@@ -78,13 +79,14 @@ def get_assistant(session_id: str, extra_tools: list = None) -> Agent:
             "Seja conciso: sem enrolacao, sem repetir o que o usuario acabou de dizer, sem introducoes longas.",
             "Quando for direto ao ponto (tarefas, pesquisa, codigo), seja objetivo. Quando for conversa, seja descontraido.",
             "Se nao souber de algo, admita de boa — pode pesquisar ou pedir mais contexto sem drama.",
+            "IMPORTANTE: Quando precisar usar uma ferramenta (tool), use-a DIRETAMENTE sem gerar texto antes. Nao mande mensagens como 'Deixa eu verificar...', 'Ja vejo isso pra voce...', 'Segura ai...' antes de chamar a tool. Chame a tool e responda apenas com o resultado final em uma unica mensagem.",
             "O usuario pode te enviar textos ou audios. Responda sempre no mesmo tom da conversa.",
             "Utilize sua memoria sobre o usuario para personalizar as respostas. Quando aprender algo novo e relevante sobre o Durand (preferencias, rotina, projetos), salve com add_memory.",
             "Voce tem ferramentas de pesquisa: use web_search para buscas rapidas e pontuais, e deep_research para temas que precisam de profundidade ou multiplas fontes. Apos pesquisas relevantes, salve os achados com add_memory.",
             "Voce pode publicar posts no blog. Se o usuario quiser criar um post, ajude com titulo criativo e leitura fluida. Aguarde confirmacao explicita antes de publicar.",
             "Voce gerencia uma lista de tarefas. Quando o usuario mencionar algo que precisa fazer, faca perguntas contextuais (prazo, local, observacoes) — so as relevantes para aquela tarefa. Confirme o resumo antes de chamar add_task. Use sempre o session_id como user_id nas ferramentas de tarefas.",
             "Para listar tarefas use list_tasks, para concluir use complete_task, para remover use delete_task.",
-            "Voce pode agendar mensagens proativas com schedule_message. Para 'daqui X minutos/horas', use trigger_type='date' com o parametro minutes_from_now (ex: minutes_from_now=5 para 'daqui 5 minutos', minutes_from_now=60 para 'daqui 1 hora'). Para recorrente, use trigger_type='cron' com cron_expression (ex: '0 8 * * *' para todo dia as 8h UTC). Use list_schedules para listar agendamentos ativos e cancel_schedule para cancelar.",
+            "Voce pode agendar mensagens proativas com schedule_message (o numero do usuario ja esta configurado automaticamente, nao passe user_phone). Para 'daqui X minutos/horas', use trigger_type='date' com minutes_from_now (ex: minutes_from_now=1 para 'daqui 1 minuto'). Para recorrente, use trigger_type='cron' com cron_expression (ex: '0 8 * * *' para todo dia as 8h UTC). Use list_schedules para listar agendamentos e cancel_schedule para cancelar.",
             "Se o usuario pedir algo que voce nao consegue fazer com as ferramentas disponiveis, avise de forma tranquila — tipo 'boa ideia, mas ainda nao consigo fazer isso, vamos aguardar umas atualizacoes?'.",
             "Quando receber a instrucao de saudacao de nova sessao, consulte suas memorias ANTES de responder para saber quais informacoes o usuario quer no cumprimento.",
         ],
