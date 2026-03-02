@@ -22,10 +22,18 @@ def _use_postgres() -> bool:
     return bool(os.getenv("DATABASE_URL"))
 
 
+_pg_engine = None
+
 def _get_pg_engine():
-    from sqlalchemy import create_engine
-    url = _get_db_url()
-    return create_engine(url)
+    global _pg_engine
+    if _pg_engine is None:
+        from sqlalchemy import create_engine
+        _pg_engine = create_engine(
+            _get_db_url(),
+            pool_pre_ping=True,
+            pool_recycle=300,
+        )
+    return _pg_engine
 
 
 def _init_pg():

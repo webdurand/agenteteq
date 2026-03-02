@@ -25,6 +25,7 @@ class GeminiTTS(BaseTTS):
         import asyncio
         from google import genai
         from google.genai import types
+        from google.genai.errors import ServerError
 
         client = genai.Client(api_key=self.api_key)
 
@@ -44,12 +45,21 @@ class GeminiTTS(BaseTTS):
                 ),
             )
 
-        response = await asyncio.to_thread(_call)
-        part = response.candidates[0].content.parts[0]
-        mime = part.inline_data.mime_type
-        pcm_data = part.inline_data.data
-        print(f"[TTS GEMINI] mime_type={mime} | raw_bytes={len(pcm_data)} | type={type(pcm_data).__name__}")
-        return _pcm_to_wav(pcm_data), "audio/wav"
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = await asyncio.to_thread(_call)
+                part = response.candidates[0].content.parts[0]
+                mime = part.inline_data.mime_type
+                pcm_data = part.inline_data.data
+                print(f"[TTS GEMINI] mime_type={mime} | raw_bytes={len(pcm_data)} | type={type(pcm_data).__name__}")
+                return _pcm_to_wav(pcm_data), "audio/wav"
+            except ServerError as e:
+                wait = 2 ** attempt
+                print(f"[TTS GEMINI] Erro 5xx (tentativa {attempt + 1}/{max_retries}): {e} — retry em {wait}s")
+                if attempt == max_retries - 1:
+                    raise
+                await asyncio.sleep(wait)
 
 
 class OpenAITTS(BaseTTS):

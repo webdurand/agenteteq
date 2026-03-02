@@ -27,7 +27,11 @@ def _get_pg_engine():
     global _pg_engine
     if _pg_engine is None:
         from sqlalchemy import create_engine
-        _pg_engine = create_engine(_get_db_url())
+        _pg_engine = create_engine(
+            _get_db_url(),
+            pool_pre_ping=True,
+            pool_recycle=300,
+        )
     return _pg_engine
 
 

@@ -145,13 +145,19 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts):
     print(f"[WEB WS] Resposta ({len(response.content)} chars): {response.content[:80]}...")
 
     await websocket.send_json({"type": "status", "text": "Gerando áudio..."})
-    audio_out, mime_type = await tts.synthesize(response.content)
-    print(f"[WEB WS] TTS: {len(audio_out)} bytes | {mime_type}")
+
+    audio_b64 = ""
+    mime_type = "audio/wav"
+    try:
+        audio_out, mime_type = await tts.synthesize(response.content)
+        print(f"[WEB WS] TTS: {len(audio_out)} bytes | {mime_type}")
+        audio_b64 = base64.b64encode(audio_out).decode() if audio_out else ""
+    except Exception as e:
+        print(f"[WEB WS] TTS falhou, enviando só texto: {e}")
+        mime_type = "browser"
 
     # Checkpoint 2: verifica cancelamento antes de enviar ao cliente
     await asyncio.sleep(0)
-
-    audio_b64 = base64.b64encode(audio_out).decode() if audio_out else ""
 
     follow_up = _needs_follow_up(response.content)
     print(f"[WEB WS] needs_follow_up={follow_up}")
@@ -334,9 +340,15 @@ async def voice_websocket(websocket: WebSocket, phone_number: str):
                 print(f"[WEB WS] Resposta do agente ({len(response.content)} chars): {response.content[:80]}...")
                 await websocket.send_json({"type": "status", "text": "Gerando áudio..."})
 
-                audio_out, mime_type = await tts.synthesize(response.content)
-                print(f"[WEB WS] TTS gerado: {len(audio_out)} bytes | mime={mime_type}")
-                audio_b64 = base64.b64encode(audio_out).decode() if audio_out else ""
+                audio_b64 = ""
+                mime_type = "audio/wav"
+                try:
+                    audio_out, mime_type = await tts.synthesize(response.content)
+                    print(f"[WEB WS] TTS gerado: {len(audio_out)} bytes | mime={mime_type}")
+                    audio_b64 = base64.b64encode(audio_out).decode() if audio_out else ""
+                except Exception as e:
+                    print(f"[WEB WS] TTS falhou, enviando só texto: {e}")
+                    mime_type = "browser"
 
                 follow_up = _needs_follow_up(response.content)
                 print(f"[WEB WS] needs_follow_up={follow_up}")
