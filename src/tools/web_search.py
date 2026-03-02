@@ -58,8 +58,13 @@ def get_scraper_toolkit():
 def web_search_raw(query: str, max_results: int = 5) -> str:
     """Busca web via provider configurado (sem notificação ao usuário)."""
     try:
+        provider = os.getenv("SEARCH_PROVIDER", "duckduckgo").lower()
         toolkit = get_search_toolkit()
-        return toolkit.duckduckgo_search(query=query, max_results=max_results)
+        
+        if provider == "tavily":
+            return toolkit.web_search_using_tavily(query=query, max_results=max_results)
+        else:
+            return toolkit.duckduckgo_search(query=query, max_results=max_results)
     except Exception as e:
         return f"Erro na busca: {e}"
 

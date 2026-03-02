@@ -109,7 +109,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts):
         create_fetch_page_tool(notifier),
         create_deep_research_tool(notifier, phone_number),
     ]
-    agent = get_assistant(session_id=phone_number, extra_tools=search_tools)
+    agent = get_assistant(session_id=phone_number, extra_tools=search_tools, channel="web")
 
     # Always-on memory injection (igual ao whatsapp.py)
     prompt = user_text
@@ -290,7 +290,7 @@ async def voice_websocket(websocket: WebSocket, phone_number: str):
                     create_fetch_page_tool(notifier),
                     create_deep_research_tool(notifier, phone_number),
                 ]
-                agent = get_assistant(session_id=phone_number, extra_tools=search_tools)
+                agent = get_assistant(session_id=phone_number, extra_tools=search_tools, channel="web")
 
                 llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
                 print(f"[WEB WS] Processando audio | provider={llm_provider} | new_session={new_session}")

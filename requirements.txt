@@ -12,6 +12,7 @@ pgvector
 rich
 # Pesquisa web e scraping (providers padrao - gratuitos, sem API key)
 ddgs
+tavily-python
 newspaper4k
 lxml_html_clean
 # Agendamento de mensagens proativas
@@ -19,3 +20,4 @@ apscheduler
 sqlalchemy
 # Interface web de voz
 websockets
+edge-tts
