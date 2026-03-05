@@ -127,10 +127,23 @@ def get_health_summary(user: dict = Depends(require_admin)):
 
 @router.post("/admins")
 def add_admin(req: AdminCreateRequest, current_user: dict = Depends(require_admin)):
-    from src.memory.identity import promote_user_to_admin
+    from src.memory.identity import promote_user_to_admin, get_user
     target = get_user(req.phone_number)
     if not target:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
         
     promote_user_to_admin(req.phone_number)
     return {"message": f"Usuário {req.phone_number} promovido a admin com sucesso"}
+
+@router.delete("/admins/{phone_number}")
+def remove_admin(phone_number: str, current_user: dict = Depends(require_admin)):
+    from src.memory.identity import demote_admin, get_user
+    target = get_user(phone_number)
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+        
+    if current_user.get("phone_number") == phone_number:
+        raise HTTPException(status_code=400, detail="Você não pode remover seu próprio acesso de admin")
+        
+    demote_admin(phone_number)
+    return {"message": f"Usuário {phone_number} rebaixado para user com sucesso"}

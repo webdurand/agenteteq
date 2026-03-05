@@ -325,6 +325,26 @@ def promote_user_to_admin(phone_number: str):
     except Exception as e:
         print(f"[IDENTITY] Erro ao promover {phone_number} para admin: {e}")
 
+def demote_admin(phone_number: str):
+    init_db()
+    try:
+        if _use_postgres():
+            from sqlalchemy import text
+            engine = _get_pg_engine()
+            with engine.connect() as conn:
+                conn.execute(
+                    text("UPDATE users SET role = 'user' WHERE phone_number = :p"),
+                    {"p": phone_number}
+                )
+                conn.commit()
+        else:
+            conn = _get_sqlite_conn()
+            conn.execute("UPDATE users SET role = 'user' WHERE phone_number = ?", (phone_number,))
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        print(f"[IDENTITY] Erro ao rebaixar {phone_number} para user: {e}")
+
 
 def set_whatsapp_verified(phone_number: str):
     init_db()
