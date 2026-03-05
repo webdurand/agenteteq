@@ -18,7 +18,13 @@ def get_scheduler() -> BackgroundScheduler:
             db_url = db_url.replace("postgresql://", "postgresql+psycopg2://")
             
         jobstores = {
-            "default": SQLAlchemyJobStore(url=db_url)
+            "default": SQLAlchemyJobStore(
+                url=db_url,
+                engine_options={
+                    "pool_pre_ping": True,
+                    "pool_recycle": 300
+                }
+            )
         }
         _scheduler = BackgroundScheduler(jobstores=jobstores, timezone="America/Sao_Paulo")
     return _scheduler
