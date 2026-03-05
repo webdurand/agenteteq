@@ -10,6 +10,7 @@ from src.models.subscriptions import (
     update_plan,
     get_plan,
     delete_plan,
+    upsert_subscription,
 )
 from src.integrations.stripe import create_product_and_price
 
@@ -40,6 +41,12 @@ class RefundReq(BaseModel):
     subscription_id: int
     amount_cents: int
     reason: str
+
+class ManualSubscriptionReq(BaseModel):
+    phone_number: str
+    plan_code: str
+    days: int = 30
+    status: str = "active"
 
 @router.get("/plans")
 def list_plans(user: dict = Depends(require_admin)):
@@ -120,6 +127,35 @@ def delete_plan_endpoint(code: str, user: dict = Depends(require_admin)):
 @router.get("/subscriptions")
 def list_subscriptions(user: dict = Depends(require_admin)):
     return list_subscriptions_model(limit=200)
+
+@router.post("/subscriptions/manual")
+def create_manual_subscription(req: ManualSubscriptionReq, user: dict = Depends(require_admin)):
+    import uuid
+    from datetime import datetime, timedelta, timezone
+    
+    plan = get_plan(req.plan_code)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plano nao encontrado")
+        
+    now = datetime.now(timezone.utc)
+    end_date = now + timedelta(days=req.days)
+    
+    # Check if a manual sub already exists to reuse provider_subscription_id, or generate one
+    sub_id = f"manual_{uuid.uuid4().hex[:8]}"
+    
+    upsert_data = {
+        "user_id": req.phone_number,
+        "plan_code": req.plan_code,
+        "provider": "manual",
+        "provider_customer_id": "manual",
+        "provider_subscription_id": sub_id,
+        "status": req.status,
+        "current_period_start": now.isoformat(),
+        "current_period_end": end_date.isoformat(),
+        "cancel_at_period_end": False,
+    }
+    upsert_subscription(upsert_data)
+    return {"message": "Assinatura manual adicionada com sucesso!"}
 
 @router.post("/refunds")
 def process_refund(req: RefundReq, user: dict = Depends(require_admin)):
