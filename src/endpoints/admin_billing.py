@@ -9,6 +9,7 @@ from src.models.subscriptions import (
     create_plan,
     update_plan,
     get_plan,
+    delete_plan,
 )
 from src.integrations.stripe import create_product_and_price
 
@@ -105,6 +106,16 @@ def update_plan_endpoint(code: str, req: PlanUpdateReq, user: dict = Depends(req
         features_json=req.features_json,
         is_active=req.is_active,
     )
+
+
+@router.delete("/plans/{code}")
+def delete_plan_endpoint(code: str, user: dict = Depends(require_admin)):
+    existing = get_plan(code)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Plano nao encontrado")
+    delete_plan(code)
+    return {"message": "Plano removido com sucesso"}
+
 
 @router.get("/subscriptions")
 def list_subscriptions(user: dict = Depends(require_admin)):

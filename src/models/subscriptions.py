@@ -519,6 +519,24 @@ def update_plan(code: str, **fields):
     return get_plan(code)
 
 
+def delete_plan(code: str) -> bool:
+    init_billing_db()
+    if _use_postgres():
+        engine = _get_pg_engine()
+        with engine.connect() as conn:
+            conn.execute(
+                __import__("sqlalchemy").text("DELETE FROM billing_plans WHERE code = :code"),
+                {"code": code},
+            )
+            conn.commit()
+    else:
+        conn = _get_sqlite_conn()
+        conn.execute("DELETE FROM billing_plans WHERE code = ?", (code,))
+        conn.commit()
+        conn.close()
+    return True
+
+
 def list_subscriptions(limit: int = 100) -> list[dict]:
     init_billing_db()
     query = """
