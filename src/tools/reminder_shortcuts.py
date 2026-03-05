@@ -5,7 +5,7 @@ from src.tools.scheduler_tool import create_scheduler_tools
 
 
 _TIME_PATTERN = re.compile(
-    r"\b(?:daqui|em)\s+(\d{1,4})\s*(?:m|min|mins|minuto|minutos)\b",
+    r"\b(?:daqui|em)\s+(?:a\s+)?(\d{1,4})\s*(?:m|min|mins|minuto|minutos)\b",
     re.IGNORECASE,
 )
 
@@ -17,6 +17,12 @@ _TRIGGER_HINTS = (
     "aviso",
     "toque",
     "alarme",
+    "me manda",
+    "manda um",
+    "me dá um",
+    "alô",
+    "alo",
+    "avise",
 )
 
 

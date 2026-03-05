@@ -352,6 +352,29 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                     await websocket.send_json({"type": "transcript", "text": transcript})
                     await websocket.send_json({"type": "status", "text": "Pensando..."})
 
+                    if not new_session:
+                        try:
+                            from src.tools.reminder_shortcuts import try_schedule_quick_reminder
+                            shortcut_msg = try_schedule_quick_reminder(
+                                user_phone=phone_number,
+                                text=transcript,
+                                notification_channel="web_voice",
+                            )
+                            if shortcut_msg:
+                                await websocket.send_json({
+                                    "type": "response",
+                                    "text": shortcut_msg,
+                                    "audio_b64": "",
+                                    "mime_type": "none",
+                                    "needs_follow_up": False,
+                                })
+                                update_last_seen(phone_number)
+                                latency = int((time.time() - start_time) * 1000)
+                                log_event(user_id=phone_number, channel="web", event_type="message_sent", status="success", latency_ms=latency)
+                                continue
+                        except Exception as e:
+                            print(f"[WEB WS] Falha no atalho de lembrete rapido (audio): {e}")
+
                     prompt = f"O usuario enviou um audio com a seguinte transcricao:\n\n{transcript}"
                     if new_session:
                         prompt = GREETING_INJECTION + "\n\n" + prompt

@@ -19,15 +19,7 @@ class GeminiTTS(BaseTTS):
 
     def __init__(self):
         self.api_key = os.getenv("GOOGLE_API_KEY")
-        self.voice = os.getenv("TTS_VOICE", "Puck")
-        self.style_prompt = os.getenv(
-            "TTS_STYLE_PROMPT",
-            "Speak in Brazilian Portuguese (pt-BR) with a natural Brazilian accent from São Paulo. "
-            "You are Teq, a friendly and upbeat Brazilian assistant. "
-            "Use Brazilian pronunciation: open vowels, no sibilant 's' at end of words, "
-            "pronounce 'de' as 'dji', 'te' as 'tchi', 'r' at start of words as 'h' sound. "
-            "Sound like a native Brazilian speaker, never like European Portuguese."
-        )
+        self.voice = os.getenv("TTS_VOICE", "Aoede")
 
     async def synthesize(self, text: str) -> tuple[bytes, str]:
         import asyncio
@@ -39,12 +31,11 @@ class GeminiTTS(BaseTTS):
 
         def _call():
             return client.models.generate_content(
-                model="gemini-2.5-flash-tts",
-                contents=f"{self.style_prompt}\n\nSay the following:\n{text}",
+                model="gemini-2.5-flash-preview-tts",
+                contents=text,
                 config=types.GenerateContentConfig(
                     response_modalities=["AUDIO"],
                     speech_config=types.SpeechConfig(
-                        language_code="pt-BR",
                         voice_config=types.VoiceConfig(
                             prebuilt_voice_config=types.PrebuiltVoiceConfig(
                                 voice_name=self.voice
@@ -71,135 +62,8 @@ class GeminiTTS(BaseTTS):
                 await asyncio.sleep(wait)
 
 
-class OpenAITTS(BaseTTS):
-    """TTS via OpenAI API (tts-1). Retorna MP3."""
-
-    def __init__(self):
-        self.api_key = os.getenv("OPENAI_API_KEY")
-        self.voice = os.getenv("TTS_VOICE", "onyx")
-
-    async def synthesize(self, text: str) -> tuple[bytes, str]:
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.openai.com/v1/audio/speech",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json={"model": "tts-1", "input": text, "voice": self.voice, "response_format": "mp3"},
-                timeout=30.0,
-            )
-            response.raise_for_status()
-            return response.content, "audio/mpeg"
-
-
-class ElevenLabsTTS(BaseTTS):
-    """TTS via ElevenLabs (eleven_multilingual_v2). Retorna MP3."""
-
-    def __init__(self):
-        self.api_key = os.getenv("ELEVENLABS_API_KEY")
-        self.voice_id = os.getenv("TTS_VOICE", "21m00Tcm4TlvDq8ikWAM")
-
-    async def synthesize(self, text: str) -> tuple[bytes, str]:
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}",
-                headers={"xi-api-key": self.api_key, "Content-Type": "application/json"},
-                json={
-                    "text": text,
-                    "model_id": "eleven_multilingual_v2",
-                    "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
-                },
-                timeout=30.0,
-            )
-            response.raise_for_status()
-            return response.content, "audio/mpeg"
-
-
-class BrowserTTS(BaseTTS):
-    """
-    Sinaliza o frontend para usar a Web Speech API (SpeechSynthesisUtterance).
-    Nenhum áudio é gerado no servidor — zero custo, zero latência de rede para o áudio.
-    """
-
-    async def synthesize(self, text: str) -> tuple[bytes, str]:
-        return b"", "browser"
-
-
-class EdgeTTS(BaseTTS):
-    """
-    TTS via Edge TTS (gratuito e sem chave de API).
-    Retorna MP3.
-    """
-
-    def __init__(self):
-        self.voice = os.getenv("TTS_VOICE", "pt-BR-AntonioNeural")
-
-    async def synthesize(self, text: str) -> tuple[bytes, str]:
-        import edge_tts
-        import io
-
-        communicate = edge_tts.Communicate(text, self.voice)
-        audio_data = io.BytesIO()
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data.write(chunk["data"])
-
-        return audio_data.getvalue(), "audio/mpeg"
-
-
-class CoquiTTS(BaseTTS):
-    """
-    TTS via API do Coqui TTS Server (https://github.com/coqui-ai/TTS) rodando externamente.
-    """
-
-    def __init__(self):
-        self.api_url = os.getenv("COQUI_TTS_URL", "http://localhost:5002/api/tts")
-        # Se você usar XTTSv2, ele espera um parâmetro language_id, então passamos via ENV ou padrão "pt"
-        self.language_id = os.getenv("COQUI_LANGUAGE_ID", "pt-br")
-        # Caminho absoluto para o arquivo de voz clonada dentro do container do Coqui TTS (ex: /app/vozes/minhavoz.wav)
-        # Note que esse arquivo deve existir lá no servidor do Coqui, e não na pasta do agenteteq
-        self.speaker_wav = os.getenv("COQUI_SPEAKER_WAV", None)
-
-    async def synthesize(self, text: str) -> tuple[bytes, str]:
-        import httpx
-        
-        async with httpx.AsyncClient() as client:
-            # O Coqui XTTS ou VITS customizado pode requerer o parametro language_id
-            params = {
-                "text": text,
-                "language_id": "pt-br"
-            }
-            
-            # Se for XTTS, permite clonar qualquer voz passando o caminho de um wav de referência
-            if self.speaker_wav:
-                params["speaker_wav"] = self.speaker_wav
-                
-            response = await client.get(
-                self.api_url,
-                params=params,
-                timeout=60.0
-            )
-            response.raise_for_status()
-            # O Coqui retorna WAV por padrão no seu endpoint de API básico (/api/tts)
-            return response.content, "audio/wav"
-
 def get_tts() -> BaseTTS:
-    provider = os.getenv("TTS_PROVIDER", "edge").lower()
-
-    if provider == "openai":
-        return OpenAITTS()
-    elif provider == "elevenlabs":
-        return ElevenLabsTTS()
-    elif provider == "browser":
-        return BrowserTTS()
-    elif provider == "edge":
-        return EdgeTTS()
-    elif provider == "coqui":
-        return CoquiTTS()
-    else:
-        return GeminiTTS()
+    return GeminiTTS()
 
 
 def _pcm_to_wav(

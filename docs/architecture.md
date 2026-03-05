@@ -280,7 +280,7 @@ Interface desacoplada `BaseTTS` com factory `get_tts()`:
 
 | Provider | Variável | Custo | Observação |
 |---|---|---|---|
-| `gemini` (padrão) | `GOOGLE_API_KEY` | Grátis (tier atual) | `gemini-2.5-flash-tts` (pt-BR), voz `Puck` padrão |
+| `gemini` (padrão) | `GOOGLE_API_KEY` | Grátis (tier atual) | `gemini-2.5-flash-tts` (pt-BR), voz `Aoede` padrão |
 | `openai` | `OPENAI_API_KEY` | ~$15/1M chars | `tts-1`, vozes configuráveis |
 | `elevenlabs` | `ELEVENLABS_API_KEY` | Pago | `eleven_multilingual_v2` |
 | `browser` | — | Grátis | Web Speech API (`SpeechSynthesisUtterance`) no cliente |
