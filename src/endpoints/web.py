@@ -68,6 +68,30 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
 
     await websocket.send_json({"type": "status", "text": "Pensando..."})
 
+    if not new_session:
+        try:
+            from src.tools.reminder_shortcuts import try_schedule_quick_reminder
+
+            shortcut_msg = try_schedule_quick_reminder(
+                user_phone=phone_number,
+                text=user_text,
+                notification_channel="web_voice" if mode != "text" else "whatsapp_text",
+            )
+            if shortcut_msg:
+                await websocket.send_json(
+                    {
+                        "type": "response",
+                        "text": shortcut_msg,
+                        "audio_b64": "",
+                        "mime_type": "none",
+                        "needs_follow_up": False,
+                    }
+                )
+                update_last_seen(phone_number)
+                return
+        except Exception as e:
+            print(f"[WEB WS] Falha no atalho de lembrete rapido: {e}")
+
     notifier = WebSocketNotifier(websocket, loop)
     search_tools = [
         create_web_search_tool(notifier),

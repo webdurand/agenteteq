@@ -343,6 +343,24 @@ async def process_audio_message(from_number: str, message_id: str, raw_msg: dict
 async def process_text_message(from_number: str, message_id: str, raw_msg: dict, agent, injection: str | None = None):
     text_body = raw_msg["text"]["body"]
     print(f"[PROCESS] Texto recebido: {text_body[:50]}...")
+
+    # Atalho deterministico para pedidos diretos de lembrete rapido (ex: "me avisa daqui 5 min").
+    # Evita falso-positivo de "confirmei mas nao agendou" quando o LLM responde sem chamar tool.
+    if not injection:
+        try:
+            from src.tools.reminder_shortcuts import try_schedule_quick_reminder
+
+            shortcut_msg = try_schedule_quick_reminder(
+                user_phone=from_number,
+                text=text_body,
+                notification_channel="whatsapp_text",
+            )
+            if shortcut_msg:
+                if from_number not in ["16315551181", "16505551111"]:
+                    await whatsapp_client.send_text_message(from_number, shortcut_msg, reply_to_message_id=message_id)
+                return
+        except Exception as e:
+            print(f"[SHORTCUT] Falha no atalho de lembrete rapido: {e}")
     
     # Always-on memory injection
     memory_mode = os.getenv("MEMORY_MODE", "agentic").lower()

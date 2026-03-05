@@ -183,6 +183,19 @@ Envia resposta via notification_channel (whatsapp_text)
 O SQLite local como job store do APScheduler sofria perda de dados durante redeploys em containers efêmeros (como na Koyeb). O sistema foi migrado para PostgreSQL.
 A tabela `reminders` atua como fonte de verdade: no startup da aplicação (`start_scheduler()`), a função `reconcile_reminders()` garante que todo lembrete `active` possua um job no motor em background, recriando-o caso tenha sido perdido num restart. Além disso, o sistema resolve nativamente os fusos horários baseando-se na configuração de `timezone` (ex: `America/Sao_Paulo`) do usuário.
 
+### Atalho Determinístico para "me avisa daqui X min"
+
+Para reduzir falhas de execução de tool em frases curtas de lembrete, existe um atalho antes do `agent.run()`:
+
+- Arquivo: `src/tools/reminder_shortcuts.py`
+- Entradas alvo: mensagens com intenção explícita de lembrete + tempo relativo em minutos (ex: "me avisa daqui 5 min")
+- Comportamento: agenda diretamente via `schedule_message(...)` com `trigger_type="date"` e `minutes_from_now`, persistindo em `reminders` e emitindo `reminder_updated`
+- Canais:
+  - WhatsApp (`src/endpoints/whatsapp.py`): agenda com `notification_channel="whatsapp_text"`
+  - WebSocket (`src/endpoints/web.py`): agenda com `web_voice` (modo voz) ou `whatsapp_text` (modo texto)
+
+Esse fallback mantém DRY porque reaproveita o mesmo motor (`scheduler_tool`) e atua apenas como roteamento determinístico de intenção, sem duplicar lógica de agendamento.
+
 ## Detecção de Nova Sessão com Escolha do Usuário
 
 Adicionada coluna `last_seen_at` na tabela `users`. Funções em `src/memory/identity.py`:
