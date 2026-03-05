@@ -15,6 +15,7 @@ from src.memory.extractor import extract_and_save_facts
 from src.tools.memory_manager import add_memory
 from src.tools.web_search import create_web_search_tool, create_fetch_page_tool
 from src.tools.deep_research import create_deep_research_tool
+from src.memory.analytics import log_event, log_agent_tools
 
 router = APIRouter()
 
@@ -310,6 +311,8 @@ async def orchestrate_message(event: dict):
             print(f"[ERROR] Falha ao enviar erro para WhatsApp: {e2}")
 
 async def process_audio_message(from_number: str, message_id: str, raw_msg: dict, agent, injection: str | None = None):
+    start_time = time.time()
+    log_event(user_id=from_number, channel="whatsapp", event_type="message_received", status="success")
     audio_id = raw_msg["audio"]["id"]
     print(f"[PROCESS] Baixando audio...")
     media_url = await whatsapp_client.get_media_url(audio_id)
@@ -334,13 +337,18 @@ async def process_audio_message(from_number: str, message_id: str, raw_msg: dict
         if injection:
             prompt = injection + "\n\n" + prompt
         response = agent.run(prompt, knowledge_filters={"user_id": from_number})
+        log_agent_tools(from_number, "whatsapp", agent)
         asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, transcription, response.content))
     
     if from_number not in ["16315551181", "16505551111"]:
         print(f"[OUT] Enviando resposta para {from_number}")
         await whatsapp_client.send_text_message(from_number, response.content, reply_to_message_id=message_id)
+        latency = int((time.time() - start_time) * 1000)
+        log_event(user_id=from_number, channel="whatsapp", event_type="message_sent", status="success", latency_ms=latency)
 
 async def process_text_message(from_number: str, message_id: str, raw_msg: dict, agent, injection: str | None = None):
+    start_time = time.time()
+    log_event(user_id=from_number, channel="whatsapp", event_type="message_received", status="success")
     text_body = raw_msg["text"]["body"]
     print(f"[PROCESS] Texto recebido: {text_body[:50]}...")
 
@@ -358,6 +366,8 @@ async def process_text_message(from_number: str, message_id: str, raw_msg: dict,
             if shortcut_msg:
                 if from_number not in ["16315551181", "16505551111"]:
                     await whatsapp_client.send_text_message(from_number, shortcut_msg, reply_to_message_id=message_id)
+                    latency = int((time.time() - start_time) * 1000)
+                    log_event(user_id=from_number, channel="whatsapp", event_type="message_sent", status="success", latency_ms=latency)
                 return
         except Exception as e:
             print(f"[SHORTCUT] Falha no atalho de lembrete rapido: {e}")
@@ -380,8 +390,11 @@ async def process_text_message(from_number: str, message_id: str, raw_msg: dict,
         text_body = injection + "\n\n" + text_body
     
     response = agent.run(text_body, knowledge_filters={"user_id": from_number})
+    log_agent_tools(from_number, "whatsapp", agent)
     asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, text_body, response.content))
     
     if from_number not in ["16315551181", "16505551111"]:
         print(f"[OUT] Enviando resposta para {from_number}")
         await whatsapp_client.send_text_message(from_number, response.content, reply_to_message_id=message_id)
+        latency = int((time.time() - start_time) * 1000)
+        log_event(user_id=from_number, channel="whatsapp", event_type="message_sent", status="success", latency_ms=latency)

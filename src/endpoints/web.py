@@ -13,6 +13,8 @@ from src.tools.memory_manager import add_memory
 from src.tools.web_search import create_web_search_tool, create_fetch_page_tool
 from src.tools.deep_research import create_deep_research_tool
 from src.auth.jwt import decode_token
+from src.memory.analytics import log_event, log_agent_tools
+import time
 
 router = APIRouter()
 
@@ -63,6 +65,8 @@ class WebSocketNotifier:
 
 
 async def _process_text(websocket, phone_number: str, user_text: str, tts, user: dict, mode: str = "voice"):
+    start_time = time.time()
+    log_event(user_id=phone_number, channel="web", event_type="message_received", status="success")
     new_session = is_new_session(user, threshold_hours=4)
     loop = asyncio.get_event_loop()
 
@@ -120,6 +124,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     response = await asyncio.to_thread(
         agent.run, prompt, knowledge_filters={"user_id": phone_number}
     )
+    log_agent_tools(phone_number, "web", agent)
 
     await asyncio.sleep(0)
 
@@ -155,6 +160,8 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
         "mime_type": mime_type,
         "needs_follow_up": follow_up,
     })
+    latency = int((time.time() - start_time) * 1000)
+    log_event(user_id=phone_number, channel="web", event_type="message_sent", status="success", latency_ms=latency)
 
 
 async def _cancel_task(task: asyncio.Task | None) -> None:
@@ -298,6 +305,8 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
             print(f"[WEB WS] Audio recebido: {len(audio_bytes)} bytes de {phone_number}")
 
             try:
+                start_time = time.time()
+                log_event(user_id=phone_number, channel="web", event_type="message_received", status="success")
                 # Refresh user p/ pegar is_new_session fresquinho
                 current_user = get_user(phone_number)
                 new_session = is_new_session(current_user, threshold_hours=4)
@@ -332,6 +341,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                         audio=[Audio(content=audio_bytes, format="webm")],
                         knowledge_filters={"user_id": phone_number},
                     )
+                    log_agent_tools(phone_number, "web", agent)
                     asyncio.create_task(asyncio.to_thread(
                         extract_and_save_facts, phone_number, "Áudio do usuário", response.content
                     ))
@@ -351,6 +361,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                         prompt,
                         knowledge_filters={"user_id": phone_number},
                     )
+                    log_agent_tools(phone_number, "web", agent)
                     asyncio.create_task(asyncio.to_thread(
                         extract_and_save_facts, phone_number, transcript, response.content
                     ))
@@ -381,6 +392,8 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                     "needs_follow_up": follow_up,
                 })
                 print(f"[WEB WS] Resposta enviada ao cliente: {phone_number}")
+                latency = int((time.time() - start_time) * 1000)
+                log_event(user_id=phone_number, channel="web", event_type="message_sent", status="success", latency_ms=latency)
 
             except Exception as e:
                 import traceback

@@ -92,7 +92,7 @@ async def verify_whatsapp(req: VerifyRequest):
     
     # Atualiza dados para adicionar ao JWT
     user = get_user(req.phone)
-    token = create_token(user["phone_number"], user["username"], user["email"])
+    token = create_token(user["phone_number"], user["username"], user["email"], user.get("role", "user"))
     
     return {
         "message": "WhatsApp verificado com sucesso",
@@ -139,7 +139,7 @@ async def verify_2fa(req: VerifyRequest):
             set_whatsapp_verified(req.phone)
             user = get_user(req.phone)
             
-    token = create_token(user["phone_number"], user["username"], user["email"])
+    token = create_token(user["phone_number"], user["username"], user["email"], user.get("role", "user"))
     return {
         "message": "Login bem sucedido",
         "token": token
@@ -167,7 +167,7 @@ async def google_auth(req: GoogleAuthRequest):
                 "phone": user["phone_number"]
             }
             
-        token = create_token(user["phone_number"], user["username"], user["email"])
+        token = create_token(user["phone_number"], user["username"], user["email"], user.get("role", "user"))
         return {
             "needs_registration": False,
             "needs_verification": False,
@@ -226,6 +226,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         "email": current_user.get("email"),
         "whatsapp_verified": current_user.get("whatsapp_verified"),
         "plan_type": current_user.get("plan_type"),
-        "plan_active": is_plan_active(current_user)
+        "plan_active": is_plan_active(current_user),
+        "role": current_user.get("role", "user")
     }
     return safe_user

@@ -12,6 +12,7 @@ from src.endpoints.whatsapp import router as whatsapp_router
 from src.endpoints.web import router as web_router
 from src.auth.routes import router as auth_router
 from src.endpoints.api import router as api_router
+from src.endpoints.admin import router as admin_router
 from src.scheduler.engine import start_scheduler, shutdown_scheduler
 from src.events import set_main_loop
 
@@ -43,6 +44,7 @@ app.include_router(whatsapp_router)
 app.include_router(web_router)
 app.include_router(auth_router)
 app.include_router(api_router)
+app.include_router(admin_router)
 
 
 @app.get("/")

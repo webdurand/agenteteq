@@ -55,7 +55,8 @@ def _init_pg():
                 plan_type TEXT DEFAULT 'trial',
                 trial_started_at TIMESTAMPTZ,
                 trial_ends_at TIMESTAMPTZ,
-                timezone TEXT DEFAULT 'America/Sao_Paulo'
+                timezone TEXT DEFAULT 'America/Sao_Paulo',
+                role TEXT DEFAULT 'user'
             )
         """))
         # Adiciona colunas se ja existir a tabela sem ela (migracao segura)
@@ -71,7 +72,8 @@ def _init_pg():
             "plan_type TEXT DEFAULT 'trial'",
             "trial_started_at TIMESTAMPTZ",
             "trial_ends_at TIMESTAMPTZ",
-            "timezone TEXT DEFAULT 'America/Sao_Paulo'"
+            "timezone TEXT DEFAULT 'America/Sao_Paulo'",
+            "role TEXT DEFAULT 'user'"
         ]:
             try:
                 conn.execute(__import__("sqlalchemy").text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col}"))
@@ -103,7 +105,8 @@ def _init_sqlite():
             plan_type TEXT DEFAULT 'trial',
             trial_started_at TEXT,
             trial_ends_at TEXT,
-            timezone TEXT DEFAULT 'America/Sao_Paulo'
+            timezone TEXT DEFAULT 'America/Sao_Paulo',
+            role TEXT DEFAULT 'user'
         )
     """)
     # Adiciona colunas se ja existir a tabela sem ela (migracao segura)
@@ -119,7 +122,8 @@ def _init_sqlite():
         "plan_type TEXT DEFAULT 'trial'",
         "trial_started_at TEXT",
         "trial_ends_at TEXT",
-        "timezone TEXT DEFAULT 'America/Sao_Paulo'"
+        "timezone TEXT DEFAULT 'America/Sao_Paulo'",
+        "role TEXT DEFAULT 'user'"
     ]:
         try:
             conn.execute(f"ALTER TABLE users ADD COLUMN {col}")
@@ -158,6 +162,7 @@ def _row_to_dict(row) -> dict:
         "trial_started_at": row[12],
         "trial_ends_at": row[13],
         "timezone": row[14] if len(row) > 14 else "America/Sao_Paulo",
+        "role": row[15] if len(row) > 15 else "user",
     }
 
 
@@ -169,7 +174,7 @@ def get_user(phone_number: str) -> Optional[dict]:
             engine = _get_pg_engine()
             with engine.connect() as conn:
                 row = conn.execute(
-                    text("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone
+                    text("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role
                             FROM users WHERE phone_number = :p"""),
                     {"p": phone_number}
                 ).fetchone()
@@ -177,7 +182,7 @@ def get_user(phone_number: str) -> Optional[dict]:
         else:
             conn = _get_sqlite_conn()
             c = conn.cursor()
-            c.execute("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone
+            c.execute("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role
                          FROM users WHERE phone_number = ?""", (phone_number,))
             row = c.fetchone()
             conn.close()
@@ -195,7 +200,7 @@ def get_user_by_email(email: str) -> Optional[dict]:
             engine = _get_pg_engine()
             with engine.connect() as conn:
                 row = conn.execute(
-                    text("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone
+                    text("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role
                             FROM users WHERE email = :e"""),
                     {"e": email}
                 ).fetchone()
@@ -203,7 +208,7 @@ def get_user_by_email(email: str) -> Optional[dict]:
         else:
             conn = _get_sqlite_conn()
             c = conn.cursor()
-            c.execute("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone
+            c.execute("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role
                          FROM users WHERE email = ?""", (email,))
             row = c.fetchone()
             conn.close()
@@ -221,7 +226,7 @@ def get_user_by_username(username: str) -> Optional[dict]:
             engine = _get_pg_engine()
             with engine.connect() as conn:
                 row = conn.execute(
-                    text("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone
+                    text("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role
                             FROM users WHERE username = :u"""),
                     {"u": username}
                 ).fetchone()
@@ -229,7 +234,7 @@ def get_user_by_username(username: str) -> Optional[dict]:
         else:
             conn = _get_sqlite_conn()
             c = conn.cursor()
-            c.execute("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone
+            c.execute("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role
                          FROM users WHERE username = ?""", (username,))
             row = c.fetchone()
             conn.close()
@@ -260,7 +265,7 @@ def create_user(phone_number: str):
         print(f"[IDENTITY] Erro ao criar usuario {phone_number}: {e}")
 
 
-def create_user_full(phone_number: str, username: str, name: str, email: str, birth_date: str, password_hash: str, google_id: str = None, auth_provider: str = 'local'):
+def create_user_full(phone_number: str, username: str, name: str, email: str, birth_date: str, password_hash: str, google_id: str = None, auth_provider: str = 'local', role: str = 'user'):
     init_db()
     now_iso = datetime.now(timezone.utc).isoformat()
     trial_ends = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
@@ -272,27 +277,48 @@ def create_user_full(phone_number: str, username: str, name: str, email: str, bi
             with engine.connect() as conn:
                 conn.execute(
                     text("""INSERT INTO users 
-                            (phone_number, username, name, email, birth_date, password_hash, google_id, auth_provider, onboarding_step, plan_type, trial_started_at, trial_ends_at, whatsapp_verified) 
-                            VALUES (:p, :u, :n, :e, :b, :pw, :gid, :ap, 'completed', 'trial', :t_start, :t_end, FALSE) 
+                            (phone_number, username, name, email, birth_date, password_hash, google_id, auth_provider, onboarding_step, plan_type, trial_started_at, trial_ends_at, whatsapp_verified, role) 
+                            VALUES (:p, :u, :n, :e, :b, :pw, :gid, :ap, 'completed', 'trial', :t_start, :t_end, FALSE, :role) 
                             ON CONFLICT (phone_number) DO NOTHING"""),
                     {
                         "p": phone_number, "u": username, "n": name, "e": email, 
                         "b": birth_date, "pw": password_hash, "gid": google_id, "ap": auth_provider,
-                        "t_start": now_iso, "t_end": trial_ends
+                        "t_start": now_iso, "t_end": trial_ends, "role": role
                     }
                 )
                 conn.commit()
         else:
             conn = _get_sqlite_conn()
             conn.execute("""INSERT OR IGNORE INTO users 
-                            (phone_number, username, name, email, birth_date, password_hash, google_id, auth_provider, onboarding_step, plan_type, trial_started_at, trial_ends_at, whatsapp_verified) 
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'trial', ?, ?, 0)""",
-                         (phone_number, username, name, email, birth_date, password_hash, google_id, auth_provider, now_iso, trial_ends))
+                            (phone_number, username, name, email, birth_date, password_hash, google_id, auth_provider, onboarding_step, plan_type, trial_started_at, trial_ends_at, whatsapp_verified, role) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'trial', ?, ?, 0, ?)""",
+                         (phone_number, username, name, email, birth_date, password_hash, google_id, auth_provider, now_iso, trial_ends, role))
             conn.commit()
             conn.close()
     except Exception as e:
         print(f"[IDENTITY] Erro ao criar usuario completo {phone_number}: {e}")
         raise e
+
+
+def promote_user_to_admin(phone_number: str):
+    init_db()
+    try:
+        if _use_postgres():
+            from sqlalchemy import text
+            engine = _get_pg_engine()
+            with engine.connect() as conn:
+                conn.execute(
+                    text("UPDATE users SET role = 'admin' WHERE phone_number = :p"),
+                    {"p": phone_number}
+                )
+                conn.commit()
+        else:
+            conn = _get_sqlite_conn()
+            conn.execute("UPDATE users SET role = 'admin' WHERE phone_number = ?", (phone_number,))
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        print(f"[IDENTITY] Erro ao promover {phone_number} para admin: {e}")
 
 
 def set_whatsapp_verified(phone_number: str):

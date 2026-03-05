@@ -360,4 +360,32 @@ A arquitetura prepara o terreno para cobrança:
 - Tabela `users` possui `trial_started_at` e `trial_ends_at` (padrão de 7 dias).
 - Acesso à interface web de voz e aos webhooks é bloqueado se o trial expirar (validação via `is_plan_active()`).
 
+## Painel Admin e Observabilidade
+
+O sistema conta com um Painel Administrativo integrado ao frontend principal (`agenteteq-front`) e protegido por RBAC (Role-Based Access Control) no backend, visando monitorar métricas de negócio e a saúde do sistema.
+
+### RBAC e Controle de Acesso
+- O modelo de usuário (`users`) possui um campo `role` (ex: `user` ou `admin`).
+- O token JWT e o endpoint `/auth/me` incluem a informação de role.
+- Endpoints administrativos são protegidos pela dependência FastAPI `require_admin` em `src/auth/deps.py`.
+- O primeiro usuário administrador é configurado manualmente ou "promovido" diretamente no banco, não existindo (por segurança) um endpoint público para virar admin de forma irrestrita.
+
+### Auditoria e Uso (Analytics)
+- Uma tabela `usage_events` registra eventos operacionais importantes (ex: `message_received`, `message_sent`, `tool_called`, `tool_failed`).
+- Estes eventos permitem rastrear latência, volume de chamadas por canal e quais tools são mais utilizadas ou geram mais erros.
+- Os pontos de entrada (`whatsapp.py`, `web.py` e o orquestrador do `assistant.py`) são instrumentados para gravar de forma assíncrona estes eventos.
+
+### Endpoints Admin (`src/endpoints/admin.py`)
+- `/admin/business/summary`: KPIs de negócio (total usuários, mensagens, etc).
+- `/admin/business/users`: Lista de usuários.
+- `/admin/business/messages`: Estatísticas de mensagens por usuário.
+- `/admin/business/tools`: Métricas de uso de ferramentas.
+- `/admin/health/summary`: Checks de saúde do banco, scheduler e integrações.
+- `/admin/admins`: Gestão básica de administradores.
+
+### Dashboard Frontend
+- **Negócio**: Exibe métricas como novos cadastros, taxa de verificação, usuários ativos, volume de uso e ferramentas mais acionadas.
+- **Saúde**: Foca na disponibilidade dos serviços (DB, PgVector, WhatsApp, TTS) e relata os últimos erros ou latência média do agente.
+- **Admins**: Interface de CRUD para definir papéis na plataforma.
+
 *(Este arquivo deve ser atualizado sempre que novas ferramentas, rotas ou fluxos forem adicionados)*

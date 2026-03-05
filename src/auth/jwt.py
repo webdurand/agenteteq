@@ -6,7 +6,7 @@ from typing import Optional
 JWT_SECRET = os.getenv("JWT_SECRET", "default_secret_for_development_only")
 ALGORITHM = "HS256"
 
-def create_token(phone_number: str, username: str, email: str) -> str:
+def create_token(phone_number: str, username: str, email: str, role: str = "user") -> str:
     """
     Cria um JWT com validade de 30 dias.
     O 'sub' (subject) e o phone_number, para manter compatibilidade com
@@ -19,6 +19,7 @@ def create_token(phone_number: str, username: str, email: str) -> str:
         "sub": phone_number,
         "username": username,
         "email": email,
+        "role": role,
         "iat": now,
         "exp": expire
     }
