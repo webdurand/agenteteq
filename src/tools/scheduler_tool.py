@@ -156,6 +156,9 @@ def create_scheduler_tools(user_phone: str):
             if job:
                 update_apscheduler_job_id(reminder_id, job.id)
                 
+            from src.events import emit_event_sync
+            emit_event_sync(user_phone, "reminder_updated")
+                
             return msg
 
         except Exception as e:
@@ -247,6 +250,8 @@ def create_scheduler_tools(user_phone: str):
                     print(f"[SCHEDULER] Aviso ao remover job do APScheduler: {e}")
             
             cancel_reminder(reminder_id)
+            from src.events import emit_event_sync
+            emit_event_sync(user_phone, "reminder_updated")
             return f"Agendamento {job_id} cancelado com sucesso."
 
         except ValueError:

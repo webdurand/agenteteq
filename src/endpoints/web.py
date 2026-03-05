@@ -62,7 +62,7 @@ class WebSocketNotifier:
             print(f"[WS NOTIFIER] Falha ao enviar status '{message[:40]}': {e}")
 
 
-async def _process_text(websocket, phone_number: str, user_text: str, tts, user: dict):
+async def _process_text(websocket, phone_number: str, user_text: str, tts, user: dict, mode: str = "voice"):
     new_session = is_new_session(user, threshold_hours=4)
     loop = asyncio.get_event_loop()
 
@@ -106,17 +106,18 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     update_last_seen(phone_number)
     print(f"[WEB WS] Resposta ({len(response.content)} chars): {response.content[:80]}...")
 
-    await websocket.send_json({"type": "status", "text": "Gerando áudio..."})
-
     audio_b64 = ""
-    mime_type = "audio/wav"
-    try:
-        audio_out, mime_type = await tts.synthesize(response.content)
-        print(f"[WEB WS] TTS: {len(audio_out)} bytes | {mime_type}")
-        audio_b64 = base64.b64encode(audio_out).decode() if audio_out else ""
-    except Exception as e:
-        print(f"[WEB WS] TTS falhou, enviando só texto: {e}")
-        mime_type = "browser"
+    mime_type = "none"
+
+    if mode != "text":
+        await websocket.send_json({"type": "status", "text": "Gerando áudio..."})
+        try:
+            audio_out, mime_type = await tts.synthesize(response.content)
+            print(f"[WEB WS] TTS: {len(audio_out)} bytes | {mime_type}")
+            audio_b64 = base64.b64encode(audio_out).decode() if audio_out else ""
+        except Exception as e:
+            print(f"[WEB WS] TTS falhou, enviando só texto: {e}")
+            mime_type = "browser"
 
     await asyncio.sleep(0)
 
@@ -211,9 +212,9 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
     ws_manager.connect(websocket, phone_number)
     print(f"[WEB WS] Cliente conectado: {phone_number}")
 
-    async def run_text(user_text: str) -> None:
+    async def run_text(user_text: str, mode: str = "voice") -> None:
         try:
-            await _process_text(websocket, phone_number, user_text, tts, user)
+            await _process_text(websocket, phone_number, user_text, tts, user, mode)
         except asyncio.CancelledError:
             print(f"[WEB WS] Processamento cancelado: \"{user_text[:60]}\"")
         except Exception as e:
@@ -241,6 +242,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
             if text_frame:
                 msg = json.loads(text_frame)
                 msg_type = msg.get("type")
+                mode = msg.get("mode", "voice")
                 print(f"[WEB WS] Mensagem texto | tipo={msg_type} | conteudo={str(msg)[:80]}")
 
                 if msg_type == "cancel":
@@ -260,7 +262,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                         continue
                     print(f"[WEB WS] Texto do usuario: \"{user_text[:80]}\"")
                     await _cancel_task(current_task)
-                    current_task = asyncio.create_task(run_text(user_text))
+                    current_task = asyncio.create_task(run_text(user_text, mode))
                     continue
 
                 continue

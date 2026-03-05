@@ -66,6 +66,9 @@ def create_blog_tools(session_id: str):
         
         # 4. Fazer a requisição para o GitHub
         try:
+            from src.events import emit_event_sync
+            emit_event_sync(session_id, "blog_preview", {"title": title, "content": content})
+            
             response = httpx.put(api_url, headers=headers, json=payload, timeout=20.0)
             
             if response.status_code in (201, 200):

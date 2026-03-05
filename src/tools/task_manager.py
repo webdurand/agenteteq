@@ -138,6 +138,8 @@ def add_task(
             conn.commit()
             conn.close()
         print(f"[TASKS] Tarefa #{task_id} adicionada com sucesso: '{title}'")
+        from src.events import emit_event_sync
+        emit_event_sync(user_id, "task_updated")
         return f"Tarefa #{task_id} adicionada com sucesso: '{title}'."
     except Exception as e:
         print(f"[TASKS] Erro ao adicionar tarefa: {e}")
@@ -214,6 +216,59 @@ def list_tasks(user_id: str, status: str = "pending") -> str:
         return f"Erro ao listar tarefas: {e}"
 
 
+def get_tasks(user_id: str, status: str = "pending") -> list[dict]:
+    """
+    Lista as tarefas do usuário retornando uma lista de dicionários.
+    """
+    _init_db()
+    try:
+        if _use_postgres():
+            from sqlalchemy import text
+            engine = _get_pg_engine()
+            with engine.connect() as conn:
+                if status == "all":
+                    rows = conn.execute(
+                        text("SELECT id, title, description, due_date, location, notes, status, created_at FROM tasks WHERE user_id = :u ORDER BY created_at ASC"),
+                        {"u": user_id}
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        text("SELECT id, title, description, due_date, location, notes, status, created_at FROM tasks WHERE user_id = :u AND status = :s ORDER BY created_at ASC"),
+                        {"u": user_id, "s": status}
+                    ).fetchall()
+        else:
+            conn = _get_sqlite_conn()
+            c = conn.cursor()
+            if status == "all":
+                c.execute(
+                    "SELECT id, title, description, due_date, location, notes, status, created_at FROM tasks WHERE user_id = ? ORDER BY created_at ASC",
+                    (user_id,)
+                )
+            else:
+                c.execute(
+                    "SELECT id, title, description, due_date, location, notes, status, created_at FROM tasks WHERE user_id = ? AND status = ? ORDER BY created_at ASC",
+                    (user_id, status)
+                )
+            rows = c.fetchall()
+            conn.close()
+
+        tasks = []
+        for row in rows:
+            tasks.append({
+                "id": row[0],
+                "title": row[1],
+                "description": row[2],
+                "due_date": row[3],
+                "location": row[4],
+                "notes": row[5],
+                "status": row[6],
+                "created_at": row[7],
+            })
+        return tasks
+    except Exception as e:
+        print(f"[TASKS] Erro ao obter tarefas: {e}")
+        return []
+
 def complete_task(user_id: str, task_id: int) -> str:
     """
     Marca uma tarefa como concluída.
@@ -251,6 +306,8 @@ def complete_task(user_id: str, task_id: int) -> str:
 
         if affected == 0:
             return f"Tarefa #{task_id} não encontrada."
+        from src.events import emit_event_sync
+        emit_event_sync(user_id, "task_updated")
         return f"Tarefa #{task_id} marcada como concluída!"
     except Exception as e:
         print(f"[TASKS] Erro ao concluir tarefa: {e}")
@@ -294,6 +351,8 @@ def reopen_task(user_id: str, task_id: int) -> str:
 
         if affected == 0:
             return f"Tarefa #{task_id} não encontrada."
+        from src.events import emit_event_sync
+        emit_event_sync(user_id, "task_updated")
         return f"Tarefa #{task_id} marcada como pendente!"
     except Exception as e:
         print(f"[TASKS] Erro ao reabrir tarefa: {e}")
@@ -337,6 +396,8 @@ def delete_task(user_id: str, task_id: int) -> str:
 
         if affected == 0:
             return f"Tarefa #{task_id} não encontrada."
+        from src.events import emit_event_sync
+        emit_event_sync(user_id, "task_updated")
         return f"Tarefa #{task_id} removida com sucesso."
     except Exception as e:
         print(f"[TASKS] Erro ao remover tarefa: {e}")

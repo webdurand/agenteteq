@@ -217,32 +217,37 @@ As preferências são controladas pelo usuário via conversa e armazenadas na me
 - "tira as notícias do cumprimento" → agente usa `list_memories` + `delete_memory` → saudações voltam ao padrão
 - O Agno (`search_knowledge=True`) encontra essas preferências automaticamente antes de cada saudação
 
-## Interface Web de Voz (`agenteteq-front`)
+## Dashboard Web e Real-time (`agenteteq-front`)
 
-Aplicação React separada que permite interação com o Teq via microfone, com resposta em áudio — estilo Jarvis.
+A aplicação React separada evoluiu de uma simples interface de voz para um **Dashboard Completo**, permitindo interação multimodal (voz e texto), gerenciamento de tarefas/lembretes via interface e visualização de ações do agente em tempo real.
 
 ### Repositório
 
-`agenteteq-front/` (Vite + React + TypeScript + Tailwind CSS)
+`agenteteq-front/` (Vite + React + TypeScript + Tailwind CSS com design Glassmorphism)
 
-### Fluxo
+### Fluxos e Comunicação
 
-```
-Browser (React)
-  │
-  ├── Microfone → MediaRecorder (.webm/opus)
-  │     ↓ (VAD: silêncio de 1.5s dispara envio automático)
-  │   WebSocket /ws/voice/{phone_number}
-  │     ↓
-  │   Backend:
-  │     ├── STT: Gemini multimodal (LLM_PROVIDER=gemini) ou Whisper
-  │     ├── Agent Teq (mesmas ferramentas e memória do WhatsApp)
-  │     └── TTS: src/integrations/tts.py → áudio WAV/MP3
-  │     ↓
-  │   WebSocket → { type, transcript, text, audio_b64, mime_type }
-  │     ↓
-  └── Reproduz áudio + exibe texto
-```
+O Dashboard combina CRUD direto via REST e atualizações real-time via WebSocket:
+
+1. **REST API (`/api/tasks`, `/api/reminders`)**: 
+   - Ações manuais na interface (como "adicionar tarefa" ou "concluir lembrete") disparam chamadas HTTP diretamente para o banco, sem passar pelo Agente.
+2. **WebSocket de Interação (`/ws/voice`)**:
+   - Áudio (WebM/Opus) é enviado para transcrição e processamento.
+   - Mensagens de texto (`mode="text"`) ignoram a geração de áudio (TTS) para um chat silencioso.
+3. **Event Bus (`src/events.py`)**:
+   - Quando o Agente modifica o estado (ex: agenda um aviso) ou o usuário altera via REST, um evento real-time (ex: `task_updated`, `reminder_updated`, `blog_preview`) é emitido.
+   - O `ws_manager` propaga esse evento para o frontend conectado.
+   - Os hooks do React (`useTasks`, `useReminders`) escutam os eventos e re-buscam os dados no backend para manter a UI sempre atualizada, criando uma sensação mágica de "co-piloto invisível" operando o sistema.
+
+### Componentes Principais
+
+| Arquivo | Responsabilidade |
+|---|---|
+| `components/Dashboard.tsx` | Layout principal com Orb, Sidebar (Tarefas/Lembretes) e ChatPanel. |
+| `hooks/useWebSocket.ts` | Conexão compartilhada e barramento de eventos no frontend. |
+| `hooks/useVoiceChat.ts` | Captura de microfone (VAD) + integração WebSocket + playback de áudio. |
+| `components/TasksPanel.tsx` | Lista interativa de tarefas integrando REST + WS. |
+| `components/BlogPreviewModal.tsx` | Recebe evento `blog_preview` e mostra o rascunho do post antes da publicação. |
 
 ### Identificação
 
