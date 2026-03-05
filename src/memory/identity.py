@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 # ---------------------------------------------------------------------------
@@ -44,13 +44,39 @@ def _init_pg():
                 phone_number TEXT PRIMARY KEY,
                 name TEXT,
                 onboarding_step TEXT DEFAULT 'pending',
-                last_seen_at TIMESTAMPTZ
+                last_seen_at TIMESTAMPTZ,
+                username TEXT UNIQUE,
+                email TEXT UNIQUE,
+                birth_date TEXT,
+                password_hash TEXT,
+                whatsapp_verified BOOLEAN DEFAULT FALSE,
+                google_id TEXT,
+                auth_provider TEXT DEFAULT 'local',
+                plan_type TEXT DEFAULT 'trial',
+                trial_started_at TIMESTAMPTZ,
+                trial_ends_at TIMESTAMPTZ,
+                timezone TEXT DEFAULT 'America/Sao_Paulo'
             )
         """))
-        # Adiciona coluna se ja existir a tabela sem ela (migracao segura)
-        conn.execute(__import__("sqlalchemy").text("""
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ
-        """))
+        # Adiciona colunas se ja existir a tabela sem ela (migracao segura)
+        for col in [
+            "last_seen_at TIMESTAMPTZ",
+            "username TEXT UNIQUE",
+            "email TEXT UNIQUE",
+            "birth_date TEXT",
+            "password_hash TEXT",
+            "whatsapp_verified BOOLEAN DEFAULT FALSE",
+            "google_id TEXT",
+            "auth_provider TEXT DEFAULT 'local'",
+            "plan_type TEXT DEFAULT 'trial'",
+            "trial_started_at TIMESTAMPTZ",
+            "trial_ends_at TIMESTAMPTZ",
+            "timezone TEXT DEFAULT 'America/Sao_Paulo'"
+        ]:
+            try:
+                conn.execute(__import__("sqlalchemy").text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col}"))
+            except Exception:
+                pass
         conn.commit()
 
 
@@ -66,14 +92,39 @@ def _init_sqlite():
             phone_number TEXT PRIMARY KEY,
             name TEXT,
             onboarding_step TEXT DEFAULT 'pending',
-            last_seen_at TEXT
+            last_seen_at TEXT,
+            username TEXT,
+            email TEXT,
+            birth_date TEXT,
+            password_hash TEXT,
+            whatsapp_verified BOOLEAN DEFAULT 0,
+            google_id TEXT,
+            auth_provider TEXT DEFAULT 'local',
+            plan_type TEXT DEFAULT 'trial',
+            trial_started_at TEXT,
+            trial_ends_at TEXT,
+            timezone TEXT DEFAULT 'America/Sao_Paulo'
         )
     """)
-    # Adiciona coluna se ja existir a tabela sem ela (migracao segura)
-    try:
-        conn.execute("ALTER TABLE users ADD COLUMN last_seen_at TEXT")
-    except Exception:
-        pass
+    # Adiciona colunas se ja existir a tabela sem ela (migracao segura)
+    for col in [
+        "last_seen_at TEXT",
+        "username TEXT",
+        "email TEXT",
+        "birth_date TEXT",
+        "password_hash TEXT",
+        "whatsapp_verified BOOLEAN DEFAULT 0",
+        "google_id TEXT",
+        "auth_provider TEXT DEFAULT 'local'",
+        "plan_type TEXT DEFAULT 'trial'",
+        "trial_started_at TEXT",
+        "trial_ends_at TEXT",
+        "timezone TEXT DEFAULT 'America/Sao_Paulo'"
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {col}")
+        except Exception:
+            pass
     conn.commit()
     conn.close()
 
@@ -88,6 +139,28 @@ def init_db():
         print(f"[IDENTITY] Erro ao inicializar banco: {e}")
 
 
+def _row_to_dict(row) -> dict:
+    if not row:
+        return None
+    return {
+        "phone_number": row[0],
+        "name": row[1],
+        "onboarding_step": row[2],
+        "last_seen_at": row[3],
+        "username": row[4],
+        "email": row[5],
+        "birth_date": row[6],
+        "password_hash": row[7],
+        "whatsapp_verified": bool(row[8]),
+        "google_id": row[9],
+        "auth_provider": row[10],
+        "plan_type": row[11],
+        "trial_started_at": row[12],
+        "trial_ends_at": row[13],
+        "timezone": row[14] if len(row) > 14 else "America/Sao_Paulo",
+    }
+
+
 def get_user(phone_number: str) -> Optional[dict]:
     init_db()
     try:
@@ -96,31 +169,73 @@ def get_user(phone_number: str) -> Optional[dict]:
             engine = _get_pg_engine()
             with engine.connect() as conn:
                 row = conn.execute(
-                    text("SELECT phone_number, name, onboarding_step, last_seen_at FROM users WHERE phone_number = :p"),
+                    text("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone
+                            FROM users WHERE phone_number = :p"""),
                     {"p": phone_number}
                 ).fetchone()
-            if row:
-                return {
-                    "phone_number": row[0],
-                    "name": row[1],
-                    "onboarding_step": row[2],
-                    "last_seen_at": row[3],
-                }
+            return _row_to_dict(row)
         else:
             conn = _get_sqlite_conn()
             c = conn.cursor()
-            c.execute("SELECT phone_number, name, onboarding_step, last_seen_at FROM users WHERE phone_number = ?", (phone_number,))
+            c.execute("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone
+                         FROM users WHERE phone_number = ?""", (phone_number,))
             row = c.fetchone()
             conn.close()
-            if row:
-                return {
-                    "phone_number": row[0],
-                    "name": row[1],
-                    "onboarding_step": row[2],
-                    "last_seen_at": row[3],
-                }
+            return _row_to_dict(row)
     except Exception as e:
         print(f"[IDENTITY] Erro ao buscar usuario {phone_number}: {e}")
+    return None
+
+
+def get_user_by_email(email: str) -> Optional[dict]:
+    init_db()
+    try:
+        if _use_postgres():
+            from sqlalchemy import text
+            engine = _get_pg_engine()
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone
+                            FROM users WHERE email = :e"""),
+                    {"e": email}
+                ).fetchone()
+            return _row_to_dict(row)
+        else:
+            conn = _get_sqlite_conn()
+            c = conn.cursor()
+            c.execute("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone
+                         FROM users WHERE email = ?""", (email,))
+            row = c.fetchone()
+            conn.close()
+            return _row_to_dict(row)
+    except Exception as e:
+        print(f"[IDENTITY] Erro ao buscar usuario por email {email}: {e}")
+    return None
+
+
+def get_user_by_username(username: str) -> Optional[dict]:
+    init_db()
+    try:
+        if _use_postgres():
+            from sqlalchemy import text
+            engine = _get_pg_engine()
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone
+                            FROM users WHERE username = :u"""),
+                    {"u": username}
+                ).fetchone()
+            return _row_to_dict(row)
+        else:
+            conn = _get_sqlite_conn()
+            c = conn.cursor()
+            c.execute("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone
+                         FROM users WHERE username = ?""", (username,))
+            row = c.fetchone()
+            conn.close()
+            return _row_to_dict(row)
+    except Exception as e:
+        print(f"[IDENTITY] Erro ao buscar usuario por username {username}: {e}")
     return None
 
 
@@ -143,6 +258,83 @@ def create_user(phone_number: str):
             conn.close()
     except Exception as e:
         print(f"[IDENTITY] Erro ao criar usuario {phone_number}: {e}")
+
+
+def create_user_full(phone_number: str, username: str, name: str, email: str, birth_date: str, password_hash: str, google_id: str = None, auth_provider: str = 'local'):
+    init_db()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    trial_ends = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    
+    try:
+        if _use_postgres():
+            from sqlalchemy import text
+            engine = _get_pg_engine()
+            with engine.connect() as conn:
+                conn.execute(
+                    text("""INSERT INTO users 
+                            (phone_number, username, name, email, birth_date, password_hash, google_id, auth_provider, onboarding_step, plan_type, trial_started_at, trial_ends_at, whatsapp_verified) 
+                            VALUES (:p, :u, :n, :e, :b, :pw, :gid, :ap, 'completed', 'trial', :t_start, :t_end, FALSE) 
+                            ON CONFLICT (phone_number) DO NOTHING"""),
+                    {
+                        "p": phone_number, "u": username, "n": name, "e": email, 
+                        "b": birth_date, "pw": password_hash, "gid": google_id, "ap": auth_provider,
+                        "t_start": now_iso, "t_end": trial_ends
+                    }
+                )
+                conn.commit()
+        else:
+            conn = _get_sqlite_conn()
+            conn.execute("""INSERT OR IGNORE INTO users 
+                            (phone_number, username, name, email, birth_date, password_hash, google_id, auth_provider, onboarding_step, plan_type, trial_started_at, trial_ends_at, whatsapp_verified) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'trial', ?, ?, 0)""",
+                         (phone_number, username, name, email, birth_date, password_hash, google_id, auth_provider, now_iso, trial_ends))
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        print(f"[IDENTITY] Erro ao criar usuario completo {phone_number}: {e}")
+        raise e
+
+
+def set_whatsapp_verified(phone_number: str):
+    init_db()
+    try:
+        if _use_postgres():
+            from sqlalchemy import text
+            engine = _get_pg_engine()
+            with engine.connect() as conn:
+                conn.execute(
+                    text("UPDATE users SET whatsapp_verified = TRUE, onboarding_step = 'completed' WHERE phone_number = :p"),
+                    {"p": phone_number}
+                )
+                conn.commit()
+        else:
+            conn = _get_sqlite_conn()
+            conn.execute("UPDATE users SET whatsapp_verified = 1, onboarding_step = 'completed' WHERE phone_number = ?", (phone_number,))
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        print(f"[IDENTITY] Erro ao marcar whatsapp_verified para {phone_number}: {e}")
+
+
+def link_google_account(email: str, google_id: str):
+    init_db()
+    try:
+        if _use_postgres():
+            from sqlalchemy import text
+            engine = _get_pg_engine()
+            with engine.connect() as conn:
+                conn.execute(
+                    text("UPDATE users SET google_id = :gid, auth_provider = 'google' WHERE email = :e"),
+                    {"gid": google_id, "e": email}
+                )
+                conn.commit()
+        else:
+            conn = _get_sqlite_conn()
+            conn.execute("UPDATE users SET google_id = ?, auth_provider = 'google' WHERE email = ?", (google_id, email))
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        print(f"[IDENTITY] Erro ao vincular google_id para email {email}: {e}")
 
 
 def update_user_name(phone_number: str, name: str):
@@ -207,4 +399,29 @@ def is_new_session(user: dict, threshold_hours: int = 4) -> bool:
         return elapsed_hours >= threshold_hours
     except Exception as e:
         print(f"[IDENTITY] Erro ao calcular is_new_session: {e}")
+        return False
+
+
+def is_plan_active(user: dict) -> bool:
+    """
+    Verifica se o usuario tem plano ativo (não é trial ou o trial ainda não acabou).
+    """
+    if user.get("plan_type") != "trial":
+        return True
+    
+    trial_ends = user.get("trial_ends_at")
+    if not trial_ends:
+        return False
+        
+    try:
+        if isinstance(trial_ends, str):
+            trial_dt = datetime.fromisoformat(trial_ends)
+        else:
+            trial_dt = trial_ends
+            
+        if trial_dt.tzinfo is None:
+            trial_dt = trial_dt.replace(tzinfo=timezone.utc)
+            
+        return datetime.now(timezone.utc) < trial_dt
+    except Exception:
         return False

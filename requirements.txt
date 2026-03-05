@@ -10,6 +10,10 @@ uvicorn
 psycopg2-binary
 pgvector
 rich
+# Auth
+PyJWT
+bcrypt
+google-auth
 # Pesquisa web e scraping (providers padrao - gratuitos, sem API key)
 ddgs
 tavily-python

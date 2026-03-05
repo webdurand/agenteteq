@@ -216,36 +216,15 @@ async def orchestrate_message(event: dict):
         
         print(f"[PROCESS] Iniciando orquestracao da mensagem {message_id} de {from_number}")
         
-        # Fluxo de Onboarding
-        if not user:
-            print(f"[ONBOARDING] Usuario nao encontrado no banco local: {from_number}. Iniciando registro.")
-            create_user(from_number)
+        # Fluxo de Registro (Deterministico)
+        if not user or not user.get("whatsapp_verified"):
+            print(f"[ONBOARDING] Usuario nao verificado ou inexistente: {from_number}. Solicitando cadastro.")
+            frontend_url = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
             await whatsapp_client.send_text_message(
                 from_number, 
-                "Oi! Parece que e a sua primeira vez por aqui 👋 Como voce se chama?", 
+                f"Para falar comigo, é necessário fazer cadastro em {frontend_url}", 
                 reply_to_message_id=message_id
             )
-            return
-            
-        if user["onboarding_step"] == "asking_name":
-            if msg_type == "text":
-                name = raw_msg["text"]["body"].strip()
-                update_user_name(from_number, name)
-                print(f"[ONBOARDING] Usuario {from_number} registrado como {name}.")
-                add_memory(f"O nome do usuario e {name}", from_number)
-                update_last_seen(from_number)
-                
-                await whatsapp_client.send_text_message(
-                    from_number, 
-                    f"Prazer, {name}! To por aqui pra ajudar no que precisar 😄",
-                    reply_to_message_id=message_id
-                )
-            else:
-                await whatsapp_client.send_text_message(
-                    from_number, 
-                    "Me manda so o seu nome pra a gente comecar!",
-                    reply_to_message_id=message_id
-                )
             return
 
         # --- Resposta ao "continuar ou novo?" ---

@@ -3,15 +3,16 @@ import re
 import json
 import base64
 import asyncio
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
 from src.agent.assistant import get_assistant
 from src.integrations.tts import get_tts
-from src.memory.identity import get_user, create_user, update_user_name, update_last_seen, is_new_session
+from src.memory.identity import get_user, update_user_name, update_last_seen, is_new_session, is_plan_active
 from src.memory.extractor import extract_and_save_facts
 from src.tools.memory_manager import add_memory
 from src.tools.web_search import create_web_search_tool, create_fetch_page_tool
 from src.tools.deep_research import create_deep_research_tool
+from src.auth.jwt import decode_token
 
 router = APIRouter()
 
@@ -34,13 +35,6 @@ _EMOJI_TAIL_RE = re.compile(
 
 
 def _needs_follow_up(text: str) -> bool:
-    """Detect deterministically whether the agent response expects user input.
-
-    Strips trailing emojis / decorations and checks for question marks
-    in the tail of the message — covers cases where the last visible
-    sentence is a CTA like "Manda aí pra mim! 😊" but earlier sentences
-    contain the actual questions.
-    """
     cleaned = _EMOJI_TAIL_RE.sub('', text.strip())
     if cleaned.endswith('?'):
         return True
@@ -49,12 +43,6 @@ def _needs_follow_up(text: str) -> bool:
 
 
 class WebSocketNotifier:
-    """
-    Notificador para a interface web — equivalente ao StatusNotifier do WhatsApp.
-    Como agent.run() roda em thread separada via asyncio.to_thread(), usa
-    run_coroutine_threadsafe para enviar mensagens ao WebSocket de forma segura.
-    """
-
     def __init__(self, websocket: WebSocket, loop: asyncio.AbstractEventLoop):
         self.websocket = websocket
         self.loop = loop
@@ -74,30 +62,7 @@ class WebSocketNotifier:
             print(f"[WS NOTIFIER] Falha ao enviar status '{message[:40]}': {e}")
 
 
-async def _process_text(websocket, phone_number: str, user_text: str, tts):
-    """Processa texto transcrito do browser e devolve resposta via TTS.
-    Suporta cancelamento via asyncio.Task.cancel() em qualquer checkpoint.
-    """
-    from src.memory.knowledge import get_vector_db
-
-    user = get_user(phone_number)
-    if not user:
-        create_user(phone_number)
-        await websocket.send_json({
-            "type": "onboarding",
-            "text": "Oi! Parece que é a sua primeira vez por aqui 👋 Como você se chama?",
-            "needs_name": True,
-        })
-        return
-
-    if user.get("onboarding_step") == "asking_name":
-        await websocket.send_json({
-            "type": "onboarding",
-            "text": "Me manda só o seu nome pra a gente começar!",
-            "needs_name": True,
-        })
-        return
-
+async def _process_text(websocket, phone_number: str, user_text: str, tts, user: dict):
     new_session = is_new_session(user, threshold_hours=4)
     loop = asyncio.get_event_loop()
 
@@ -111,10 +76,10 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts):
     ]
     agent = get_assistant(session_id=phone_number, extra_tools=search_tools, channel="web")
 
-    # Always-on memory injection (igual ao whatsapp.py)
     prompt = user_text
     memory_mode = os.getenv("MEMORY_MODE", "agentic").lower()
     if memory_mode == "always-on":
+        from src.memory.knowledge import get_vector_db
         vector_db = get_vector_db()
         if vector_db:
             try:
@@ -128,13 +93,10 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts):
     if new_session:
         prompt = GREETING_INJECTION + "\n\n" + prompt
 
-    # agent.run() roda em thread separada; ao cancelar a Task, a thread termina
-    # naturalmente mas TTS e envio da resposta sao descartados.
     response = await asyncio.to_thread(
         agent.run, prompt, knowledge_filters={"user_id": phone_number}
     )
 
-    # Checkpoint 1: verifica cancelamento antes de chamar TTS (API paga)
     await asyncio.sleep(0)
 
     asyncio.create_task(asyncio.to_thread(
@@ -156,7 +118,6 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts):
         print(f"[WEB WS] TTS falhou, enviando só texto: {e}")
         mime_type = "browser"
 
-    # Checkpoint 2: verifica cancelamento antes de enviar ao cliente
     await asyncio.sleep(0)
 
     follow_up = _needs_follow_up(response.content)
@@ -172,7 +133,6 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts):
 
 
 async def _cancel_task(task: asyncio.Task | None) -> None:
-    """Cancela uma Task asyncio e aguarda seu encerramento limpo."""
     if task is None or task.done():
         return
     task.cancel()
@@ -183,18 +143,77 @@ async def _cancel_task(task: asyncio.Task | None) -> None:
     print("[WEB WS] Task anterior cancelada")
 
 
-@router.websocket("/ws/voice/{phone_number}")
-async def voice_websocket(websocket: WebSocket, phone_number: str):
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: dict[str, WebSocket] = {}
+
+    def connect(self, websocket: WebSocket, phone_number: str):
+        self.active_connections[phone_number] = websocket
+
+    def disconnect(self, phone_number: str):
+        if phone_number in self.active_connections:
+            del self.active_connections[phone_number]
+
+    async def send_personal_message(self, phone_number: str, message: dict) -> bool:
+        if phone_number in self.active_connections:
+            ws = self.active_connections[phone_number]
+            try:
+                await ws.send_json(message)
+                return True
+            except Exception as e:
+                print(f"[WS MANAGER] Erro ao enviar mensagem para {phone_number}: {e}")
+                self.disconnect(phone_number)
+        return False
+
+    def is_online(self, phone_number: str) -> bool:
+        return phone_number in self.active_connections
+
+ws_manager = ConnectionManager()
+
+
+@router.websocket("/ws/voice")
+async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
     await websocket.accept()
+    
+    # Valida token JWT
+    payload = decode_token(token)
+    if not payload:
+        await websocket.send_json({"type": "error", "message": "Token invalido ou expirado."})
+        await websocket.close(code=1008)
+        return
+        
+    phone_number = payload.get("sub")
+    if not phone_number:
+        await websocket.send_json({"type": "error", "message": "Token malformado."})
+        await websocket.close(code=1008)
+        return
+        
+    user = get_user(phone_number)
+    if not user:
+        await websocket.send_json({"type": "error", "message": "Usuario nao encontrado."})
+        await websocket.close(code=1008)
+        return
+        
+    if not user.get("whatsapp_verified"):
+        await websocket.send_json({"type": "error", "message": "WhatsApp nao verificado."})
+        await websocket.close(code=1008)
+        return
+
+    if not is_plan_active(user):
+        await websocket.send_json({"type": "error", "message": "Plano ou trial expirado."})
+        await websocket.close(code=1008)
+        return
+        
     loop = asyncio.get_event_loop()
     tts = get_tts()
     current_task: asyncio.Task | None = None
 
+    ws_manager.connect(websocket, phone_number)
     print(f"[WEB WS] Cliente conectado: {phone_number}")
 
     async def run_text(user_text: str) -> None:
         try:
-            await _process_text(websocket, phone_number, user_text, tts)
+            await _process_text(websocket, phone_number, user_text, tts, user)
         except asyncio.CancelledError:
             print(f"[WEB WS] Processamento cancelado: \"{user_text[:60]}\"")
         except Exception as e:
@@ -232,15 +251,7 @@ async def voice_websocket(websocket: WebSocket, phone_number: str):
                     continue
 
                 if msg_type == "name":
-                    name = msg.get("value", "").strip()
-                    if name:
-                        update_user_name(phone_number, name)
-                        add_memory(f"O nome do usuario e {name}", phone_number)
-                        update_last_seen(phone_number)
-                        await websocket.send_json({
-                            "type": "onboarding_complete",
-                            "text": f"Prazer, {name}! To por aqui pra ajudar no que precisar 😄",
-                        })
+                    # Backward compatibility, mas agora o nome vem do registro
                     continue
 
                 if msg_type == "user_message":
@@ -261,26 +272,9 @@ async def voice_websocket(websocket: WebSocket, phone_number: str):
             print(f"[WEB WS] Audio recebido: {len(audio_bytes)} bytes de {phone_number}")
 
             try:
-                user = get_user(phone_number)
-
-                if not user:
-                    create_user(phone_number)
-                    await websocket.send_json({
-                        "type": "onboarding",
-                        "text": "Oi! Parece que é a sua primeira vez por aqui 👋 Como você se chama?",
-                        "needs_name": True,
-                    })
-                    continue
-
-                if user.get("onboarding_step") == "asking_name":
-                    await websocket.send_json({
-                        "type": "onboarding",
-                        "text": "Me manda só o seu nome pra a gente começar!",
-                        "needs_name": True,
-                    })
-                    continue
-
-                new_session = is_new_session(user, threshold_hours=4)
+                # Refresh user p/ pegar is_new_session fresquinho
+                current_user = get_user(phone_number)
+                new_session = is_new_session(current_user, threshold_hours=4)
 
                 await websocket.send_json({"type": "status", "text": "Ouvindo..."})
 
@@ -370,4 +364,5 @@ async def voice_websocket(websocket: WebSocket, phone_number: str):
 
     except WebSocketDisconnect:
         await _cancel_task(current_task)
+        ws_manager.disconnect(phone_number)
         print(f"[WEB WS] Cliente desconectado: {phone_number}")

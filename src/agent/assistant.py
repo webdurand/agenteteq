@@ -37,12 +37,13 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
     add_memory, delete_memory, list_memories = create_memory_tools(session_id)
 
     try:
-        from src.tools.blog_publisher import publish_post
+        from src.tools.blog_publisher import create_blog_tools
+        publish_post_tools = create_blog_tools(session_id)
         from src.tools.weather import get_weather
         from src.tools.scheduler_tool import create_scheduler_tools
         schedule_message, list_schedules, cancel_schedule = create_scheduler_tools(session_id)
         tools = [
-            publish_post,
+            *publish_post_tools,
             add_memory, delete_memory, list_memories,
             add_task, list_tasks, complete_task, reopen_task, delete_task,
             get_weather,

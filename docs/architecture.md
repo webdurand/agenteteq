@@ -139,15 +139,16 @@ Ferramenta `get_weather(city)` que consulta `wttr.in` (gratuito, sem API key). R
 
 ## Motor de Agendamento (`src/scheduler/`)
 
-Permite que o Teq envie mensagens proativas sem precisar de input do usuário.
+Permite que o Teq envie mensagens proativas sem precisar de input do usuário. Recentemente refatorado para utilizar PostgreSQL garantindo persistência forte em deploys efêmeros.
 
 ### Componentes
 
 | Arquivo | Responsabilidade |
 |---------|-----------------|
-| `src/scheduler/engine.py` | Singleton do APScheduler com SQLite job store (`scheduler.db`). Iniciado/parado via lifespan do FastAPI. |
-| `src/scheduler/dispatcher.py` | Função `dispatch_proactive_message(user_phone, task_instructions)` executada pelo scheduler. Cria um Agno Agent, roda as instruções e envia o resultado via WhatsApp. |
-| `src/tools/scheduler_tool.py` | Tools para o agente: `schedule_message`, `list_schedules`, `cancel_schedule`. |
+| `src/models/reminders.py` | CRUD da tabela `reminders` no PostgreSQL. Funciona como a **fonte de verdade** dos agendamentos, suportando canais dinâmicos. |
+| `src/scheduler/engine.py` | Singleton do APScheduler com PostgreSQL job store (`DATABASE_URL`). Possui `reconcile_reminders()` no startup para recriar jobs órfãos a partir do banco. |
+| `src/scheduler/dispatcher.py` | Função `dispatch_proactive_message(reminder_id)` executada pelo scheduler. Busca no banco, verifica status, cria um Agno Agent, roda as instruções e envia via canal (ex: `whatsapp_text`). |
+| `src/tools/scheduler_tool.py` | Tools para o agente: `schedule_message` (grava no DB e adiciona job), `list_schedules` (lê do DB) e `cancel_schedule` (marca DB e remove job). |
 
 ### Tipos de Gatilho
 
@@ -162,22 +163,25 @@ Permite que o Teq envie mensagens proativas sem precisar de input do usuário.
 ```
 Usuário: "todo dia às 8h me manda tarefas e tempo"
        ↓
-Teq chama schedule_message(trigger_type="cron", cron_expression="0 8 * * *", ...)
+Teq chama schedule_message(trigger_type="cron", ...)
        ↓
-APScheduler persiste job no scheduler.db
+Grava na tabela `reminders` do PostgreSQL (status: active)
        ↓
-Todo dia às 8h: scheduler dispara → dispatcher.py
+Adiciona job no APScheduler (PostgreSQL jobstore) com `reminder_id`
        ↓
-Cria Agno Agent com session_id=user_phone
+Todo dia às 8h (BRT): scheduler dispara → dispatcher.py
+       ↓
+Busca `reminder_id` no banco → Cria Agno Agent
        ↓
 agent.run(task_instructions) → resposta
        ↓
-whatsapp_client.send_text_message(user_phone, resposta)
+Envia resposta via notification_channel (whatsapp_text)
 ```
 
-### Decisão Técnica: APScheduler + Agno
+### Decisão Técnica: PostgreSQL + Reconciliação
 
-O Agno não oferece scheduling nativo baseado em relógio (cron/interval/date). O APScheduler complementa o Agno: cuida do gatilho de tempo, enquanto o Agno cuida da execução inteligente da tarefa. O job store SQLite garante que os agendamentos sobrevivam a restarts do servidor.
+O SQLite local como job store do APScheduler sofria perda de dados durante redeploys em containers efêmeros (como na Koyeb). O sistema foi migrado para PostgreSQL.
+A tabela `reminders` atua como fonte de verdade: no startup da aplicação (`start_scheduler()`), a função `reconcile_reminders()` garante que todo lembrete `active` possua um job no motor em background, recriando-o caso tenha sido perdido num restart. Além disso, o sistema resolve nativamente os fusos horários baseando-se na configuração de `timezone` (ex: `America/Sao_Paulo`) do usuário.
 
 ## Detecção de Nova Sessão com Escolha do Usuário
 
@@ -306,5 +310,36 @@ VITE_WS_URL=ws://localhost:8000   # em produção: wss://seu-dominio.com
 | Memória | `MEMORY_MODE` | `agentic` | `agentic`, `always-on` |
 | Agendamentos | `scheduler.db` | SQLite local | — (persistência automática) |
 | TTS | `TTS_PROVIDER` | `gemini` | `gemini`, `openai`, `elevenlabs`, `browser` |
+
+## Autenticação e Registro
+
+O sistema de autenticação suporta login manual (email+senha) com 2FA via WhatsApp, login social (Google OAuth) e trial de 7 dias.
+
+### Fluxos Principais
+
+1. **Cadastro Manual**: Usuário preenche formulário no front → backend cria conta e gera código alfanumérico OTP de 6 dígitos → envia OTP via WhatsApp → usuário confirma o OTP → conta ativada, retorna JWT.
+2. **Login Manual**: Usuário insere email e senha → backend valida bcrypt hash → gera OTP 2FA → envia via WhatsApp → usuário confirma o OTP → retorna JWT.
+3. **Google OAuth**: Usuário loga com Google → backend valida `id_token` usando `google-auth` SDK → se conta não existe, solicita completude (username, telefone, etc) e segue fluxo OTP de cadastro → se existe, retorna JWT.
+
+### Módulos Backend (`src/auth/`)
+
+- `passwords.py`: Hashing e verificação com `bcrypt` puro.
+- `jwt.py`: Criação e validação de tokens usando `PyJWT`.
+- `otp.py`: Geração e verificação de códigos em memória RAM, puro, desacoplado do envio.
+- `google.py`: Isola as chamadas ao SDK do Google para validação do token.
+- `deps.py`: Dependências FastAPI para extrair JWT e validar plano ativo.
+- `routes.py`: Endpoints REST, que orquestram a verificação de senha/token e o envio de mensagens chamando o `whatsapp_client`.
+
+### Estrutura do JWT
+
+- **Header**: Algoritmo HS256.
+- **Payload**: `sub` (telefone para `session_id`), `username`, `email`, datas de emissão (`iat`) e expiração (`exp`).
+
+### Trial e Planos Pagos
+
+A arquitetura prepara o terreno para cobrança:
+- Usuários recebem `plan_type = 'trial'` na criação da conta.
+- Tabela `users` possui `trial_started_at` e `trial_ends_at` (padrão de 7 dias).
+- Acesso à interface web de voz e aos webhooks é bloqueado se o trial expirar (validação via `is_plan_active()`).
 
 *(Este arquivo deve ser atualizado sempre que novas ferramentas, rotas ou fluxos forem adicionados)*
