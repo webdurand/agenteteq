@@ -125,6 +125,14 @@ O agente faz perguntas contextuais antes de salvar a tarefa (prazo, local, obser
 - Não precisa de `notifier` nem de factory, pois a interação é síncrona e conversacional (o agente faz as perguntas, não a tool).
 - O `whatsapp.py` (orchestrator) não foi alterado: as tools são registradas diretamente no `get_assistant()`.
 
+## Frontend: Tratamento de Erros e Feedback (Toasts)
+
+Qualquer erro originado de chamadas à API no frontend (como retorno de status 4xx ou 5xx) **deve** ser tratado e exibido ao usuário utilizando o componente global de Toast (`ToastContext`). 
+
+- **Nunca** utilizar o `alert()` nativo do navegador.
+- O contexto de Toast provê a função `showToast(message: string, type: 'success' | 'error' | 'info')`.
+- O cliente da API (`src/lib/api.ts`) extrai e lança a mensagem enviada pelo backend no campo `detail`, a qual deve ser passada diretamente para o `showToast(e.message, "error")`.
+
 ## Personalidade do Agente (Teq)
 
 O agente tem tom descontraído e informal, como um amigo próximo e inteligente. As instruções de personalidade estão em `src/agent/assistant.py` no parâmetro `instructions[]` do `Agent`. Principais características:
@@ -389,3 +397,30 @@ O sistema conta com um Painel Administrativo integrado ao frontend principal (`a
 - **Admins**: Interface de CRUD para definir papéis na plataforma.
 
 *(Este arquivo deve ser atualizado sempre que novas ferramentas, rotas ou fluxos forem adicionados)*
+
+## Billing e Assinaturas (Stripe)
+
+O projeto utiliza **Stripe Billing** como fonte de verdade para assinaturas recorrentes, com o backend atuando como espelho operacional para autorização e UI.
+
+### Decisão de Produto (Brasil)
+- **Métodos**: Cartão de crédito, Apple Pay e Google Pay (via Stripe Elements/Payment Element).
+- **Não suportados no MVP**: PIX (não suporta recorrência no modo assinatura na Stripe BR), PayPal (indisponível para conta BR), Débito automático (não existe para o Brasil).
+- **Trial**: 7 dias gratuitos para todos.
+
+### Fluxo de Checkout (Embedded)
+1. Frontend chama `POST /billing/subscribe` que cria um `Customer` e uma `Subscription` (`payment_behavior='default_incomplete'`, `trial_period_days=7`) e retorna um `client_secret`.
+2. Frontend exibe o `Payment Element` embedded.
+3. Usuário insere dados e chama `stripe.confirmSetup()`.
+4. Webhooks sincronizam o status e liberam acesso.
+
+### Arquitetura de Billing Desacoplada
+- `src/endpoints/billing.py`: Rotas REST de checkout e webhook, não contém lógica Stripe, apenas orquestra chamadas.
+- `src/billing/service.py`: Regras de negócio, acesso, cancelamento e refund.
+- `src/billing/types.py`: Contratos internos de status (`trialing`, `active`, `past_due`, etc).
+- `src/integrations/stripe.py`: Wrapper da SDK da Stripe.
+- `src/models/subscriptions.py`: Persistência local (tabelas `billing_plans`, `subscriptions`, `billing_events` para idempotência de webhooks, `refund_logs`).
+
+### Política de Acesso e Gate
+A função `is_plan_active` (em `src/auth/deps.py`) foi expandida para validar a assinatura real do usuário:
+- **Acesso liberado**: `trialing`, `active` ou `past_due` (com grace period de 5 dias). Admins têm bypass automático.
+- **Acesso bloqueado**: `canceled` com período encerrado, `unpaid`, `incomplete_expired` ou sem assinatura ativa após trial.

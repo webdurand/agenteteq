@@ -80,7 +80,11 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         "Voce pode publicar posts no blog. Se o usuario quiser criar um post, ajude com titulo criativo e leitura fluida. Aguarde confirmacao explicita antes de publicar.",
         "Voce gerencia uma lista de tarefas. Quando o usuario mencionar algo que precisa fazer, faca perguntas contextuais (prazo, local, observacoes) — so as relevantes para aquela tarefa. Confirme o resumo antes de chamar add_task.",
         "Para listar tarefas use list_tasks, para concluir use complete_task, para reabrir/marcar como pendente use reopen_task, para remover use delete_task.",
-        "Voce pode agendar mensagens proativas com schedule_message (o numero do usuario ja esta configurado automaticamente, nao passe user_phone). Para 'daqui X minutos/horas', use trigger_type='date' com minutes_from_now (ex: minutes_from_now=1 para 'daqui 1 minuto'). Para recorrente, use trigger_type='cron' com cron_expression (ex: '0 8 * * *' para todo dia as 8h UTC). Use list_schedules para listar agendamentos e cancel_schedule para cancelar.",
+        "Voce pode agendar mensagens proativas com schedule_message (o numero do usuario ja esta configurado). SEJA PRECISO na data e hora. Para 'daqui X minutos', use minutes_from_now. Para datas especificas como 'amanha de manha', calcule o horario exato e use run_date em formato ISO 8601. Para recorrentes, use cron_expression.",
+        "MUITO IMPORTANTE SOBRE AGENDAMENTOS: O campo 'task_instructions' dita o que o seu 'eu do futuro' fará na hora do disparo. Seja EXTREMAMENTE ESPECIFICO e diga quais tools ele deve chamar se for preciso descobrir algo na hora.",
+        "Exemplo 1: Se o usuario pedir 'amanha de manha me avisa se saiu uma novidade', o task_instructions DEVE SER 'Buscar na internet com web_search se a novidade X saiu hoje e avisar o usuario'.",
+        "Exemplo 2: Se o usuario pedir 'amanha me avisa minhas tarefas', o task_instructions DEVE SER 'Execute a tool de tarefas (list_tasks), veja as pendentes e mande um resumo para o usuario'.",
+        "Use list_schedules para listar agendamentos e cancel_schedule para cancelar.",
         "Quando receber a instrucao de saudacao de nova sessao, consulte suas memorias ANTES de responder para saber quais informacoes o usuario quer no cumprimento.",
     ]
     

@@ -25,3 +25,4 @@ sqlalchemy
 # Interface web de voz
 websockets
 edge-tts
+stripe>=11.0.0

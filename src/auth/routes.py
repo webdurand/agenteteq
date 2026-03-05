@@ -12,7 +12,8 @@ from src.memory.identity import (
     get_user_by_username,
     set_whatsapp_verified,
     link_google_account,
-    is_plan_active
+    is_plan_active,
+    change_user_phone_number,
 )
 from src.integrations.whatsapp import whatsapp_client
 
@@ -47,6 +48,15 @@ class GoogleCompleteRequest(BaseModel):
 class ResendCodeRequest(BaseModel):
     phone: str
     purpose: str
+
+
+class ChangePhoneRequest(BaseModel):
+    new_phone: str
+
+
+class ChangePhoneVerifyRequest(BaseModel):
+    new_phone: str
+    code: str
 
 async def send_otp_whatsapp(phone: str, purpose: str):
     code = generate_code(phone, purpose)
@@ -216,8 +226,36 @@ async def resend_code(req: ResendCodeRequest):
     await send_otp_whatsapp(req.phone, req.purpose)
     return {"message": "Codigo reenviado"}
 
+
+@router.post("/change-phone/request")
+async def request_phone_change(req: ChangePhoneRequest, current_user: dict = Depends(get_current_user)):
+    if get_user(req.new_phone):
+        raise HTTPException(status_code=400, detail="Telefone ja cadastrado")
+    await send_otp_whatsapp(req.new_phone, "change_phone")
+    return {"message": "Codigo enviado para o novo WhatsApp"}
+
+
+@router.post("/change-phone/verify")
+async def verify_phone_change(req: ChangePhoneVerifyRequest, current_user: dict = Depends(get_current_user)):
+    if not verify_code(req.new_phone, req.code, "change_phone"):
+        raise HTTPException(status_code=400, detail="Codigo invalido ou expirado")
+
+    old_phone = current_user["phone_number"]
+    change_user_phone_number(old_phone, req.new_phone)
+    updated_user = get_user(req.new_phone)
+    token = create_token(updated_user["phone_number"], updated_user["username"], updated_user["email"], updated_user.get("role", "user"))
+    return {
+        "message": "Telefone atualizado com sucesso",
+        "token": token,
+        "phone_number": updated_user["phone_number"],
+    }
+
+from src.billing.service import get_billing_context
+
 @router.get("/me")
 async def get_me(current_user: dict = Depends(get_current_user)):
+    ctx = get_billing_context(current_user["phone_number"])
+    
     # Retornar dados seguros
     safe_user = {
         "phone_number": current_user.get("phone_number"),
@@ -227,6 +265,11 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         "whatsapp_verified": current_user.get("whatsapp_verified"),
         "plan_type": current_user.get("plan_type"),
         "plan_active": is_plan_active(current_user),
-        "role": current_user.get("role", "user")
+        "role": current_user.get("role", "user"),
+        "subscription_status": ctx.status.value,
+        "trial_end": ctx.trial_end.isoformat() if ctx.trial_end else None,
+        "current_period_end": ctx.current_period_end.isoformat() if ctx.current_period_end else None,
+        "cancel_at_period_end": ctx.cancel_at_period_end,
+        "plan_code": ctx.plan_code
     }
     return safe_user

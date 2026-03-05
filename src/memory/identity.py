@@ -56,7 +56,8 @@ def _init_pg():
                 trial_started_at TIMESTAMPTZ,
                 trial_ends_at TIMESTAMPTZ,
                 timezone TEXT DEFAULT 'America/Sao_Paulo',
-                role TEXT DEFAULT 'user'
+                role TEXT DEFAULT 'user',
+                stripe_customer_id TEXT
             )
         """))
         # Adiciona colunas se ja existir a tabela sem ela (migracao segura)
@@ -73,7 +74,8 @@ def _init_pg():
             "trial_started_at TIMESTAMPTZ",
             "trial_ends_at TIMESTAMPTZ",
             "timezone TEXT DEFAULT 'America/Sao_Paulo'",
-            "role TEXT DEFAULT 'user'"
+            "role TEXT DEFAULT 'user'",
+            "stripe_customer_id TEXT"
         ]:
             try:
                 conn.execute(__import__("sqlalchemy").text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col}"))
@@ -106,7 +108,8 @@ def _init_sqlite():
             trial_started_at TEXT,
             trial_ends_at TEXT,
             timezone TEXT DEFAULT 'America/Sao_Paulo',
-            role TEXT DEFAULT 'user'
+            role TEXT DEFAULT 'user',
+            stripe_customer_id TEXT
         )
     """)
     # Adiciona colunas se ja existir a tabela sem ela (migracao segura)
@@ -123,7 +126,8 @@ def _init_sqlite():
         "trial_started_at TEXT",
         "trial_ends_at TEXT",
         "timezone TEXT DEFAULT 'America/Sao_Paulo'",
-        "role TEXT DEFAULT 'user'"
+        "role TEXT DEFAULT 'user'",
+        "stripe_customer_id TEXT"
     ]:
         try:
             conn.execute(f"ALTER TABLE users ADD COLUMN {col}")
@@ -163,6 +167,7 @@ def _row_to_dict(row) -> dict:
         "trial_ends_at": row[13],
         "timezone": row[14] if len(row) > 14 else "America/Sao_Paulo",
         "role": row[15] if len(row) > 15 else "user",
+        "stripe_customer_id": row[16] if len(row) > 16 else None,
     }
 
 
@@ -174,7 +179,7 @@ def get_user(phone_number: str) -> Optional[dict]:
             engine = _get_pg_engine()
             with engine.connect() as conn:
                 row = conn.execute(
-                    text("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role
+                    text("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role, stripe_customer_id
                             FROM users WHERE phone_number = :p"""),
                     {"p": phone_number}
                 ).fetchone()
@@ -182,7 +187,7 @@ def get_user(phone_number: str) -> Optional[dict]:
         else:
             conn = _get_sqlite_conn()
             c = conn.cursor()
-            c.execute("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role
+            c.execute("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role, stripe_customer_id
                          FROM users WHERE phone_number = ?""", (phone_number,))
             row = c.fetchone()
             conn.close()
@@ -200,7 +205,7 @@ def get_user_by_email(email: str) -> Optional[dict]:
             engine = _get_pg_engine()
             with engine.connect() as conn:
                 row = conn.execute(
-                    text("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role
+                    text("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role, stripe_customer_id
                             FROM users WHERE email = :e"""),
                     {"e": email}
                 ).fetchone()
@@ -208,7 +213,7 @@ def get_user_by_email(email: str) -> Optional[dict]:
         else:
             conn = _get_sqlite_conn()
             c = conn.cursor()
-            c.execute("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role
+            c.execute("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role, stripe_customer_id
                          FROM users WHERE email = ?""", (email,))
             row = c.fetchone()
             conn.close()
@@ -226,7 +231,7 @@ def get_user_by_username(username: str) -> Optional[dict]:
             engine = _get_pg_engine()
             with engine.connect() as conn:
                 row = conn.execute(
-                    text("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role
+                    text("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role, stripe_customer_id
                             FROM users WHERE username = :u"""),
                     {"u": username}
                 ).fetchone()
@@ -234,7 +239,7 @@ def get_user_by_username(username: str) -> Optional[dict]:
         else:
             conn = _get_sqlite_conn()
             c = conn.cursor()
-            c.execute("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role
+            c.execute("""SELECT phone_number, name, onboarding_step, last_seen_at, username, email, birth_date, password_hash, whatsapp_verified, google_id, auth_provider, plan_type, trial_started_at, trial_ends_at, timezone, role, stripe_customer_id
                          FROM users WHERE username = ?""", (username,))
             row = c.fetchone()
             conn.close()
@@ -363,6 +368,100 @@ def link_google_account(email: str, google_id: str):
         print(f"[IDENTITY] Erro ao vincular google_id para email {email}: {e}")
 
 
+def update_stripe_customer_id(phone_number: str, customer_id: str):
+    init_db()
+    try:
+        if _use_postgres():
+            from sqlalchemy import text
+            engine = _get_pg_engine()
+            with engine.connect() as conn:
+                conn.execute(
+                    text("UPDATE users SET stripe_customer_id = :c WHERE phone_number = :p"),
+                    {"c": customer_id, "p": phone_number}
+                )
+                conn.commit()
+        else:
+            conn = _get_sqlite_conn()
+            conn.execute("UPDATE users SET stripe_customer_id = ? WHERE phone_number = ?", (customer_id, phone_number))
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        print(f"[IDENTITY] Erro ao atualizar stripe_customer_id para {phone_number}: {e}")
+
+
+def change_user_phone_number(old_phone_number: str, new_phone_number: str):
+    init_db()
+    try:
+        if get_user(new_phone_number):
+            raise ValueError("Novo telefone ja cadastrado")
+
+        if _use_postgres():
+            from sqlalchemy import text
+            engine = _get_pg_engine()
+            with engine.connect() as conn:
+                conn.execute(
+                    text("UPDATE users SET phone_number = :new_phone WHERE phone_number = :old_phone"),
+                    {"new_phone": new_phone_number, "old_phone": old_phone_number},
+                )
+                try:
+                    conn.execute(
+                        text("UPDATE tasks SET user_id = :new_phone WHERE user_id = :old_phone"),
+                        {"new_phone": new_phone_number, "old_phone": old_phone_number},
+                    )
+                except Exception:
+                    pass
+                try:
+                    conn.execute(
+                        text("UPDATE subscriptions SET user_id = :new_phone WHERE user_id = :old_phone"),
+                        {"new_phone": new_phone_number, "old_phone": old_phone_number},
+                    )
+                except Exception:
+                    pass
+                try:
+                    conn.execute(
+                        text("UPDATE reminders SET user_id = :new_phone WHERE user_id = :old_phone"),
+                        {"new_phone": new_phone_number, "old_phone": old_phone_number},
+                    )
+                except Exception:
+                    pass
+                try:
+                    conn.execute(
+                        text("UPDATE usage_events SET user_id = :new_phone WHERE user_id = :old_phone"),
+                        {"new_phone": new_phone_number, "old_phone": old_phone_number},
+                    )
+                except Exception:
+                    pass
+                conn.commit()
+        else:
+            conn = _get_sqlite_conn()
+            conn.execute("UPDATE users SET phone_number = ? WHERE phone_number = ?", (new_phone_number, old_phone_number))
+            try:
+                conn.execute("UPDATE tasks SET user_id = ? WHERE user_id = ?", (new_phone_number, old_phone_number))
+            except Exception:
+                pass
+            try:
+                conn.execute("UPDATE subscriptions SET user_id = ? WHERE user_id = ?", (new_phone_number, old_phone_number))
+            except Exception:
+                pass
+            try:
+                conn.execute("UPDATE usage_events SET user_id = ? WHERE user_id = ?", (new_phone_number, old_phone_number))
+            except Exception:
+                pass
+            conn.commit()
+            conn.close()
+
+            try:
+                rem_conn = sqlite3.connect("scheduler.db")
+                rem_conn.execute("UPDATE reminders SET user_id = ? WHERE user_id = ?", (new_phone_number, old_phone_number))
+                rem_conn.commit()
+                rem_conn.close()
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[IDENTITY] Erro ao trocar telefone de {old_phone_number} para {new_phone_number}: {e}")
+        raise e
+
+
 def update_user_name(phone_number: str, name: str):
     init_db()
     try:
@@ -432,22 +531,27 @@ def is_plan_active(user: dict) -> bool:
     """
     Verifica se o usuario tem plano ativo (não é trial ou o trial ainda não acabou).
     """
-    if user.get("plan_type") != "trial":
+    if user.get("role") == "admin":
         return True
-    
-    trial_ends = user.get("trial_ends_at")
-    if not trial_ends:
-        return False
         
-    try:
-        if isinstance(trial_ends, str):
-            trial_dt = datetime.fromisoformat(trial_ends)
-        else:
-            trial_dt = trial_ends
+    if user.get("plan_type") == "trial":
+        trial_ends = user.get("trial_ends_at")
+        if not trial_ends:
+            return False
             
-        if trial_dt.tzinfo is None:
-            trial_dt = trial_dt.replace(tzinfo=timezone.utc)
+        try:
+            if isinstance(trial_ends, str):
+                trial_dt = datetime.fromisoformat(trial_ends)
+            else:
+                trial_dt = trial_ends
+                
+            if trial_dt.tzinfo is None:
+                trial_dt = trial_dt.replace(tzinfo=timezone.utc)
+                
+            if datetime.now(timezone.utc) < trial_dt:
+                return True
+        except Exception:
+            pass
             
-        return datetime.now(timezone.utc) < trial_dt
-    except Exception:
-        return False
+    from src.billing.service import is_subscription_active
+    return is_subscription_active(user["phone_number"])
