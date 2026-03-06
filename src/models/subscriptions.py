@@ -17,7 +17,6 @@ def init_billing_db():
         _init_pg()
     else:
         _init_sqlite()
-    ensure_default_plan()
 
 
 def _init_pg():
