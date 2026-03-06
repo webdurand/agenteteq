@@ -2,7 +2,7 @@ import os
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from google import genai
-from google.genai.types import GenerateContentConfig, Modality
+from google.genai.types import GenerateContentConfig, ImageConfig, Modality
 from .base import ImageProvider
 
 # Executor dedicado para chamadas à API do Gemini — permite paralelismo real
@@ -30,13 +30,15 @@ class NanoBananaProvider(ImageProvider):
         loop = asyncio.get_event_loop()
 
         def _generate():
-            print(f"[NANO_BANANA] Gerando imagem | modelo={self.model_name} | prompt={prompt[:80]}...")
+            print(f"[NANO_BANANA] Gerando imagem | modelo={self.model_name} | aspect_ratio={aspect_ratio} | prompt={prompt[:80]}...")
+            config = GenerateContentConfig(
+                response_modalities=[Modality.TEXT, Modality.IMAGE],
+                image_config=ImageConfig(aspect_ratio=aspect_ratio),
+            )
             response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=prompt,
-                config=GenerateContentConfig(
-                    response_modalities=[Modality.TEXT, Modality.IMAGE],
-                )
+                config=config,
             )
 
             candidate = response.candidates[0] if response.candidates else None
@@ -45,16 +47,13 @@ class NanoBananaProvider(ImageProvider):
 
             content = candidate.content
             if not content or not content.parts:
-                # A API pode bloquear o conteúdo por segurança — tenta com prompt simplificado
                 finish_reason = getattr(candidate, 'finish_reason', 'unknown')
                 print(f"[NANO_BANANA] Conteúdo vazio (finish_reason={finish_reason}), tentando prompt fallback...")
                 fallback_prompt = f"Professional editorial photo for tech blog, clean modern design, {prompt[:120]}"
                 response = self.client.models.generate_content(
                     model=self.model_name,
                     contents=fallback_prompt,
-                    config=GenerateContentConfig(
-                        response_modalities=[Modality.TEXT, Modality.IMAGE],
-                    )
+                    config=config,
                 )
                 candidate = response.candidates[0] if response.candidates else None
                 content = getattr(candidate, 'content', None)
