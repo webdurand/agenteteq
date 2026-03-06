@@ -98,8 +98,11 @@ async def _process_carousel_background(
         update_carousel_status(carousel_id, "done", list(updated_slides))
         print(f"[CAROUSEL] Carrossel {carousel_id} finalizado com sucesso.")
 
-        # Notifica o frontend via WS (sempre, para atualizar o painel)
         emit_event_sync(user_id, "carousel_generated")
+
+        from src.events_broadcast import emit_action_log
+        title = slides[0].get("style", "Carrossel") if slides else "Carrossel"
+        await emit_action_log(user_id, "Carrossel gerado", f"{title} ({len(updated_slides)} slides)", channel)
 
         # Envia de volta pelo canal de origem
         await _notify_user(user_id, channel, list(updated_slides))

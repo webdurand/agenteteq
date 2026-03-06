@@ -5,7 +5,7 @@ from datetime import datetime
 import httpx
 from src.memory.identity import get_user
 
-def create_blog_tools(session_id: str):
+def create_blog_tools(session_id: str, channel: str = "web"):
     
     def publish_post(title: str, content: str) -> str:
         """
@@ -72,6 +72,8 @@ def create_blog_tools(session_id: str):
             response = httpx.put(api_url, headers=headers, json=payload, timeout=20.0)
             
             if response.status_code in (201, 200):
+                from src.events_broadcast import emit_action_log_sync
+                emit_action_log_sync(session_id, "Post publicado", title, channel)
                 return f"Sucesso! Post '{title}' publicado no arquivo {filename} no repositório {github_repo} via GitHub API."
             else:
                 return f"Erro ao publicar no GitHub. Status: {response.status_code}. Detalhes: {response.text}"

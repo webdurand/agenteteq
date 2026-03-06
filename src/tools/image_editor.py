@@ -151,6 +151,9 @@ async def _process_edit_background(
         store_generated_image(user_id, image_url)
         print(f"[IMAGE_EDITOR] Imagem editada: {image_url}")
 
+        from src.events_broadcast import emit_action_log
+        await emit_action_log(user_id, "Imagem editada", edit_prompt[:100], channel)
+
         if channel in ("web", "web_voice", "web_text"):
             await ws_manager.send_personal_message(user_id, {
                 "type": "image_edit_ready",

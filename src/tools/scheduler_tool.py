@@ -14,13 +14,14 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 
-def create_scheduler_tools(user_phone: str):
+def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
     """
     Factory que cria as tools de agendamento com o numero de telefone do usuario pre-injetado.
     Garante que o LLM nao precise (nem possa) informar o numero de telefone manualmente.
 
     Args:
         user_phone: Numero de telefone do usuario (session_id).
+        channel: Canal de origem (web, whatsapp, etc).
 
     Returns:
         Tuple com (schedule_message, list_schedules, cancel_schedule).
@@ -161,6 +162,9 @@ def create_scheduler_tools(user_phone: str):
                 
             from src.events import emit_event_sync
             emit_event_sync(user_phone, "reminder_updated")
+
+            from src.events_broadcast import emit_action_log_sync
+            emit_action_log_sync(user_phone, "Lembrete criado", title or task_instructions[:60], channel)
                 
             return msg
 

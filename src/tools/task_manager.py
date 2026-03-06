@@ -140,6 +140,8 @@ def add_task(
         print(f"[TASKS] Tarefa #{task_id} adicionada com sucesso: '{title}'")
         from src.events import emit_event_sync
         emit_event_sync(user_id, "task_updated")
+        from src.events_broadcast import emit_action_log_sync
+        emit_action_log_sync(user_id, "Tarefa criada", title, channel)
         return f"Tarefa #{task_id} adicionada com sucesso: '{title}'."
     except Exception as e:
         print(f"[TASKS] Erro ao adicionar tarefa: {e}")
@@ -318,6 +320,8 @@ def complete_task(user_id: str, task_id: int) -> str:
             return f"Tarefa #{task_id} não encontrada."
         from src.events import emit_event_sync
         emit_event_sync(user_id, "task_updated")
+        from src.events_broadcast import emit_action_log_sync
+        emit_action_log_sync(user_id, "Tarefa concluida", f"#{task_id}", channel)
         return f"Tarefa #{task_id} marcada como concluída!"
     except Exception as e:
         print(f"[TASKS] Erro ao concluir tarefa: {e}")
@@ -414,7 +418,7 @@ def delete_task(user_id: str, task_id: int) -> str:
         return f"Erro ao remover tarefa: {e}"
 
 
-def create_task_tools(user_id: str):
+def create_task_tools(user_id: str, channel: str = "unknown"):
     """
     Factory que cria as tools de tarefas com o user_id pre-injetado via closure.
     O LLM nunca precisa fornecer ou conhecer o user_id — identificacao deterministica
@@ -422,6 +426,7 @@ def create_task_tools(user_id: str):
 
     Args:
         user_id: Numero de telefone do usuario (session_id).
+        channel: Canal de origem (web, whatsapp, etc).
 
     Returns:
         Tuple com (add_task_tool, list_tasks_tool, complete_task_tool, reopen_task_tool, delete_task_tool).

@@ -306,6 +306,27 @@ Permite ao agente gerar múltiplos slides em paralelo para o Instagram, utilizan
 ### Desacoplamento de Provedores
 A geração de imagens é isolada na interface abstrata `ImageProvider`. Para substituir o Gemini por Dall-E, Midjourney, Fal.ai ou Replicate, basta criar uma nova classe herdando de `ImageProvider` e configurar a variável de ambiente `IMAGE_PROVIDER` no `src/tools/image_generation/__init__.py`.
 
+## Separação Voz/Chat e Notificações Cross-Channel
+
+O fluxo de voz clássico (`useVoiceChat`) foi desacoplado do histórico de chat de texto. Transcrições de voz e respostas do agente por voz são efêmeras (exibidas apenas na aba Voice), sem persistir em `chat_messages`. O chat de texto é o histórico "oficial", contendo apenas mensagens digitadas e notificações de ações.
+
+### Action Log (Notificações de Ações)
+
+Quando uma tool executa uma ação importante (edição de imagem, publicação de post, criação de tarefa, geração de carrossel, criação de lembrete), o sistema emite uma notificação que:
+1. **Persiste** em `chat_messages` com `role="system"` (sobrevive reload).
+2. **Faz broadcast** via WebSocket (`action_log` event) para o frontend em tempo real.
+
+Isso funciona independente do canal de origem (voz, texto, WhatsApp, voice-live). O frontend renderiza notificações `system` como mensagens centralizadas e discretas no chat.
+
+**Módulos envolvidos:**
+- `src/events_broadcast.py`: `emit_action_log()` (async) e `emit_action_log_sync()` (para threads).
+- Tools: `image_editor`, `blog_publisher`, `carousel_generator`, `task_manager`, `scheduler_tool` — todas chamam `emit_action_log` após ações bem-sucedidas, passando o `channel` de origem.
+- Frontend: `useVoiceChat.ts` escuta `action_log` e insere como `role: "system"` na lista de mensagens.
+
+### Fluxo de Voz Efêmero
+
+No fluxo clássico, o hook `useVoiceChat` mantém um `voiceResponse` (estado local) para exibir a última resposta do agente na aba Voice. O backend (`web.py`) não salva em `chat_messages` quando `mode="voice"`. O fluxo Live (`useVoiceLive`) já era separado e continua assim.
+
 ## Dashboard Web e Real-time (`agenteteq-front`)
 
 A aplicação React separada evoluiu de uma simples interface de voz para um **Dashboard Completo**, permitindo interação multimodal (voz e texto), gerenciamento de tarefas/lembretes via interface e visualização de ações do agente em tempo real.

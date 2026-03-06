@@ -88,6 +88,8 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
             print(f"[WEB WS] Erro ao decodificar imagem base64: {e}")
 
     agent_images = []
+    save_to_chat = (mode == "text")
+
     if image_bytes_list:
         from agno.media import Image
         from src.tools.image_editor import store_session_images
@@ -103,17 +105,17 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
             
             valid_urls = [u for u in urls if not isinstance(u, Exception) and u]
             
-            display_text = user_text if user_text else ""
-            if valid_urls:
-                display_text += "\n" + "\n".join(valid_urls)
-            display_text = display_text.strip() or "[Imagens]"
-                
-            await asyncio.to_thread(save_message, phone_number, phone_number, "user", display_text)
+            if save_to_chat:
+                display_text = user_text if user_text else ""
+                if valid_urls:
+                    display_text += "\n" + "\n".join(valid_urls)
+                display_text = display_text.strip() or "[Imagens]"
+                await asyncio.to_thread(save_message, phone_number, phone_number, "user", display_text)
             
             await describe_and_store_images(phone_number, image_bytes_list, pre_uploaded_urls=urls)
 
         asyncio.create_task(handle_images_and_save_message())
-    else:
+    elif save_to_chat:
         display_text = user_text if user_text else "[Imagens]"
         asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "user", display_text))
     
@@ -221,7 +223,8 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
         "mime_type": mime_type,
         "needs_follow_up": follow_up,
     })
-    asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "agent", final_text))
+    if save_to_chat:
+        asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "agent", final_text))
     latency = int((time.time() - start_time) * 1000)
     log_event(user_id=phone_number, channel="web", event_type="message_sent", status="success", latency_ms=latency)
     await websocket.send_json({"type": "reminder_updated"})
@@ -407,7 +410,6 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                     )
                     log_agent_tools(phone_number, "web", agent)
                     response_content = extract_final_response(response)
-                    asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "user", "[Áudio]"))
                     asyncio.create_task(asyncio.to_thread(
                         extract_and_save_facts, phone_number, "Áudio do usuário", response_content
                     ))
@@ -416,7 +418,6 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
 
                     transcript = await transcriber.transcribe(audio_bytes, filename="audio.webm")
                     await websocket.send_json({"type": "transcript", "text": transcript})
-                    asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "user", transcript))
                     await websocket.send_json({"type": "status", "text": "Pensando..."})
 
                     if not new_session:
@@ -483,7 +484,6 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                     "mime_type": mime_type,
                     "needs_follow_up": follow_up,
                 })
-                asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "agent", response_content))
                 print(f"[WEB WS] Resposta enviada ao cliente: {phone_number}")
                 latency = int((time.time() - start_time) * 1000)
                 log_event(user_id=phone_number, channel="web", event_type="message_sent", status="success", latency_ms=latency)
