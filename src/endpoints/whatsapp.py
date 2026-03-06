@@ -166,7 +166,8 @@ def parse_webhook_payload(data: dict) -> list:
                     normalized_type = "audio"
                     base64_data = evo_data.get("base64", "") or msg_content.get("base64", "")
                     if not base64_data:
-                        base64_data = json.dumps({"message": msg_content})
+                        # getBase64FromMediaMessage exige key + message para identificar a mídia
+                        base64_data = json.dumps({"message": {"key": key, "message": msg_content}})
                     normalized_msg = {"audio": {"id": base64_data}}
                     
                 events.append({
@@ -316,7 +317,17 @@ async def process_audio_message(from_number: str, message_id: str, raw_msg: dict
     audio_id = raw_msg["audio"]["id"]
     print(f"[PROCESS] Baixando audio...")
     media_url = await whatsapp_client.get_media_url(audio_id)
-    audio_bytes = await whatsapp_client.download_media(media_url)
+    audio_bytes = await whatsapp_client.download_media(media_url) if media_url else b""
+
+    if not audio_bytes:
+        print(f"[PROCESS] Audio vazio ou falha no download para {from_number}. Abortando.")
+        if from_number not in ["16315551181", "16505551111"]:
+            await whatsapp_client.send_text_message(
+                from_number,
+                "Não consegui processar esse áudio 😕 Pode tentar enviar de novo? Se quiser, pode escrever também!",
+                reply_to_message_id=message_id,
+            )
+        return
     
     provider = os.getenv("LLM_PROVIDER", "openai").lower()
     
