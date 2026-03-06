@@ -106,7 +106,8 @@ def list_users(user: dict = Depends(require_admin)):
 
             if stripe_status:
                 # Tem assinatura Stripe: usa o status real dela, incluindo 'canceled'
-                eff_status = stripe_status
+                # 'trialing' via Stripe = trial pago (Pro), diferente do trial gratuito
+                eff_status = "pro_trial" if stripe_status == "trialing" else stripe_status
             elif trial_ends_at:
                 # Sem assinatura Stripe: verifica se o trial gratuito ainda é válido
                 if isinstance(trial_ends_at, str):
