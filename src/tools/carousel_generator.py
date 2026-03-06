@@ -72,6 +72,14 @@ async def _process_carousel_background(
                 upload_result = await loop.run_in_executor(None, _upload)
                 slide["image_url"] = upload_result.get("secure_url")
                 print(f"[CAROUSEL] Slide {index + 1} gerado: {slide['image_url']}")
+
+                await ws_manager.send_personal_message(user_id, {
+                    "type": "slide_done",
+                    "carousel_id": carousel_id,
+                    "slide_index": index,
+                    "total": len(slides),
+                })
+
                 return slide
 
         tasks = [_generate_and_upload(slide, i) for i, slide in enumerate(slides)]
