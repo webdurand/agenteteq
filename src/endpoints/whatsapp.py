@@ -3,7 +3,7 @@ import time
 import hashlib
 import json
 import asyncio
-from fastapi import APIRouter, Request, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Request, HTTPException, Query
 
 from src.integrations.whatsapp import whatsapp_client
 from src.integrations.transcriber import transcriber
@@ -40,14 +40,14 @@ def deduplicate(dedup_key: str) -> bool:
 message_buffer = {}
 BUFFER_TIMEOUT = 3.0
 
-async def flush_buffer(from_number: str, background_tasks: BackgroundTasks):
+async def flush_buffer(from_number: str):
     await asyncio.sleep(BUFFER_TIMEOUT)
     if from_number in message_buffer:
         data = message_buffer.pop(from_number)
         events = data.get("events", [])
         if events:
             aggregated = aggregate_events(events)
-            background_tasks.add_task(orchestrate_message, aggregated)
+            asyncio.create_task(orchestrate_message(aggregated))
 
 def aggregate_events(events: list) -> dict:
     base = events[0].copy()
@@ -101,7 +101,7 @@ def verify_webhook(
     raise HTTPException(status_code=403, detail="Token de verificação inválido")
 
 @router.post("/webhook/whatsapp")
-async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
+async def receive_webhook(request: Request):
     try:
         data = await request.json()
     except Exception as e:
@@ -134,12 +134,12 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                 
                 message_buffer[from_number] = {
                     "events": [event], 
-                    "timer": asyncio.create_task(flush_buffer(from_number, background_tasks))
+                    "timer": asyncio.create_task(flush_buffer(from_number))
                 }
             else:
                 message_buffer[from_number]["events"].append(event)
                 message_buffer[from_number]["timer"].cancel()
-                message_buffer[from_number]["timer"] = asyncio.create_task(flush_buffer(from_number, background_tasks))
+                message_buffer[from_number]["timer"] = asyncio.create_task(flush_buffer(from_number))
                 
     except Exception as e:
         print(f"[ERROR] Falha ao processar webhook payload: {e}")
