@@ -118,6 +118,7 @@ def get_billing_context(user_phone: str) -> BillingContext:
                         cancel_at_period_end=False,
                         plan_code="pro_mensal",
                         has_active_subscription=True,
+                        has_stripe_subscription=False,
                     )
             except Exception:
                 pass
@@ -127,13 +128,16 @@ def get_billing_context(user_phone: str) -> BillingContext:
             current_period_end=None,
             cancel_at_period_end=False,
             plan_code=None,
-            has_active_subscription=False
+            has_active_subscription=False,
+            has_stripe_subscription=False
         )
         
-    def parse_dt(dt_str):
-        if not dt_str:
+    def parse_dt(dt_val):
+        if not dt_val:
             return None
-        return datetime.fromisoformat(dt_str)
+        if isinstance(dt_val, datetime):
+            return dt_val if dt_val.tzinfo else dt_val.replace(tzinfo=timezone.utc)
+        return datetime.fromisoformat(str(dt_val))
         
     status = SubscriptionStatus(sub["status"])
     return BillingContext(
@@ -142,7 +146,8 @@ def get_billing_context(user_phone: str) -> BillingContext:
         current_period_end=parse_dt(sub["current_period_end"]),
         cancel_at_period_end=sub["cancel_at_period_end"],
         plan_code=sub["plan_code"],
-        has_active_subscription=(status in [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING, SubscriptionStatus.PAST_DUE])
+        has_active_subscription=(status in [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING, SubscriptionStatus.PAST_DUE]),
+        has_stripe_subscription=True
     )
 
 

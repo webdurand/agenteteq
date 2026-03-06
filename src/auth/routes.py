@@ -270,6 +270,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         "trial_end": ctx.trial_end.isoformat() if ctx.trial_end else None,
         "current_period_end": ctx.current_period_end.isoformat() if ctx.current_period_end else None,
         "cancel_at_period_end": ctx.cancel_at_period_end,
-        "plan_code": ctx.plan_code
+        "plan_code": ctx.plan_code,
+        "has_stripe_subscription": ctx.has_stripe_subscription
     }
     return safe_user

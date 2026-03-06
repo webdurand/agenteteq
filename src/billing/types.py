@@ -20,3 +20,4 @@ class BillingContext:
     cancel_at_period_end: bool
     plan_code: Optional[str]
     has_active_subscription: bool
+    has_stripe_subscription: bool = False

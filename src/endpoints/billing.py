@@ -17,6 +17,7 @@ from src.integrations.stripe import (
     cancel_subscription,
     construct_webhook_event
 )
+from src.models.subscriptions import upsert_subscription
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -56,7 +57,29 @@ def subscribe(req: SubscribeRequest, user: dict = Depends(get_current_user)):
             
         if not client_secret:
             raise HTTPException(status_code=500, detail="Failed to generate client secret")
-            
+
+        # Salva imediatamente no banco local (não depender só do webhook)
+        from datetime import datetime, timezone
+        def ts_to_iso(ts):
+            return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else None
+
+        try:
+            upsert_subscription({
+                "user_id": user["phone_number"],
+                "plan_code": active_plan["code"] if active_plan else "pro_mensal",
+                "provider": "stripe",
+                "provider_customer_id": customer_id,
+                "provider_subscription_id": subscription["id"],
+                "status": subscription["status"],
+                "trial_start": ts_to_iso(subscription.get("trial_start")),
+                "trial_end": ts_to_iso(subscription.get("trial_end")),
+                "current_period_start": ts_to_iso(subscription.get("current_period_start")),
+                "current_period_end": ts_to_iso(subscription.get("current_period_end")),
+                "cancel_at_period_end": subscription.get("cancel_at_period_end", False),
+            })
+        except Exception:
+            pass  # Não bloquear — webhook vai sincronizar depois
+
         return {
             "subscription_id": subscription["id"],
             "client_secret": client_secret,
