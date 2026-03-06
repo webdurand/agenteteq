@@ -133,6 +133,15 @@ Qualquer erro originado de chamadas à API no frontend (como retorno de status 4
 - O contexto de Toast provê a função `showToast(message: string, type: 'success' | 'error' | 'info')`.
 - O cliente da API (`src/lib/api.ts`) extrai e lança a mensagem enviada pelo backend no campo `detail`, a qual deve ser passada diretamente para o `showToast(e.message, "error")`.
 
+## Pós-processamento de Respostas (`src/agent/response_utils.py`)
+
+Quando o Agno Agent faz múltiplas iterações de tool-calling (ex: tool falha, modelo corrige parâmetros e retenta), o `response.content` acumula todo texto intermediário gerado pelo LLM em cada iteração. Para evitar que o usuário receba narração de erros e retries, o sistema aplica duas camadas de tratamento:
+
+- **`extract_final_response(response)`**: Percorre `response.messages` de trás pra frente e extrai apenas o conteúdo da última mensagem `assistant` (sem tool_calls), descartando texto intermediário.
+- **`split_whatsapp_messages(text, max_length)`**: Divide respostas longas em blocos por parágrafo para envio em múltiplas mensagens no WhatsApp.
+
+Aplicado em: `whatsapp.py`, `web.py` e `dispatcher.py`.
+
 ## Personalidade do Agente (Teq)
 
 O agente tem tom descontraído e informal, como um amigo próximo e inteligente. As instruções de personalidade estão em `src/agent/assistant.py` no parâmetro `instructions[]` do `Agent`. Principais características:

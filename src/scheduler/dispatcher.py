@@ -51,11 +51,13 @@ def dispatch_proactive_message(reminder_id: int):
                 create_deep_research_tool(None, user_phone),
             ]
             
+            from src.agent.response_utils import extract_final_response
+
             agent = get_assistant(session_id=user_phone, extra_tools=search_tools)
             response = agent.run(task_instructions, knowledge_filters={"user_id": user_phone})
             
             if response and response.content:
-                response_content = response.content
+                response_content = extract_final_response(response)
             else:
                 print(f"[DISPATCHER] Agente retornou resposta vazia para {user_phone}.")
                 return

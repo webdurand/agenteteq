@@ -9,6 +9,7 @@ from src.integrations.whatsapp import whatsapp_client
 from src.integrations.transcriber import transcriber
 from src.integrations.status_notifier import StatusNotifier
 from src.agent.assistant import get_assistant
+from src.agent.response_utils import extract_final_response, split_whatsapp_messages
 from src.memory.identity import get_user, create_user, update_user_name, update_last_seen, is_new_session
 from src.memory.knowledge import get_vector_db
 from src.memory.extractor import extract_and_save_facts
@@ -345,7 +346,8 @@ async def process_audio_message(from_number: str, message_id: str, raw_msg: dict
             base_prompt = injection + " " + base_prompt
         print(f"[PROCESS] Enviando audio multimodal para Gemini")
         response = agent.run(base_prompt, audio=[Audio(content=audio_bytes)], knowledge_filters={"user_id": from_number})
-        asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, "Audio do usuario", response.content))
+        final_text = extract_final_response(response)
+        asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, "Audio do usuario", final_text))
     else:
         print(f"[PROCESS] Transcrevendo audio com: {provider}")
         transcription = await transcriber.transcribe(audio_bytes)
@@ -356,11 +358,15 @@ async def process_audio_message(from_number: str, message_id: str, raw_msg: dict
             prompt = injection + "\n\n" + prompt
         response = agent.run(prompt, knowledge_filters={"user_id": from_number})
         log_agent_tools(from_number, "whatsapp", agent)
-        asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, transcription, response.content))
+        final_text = extract_final_response(response)
+        asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, transcription, final_text))
     
     if from_number not in ["16315551181", "16505551111"]:
         print(f"[OUT] Enviando resposta para {from_number}")
-        await whatsapp_client.send_text_message(from_number, response.content, reply_to_message_id=message_id)
+        parts = split_whatsapp_messages(final_text)
+        for i, part in enumerate(parts):
+            reply_id = message_id if i == 0 else None
+            await whatsapp_client.send_text_message(from_number, part, reply_to_message_id=reply_id)
         latency = int((time.time() - start_time) * 1000)
         log_event(user_id=from_number, channel="whatsapp", event_type="message_sent", status="success", latency_ms=latency)
 
@@ -414,10 +420,14 @@ async def process_text_message(from_number: str, message_id: str, raw_msg: dict,
     
     response = agent.run(text_body, knowledge_filters={"user_id": from_number})
     log_agent_tools(from_number, "whatsapp", agent)
-    asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, text_body, response.content))
+    final_text = extract_final_response(response)
+    asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, text_body, final_text))
     
     if from_number not in ["16315551181", "16505551111"]:
         print(f"[OUT] Enviando resposta para {from_number}")
-        await whatsapp_client.send_text_message(from_number, response.content, reply_to_message_id=message_id)
+        parts = split_whatsapp_messages(final_text)
+        for i, part in enumerate(parts):
+            reply_id = message_id if i == 0 else None
+            await whatsapp_client.send_text_message(from_number, part, reply_to_message_id=reply_id)
         latency = int((time.time() - start_time) * 1000)
         log_event(user_id=from_number, channel="whatsapp", event_type="message_sent", status="success", latency_ms=latency)

@@ -10,6 +10,7 @@ def split_into_sentences(text: str) -> list[str]:
     return [s.strip() for s in sentences if s.strip()]
 
 from src.agent.assistant import get_assistant
+from src.agent.response_utils import extract_final_response
 from src.integrations.tts import get_tts
 from src.memory.identity import get_user, update_user_name, update_last_seen, is_new_session, is_plan_active
 from src.memory.extractor import extract_and_save_facts
@@ -130,15 +131,16 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
         agent.run, prompt, knowledge_filters={"user_id": phone_number}
     )
     log_agent_tools(phone_number, "web", agent)
+    final_text = extract_final_response(response)
 
     await asyncio.sleep(0)
 
     asyncio.create_task(asyncio.to_thread(
-        extract_and_save_facts, phone_number, user_text, response.content
+        extract_and_save_facts, phone_number, user_text, final_text
     ))
 
     update_last_seen(phone_number)
-    print(f"[WEB WS] Resposta ({len(response.content)} chars): {response.content[:80]}...")
+    print(f"[WEB WS] Resposta ({len(final_text)} chars): {final_text[:80]}...")
 
     audio_b64 = ""
     mime_type = "none"
@@ -146,7 +148,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     if mode != "text":
         await websocket.send_json({"type": "status", "text": "Gerando áudio..."})
         try:
-            audio_out, mime_type = await tts.synthesize(response.content)
+            audio_out, mime_type = await tts.synthesize(final_text)
             print(f"[WEB WS] TTS: {len(audio_out)} bytes | {mime_type}")
             audio_b64 = base64.b64encode(audio_out).decode() if audio_out else ""
         except Exception as e:
@@ -155,12 +157,12 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
 
     await asyncio.sleep(0)
 
-    follow_up = _needs_follow_up(response.content)
+    follow_up = _needs_follow_up(final_text)
     print(f"[WEB WS] needs_follow_up={follow_up}")
 
     await websocket.send_json({
         "type": "response",
-        "text": response.content,
+        "text": final_text,
         "audio_b64": audio_b64,
         "mime_type": mime_type,
         "needs_follow_up": follow_up,
@@ -348,10 +350,10 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                         knowledge_filters={"user_id": phone_number},
                     )
                     log_agent_tools(phone_number, "web", agent)
+                    response_content = extract_final_response(response)
                     asyncio.create_task(asyncio.to_thread(
-                        extract_and_save_facts, phone_number, "Áudio do usuário", response.content
+                        extract_and_save_facts, phone_number, "Áudio do usuário", response_content
                     ))
-                    response_content = response.content
                 else:
                     from src.integrations.transcriber import transcriber
 
@@ -393,10 +395,10 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                         knowledge_filters={"user_id": phone_number},
                     )
                     log_agent_tools(phone_number, "web", agent)
+                    response_content = extract_final_response(response)
                     asyncio.create_task(asyncio.to_thread(
-                        extract_and_save_facts, phone_number, transcript, response.content
+                        extract_and_save_facts, phone_number, transcript, response_content
                     ))
-                    response_content = response.content
 
                 update_last_seen(phone_number)
 
