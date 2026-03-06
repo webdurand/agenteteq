@@ -162,6 +162,13 @@ def parse_webhook_payload(data: dict) -> list:
                 if msg_type in ["conversation", "extendedTextMessage"]:
                     normalized_type = "text"
                     normalized_msg = {"text": {"body": content_str}}
+                    
+                    # Extrair mensagem citada (se houver)
+                    quoted_msg = msg_content.get("extendedTextMessage", {}).get("contextInfo", {}).get("quotedMessage", {})
+                    if quoted_msg:
+                        quoted_text = quoted_msg.get("conversation", "") or quoted_msg.get("extendedTextMessage", {}).get("text", "")
+                        if quoted_text:
+                            normalized_msg["quoted_text"] = quoted_text
                 elif msg_type == "audioMessage":
                     normalized_type = "audio"
                     base64_data = evo_data.get("base64", "") or msg_content.get("base64", "")
@@ -361,6 +368,11 @@ async def process_text_message(from_number: str, message_id: str, raw_msg: dict,
     start_time = time.time()
     log_event(user_id=from_number, channel="whatsapp", event_type="message_received", status="success")
     text_body = raw_msg["text"]["body"]
+    
+    quoted = raw_msg.get("quoted_text")
+    if quoted:
+        text_body = f'[Mensagem citada pelo usuario: "{quoted}"]\n\n{text_body}'
+        
     print(f"[PROCESS] Texto recebido: {text_body[:50]}...")
 
     # Atalho deterministico para pedidos diretos de lembrete rapido (ex: "me avisa daqui 5 min").
