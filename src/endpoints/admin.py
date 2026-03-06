@@ -38,7 +38,9 @@ def get_business_summary(user: dict = Depends(require_admin)):
 def list_users(user: dict = Depends(require_admin)):
     try:
         users = []
-        query = """
+
+        # Pega a assinatura mais recente de cada usuário (qualquer status)
+        pg_query = """
             SELECT 
                 u.phone_number, 
                 u.name, 
@@ -51,30 +53,62 @@ def list_users(user: dict = Depends(require_admin)):
                 s.plan_code,
                 s.current_period_end
             FROM users u
-            LEFT JOIN subscriptions s ON u.phone_number = s.user_id 
-                 AND s.status IN ('active', 'trialing', 'past_due')
+            LEFT JOIN LATERAL (
+                SELECT status, plan_code, current_period_end
+                FROM subscriptions
+                WHERE user_id = u.phone_number
+                ORDER BY updated_at DESC NULLS LAST
+                LIMIT 1
+            ) s ON true
+            ORDER BY u.trial_started_at DESC NULLS LAST
+        """
+
+        sqlite_query = """
+            SELECT 
+                u.phone_number, 
+                u.name, 
+                u.email, 
+                u.role, 
+                u.last_seen_at,
+                u.trial_started_at,
+                u.trial_ends_at,
+                s.status,
+                s.plan_code,
+                s.current_period_end
+            FROM users u
+            LEFT JOIN (
+                SELECT s1.user_id, s1.status, s1.plan_code, s1.current_period_end
+                FROM subscriptions s1
+                INNER JOIN (
+                    SELECT user_id, MAX(updated_at) AS max_updated
+                    FROM subscriptions
+                    GROUP BY user_id
+                ) latest ON s1.user_id = latest.user_id AND s1.updated_at = latest.max_updated
+            ) s ON u.phone_number = s.user_id
             ORDER BY u.trial_started_at DESC
         """
+
         if _use_postgres():
             engine = _get_pg_engine()
             with engine.connect() as conn:
-                rows = conn.execute(__import__("sqlalchemy").text(query)).fetchall()
+                rows = conn.execute(__import__("sqlalchemy").text(pg_query)).fetchall()
         else:
             conn = _get_sqlite_conn()
-            rows = conn.execute(query).fetchall()
+            rows = conn.execute(sqlite_query).fetchall()
             conn.close()
             
         import datetime as dt_module
         now_utc = dt_module.datetime.now(dt_module.timezone.utc)
 
         for row in rows:
-            stripe_status = row[7]  # status da assinatura Stripe (pode ser None)
+            stripe_status = row[7]  # status da assinatura mais recente (pode ser None)
             trial_ends_at = row[6]
 
             if stripe_status:
+                # Tem assinatura Stripe: usa o status real dela, incluindo 'canceled'
                 eff_status = stripe_status
             elif trial_ends_at:
-                # Normaliza para datetime aware para comparação
+                # Sem assinatura Stripe: verifica se o trial gratuito ainda é válido
                 if isinstance(trial_ends_at, str):
                     try:
                         trial_dt = dt_module.datetime.fromisoformat(trial_ends_at)
