@@ -17,21 +17,64 @@ if os.getenv("CLOUDINARY_CLOUD_NAME"):
         secure=True
     )
 
-# Cache de imagens recentes por sessão para que a tool consiga acessar
-# os bytes das imagens enviadas pelo usuário na mesma requisição.
-_session_images: dict[str, list[bytes]] = {}
+# Armazena imagens por sessão. Estrutura:
+# { session_id: { "originals": [bytes, ...], "last_generated": bytes | None } }
+_session_data: dict[str, dict] = {}
 
 
 def store_session_images(session_id: str, images: list[bytes]):
-    _session_images[session_id] = images
+    """Armazena imagens enviadas pelo usuário (originais)."""
+    if session_id not in _session_data:
+        _session_data[session_id] = {"originals": [], "last_generated": None}
+    _session_data[session_id]["originals"] = images
 
 
-def get_session_images(session_id: str) -> list[bytes]:
-    return _session_images.get(session_id, [])
+def store_generated_image(session_id: str, image_bytes: bytes):
+    """Armazena a última imagem gerada/editada."""
+    if session_id not in _session_data:
+        _session_data[session_id] = {"originals": [], "last_generated": None}
+    _session_data[session_id]["last_generated"] = image_bytes
+
+
+def get_session_images(session_id: str) -> dict:
+    return _session_data.get(session_id, {"originals": [], "last_generated": None})
 
 
 def clear_session_images(session_id: str):
-    _session_images.pop(session_id, None)
+    _session_data.pop(session_id, None)
+
+
+def _try_recover_last_image(user_id: str) -> bytes | None:
+    """
+    Fallback: busca a última imagem gerada/editada no histórico de chat
+    e baixa do Cloudinary para permitir edições encadeadas.
+    """
+    try:
+        import re
+        import httpx
+        from src.models.chat_messages import get_messages
+
+        result = get_messages(user_id=user_id, limit=10)
+        msgs = result.get("messages", [])
+
+        for msg in reversed(msgs):
+            if msg.get("role") != "agent":
+                continue
+            text = msg.get("text", "")
+            urls = re.findall(r'https?://res\.cloudinary\.com/\S+', text)
+            if not urls:
+                urls = re.findall(r'https?://[^\s]+\.(?:jpg|jpeg|png|webp)', text)
+            if urls:
+                url = urls[-1]
+                print(f"[IMAGE_EDITOR] Recuperando última imagem do histórico: {url}")
+                resp = httpx.get(url, timeout=15)
+                if resp.status_code == 200:
+                    return resp.content
+
+    except Exception as e:
+        print(f"[IMAGE_EDITOR] Falha ao recuperar imagem do histórico: {e}")
+
+    return None
 
 
 async def _process_edit_background(
@@ -51,6 +94,8 @@ async def _process_edit_background(
         })
 
         result_bytes = await provider.edit(edit_prompt, reference_bytes, aspect_ratio=aspect_ratio)
+
+        store_generated_image(user_id, result_bytes)
 
         loop = asyncio.get_event_loop()
 
@@ -123,47 +168,71 @@ def create_image_editor_tools(user_id: str, channel: str = "web"):
 
     def edit_image_tool(
         edit_instructions: str,
-        image_index: int = 0,
+        source: str = "auto",
         format: str = "1:1",
     ) -> str:
         """
-        Edita ou transforma uma imagem que o usuário acabou de enviar.
+        Edita ou transforma uma imagem que o usuário enviou ou que foi gerada recentemente.
         A imagem é processada em background e o resultado é enviado ao usuário.
 
-        Use esta tool quando o usuário enviar uma imagem e pedir para:
-        - Modificar algo na imagem (adicionar/remover objetos, mudar fundo, etc.)
-        - Transformar o estilo (cartoon, pintura, minimalista, etc.)
-        - Gerar uma nova versão baseada na imagem original
-        - Ajustar cores, iluminação ou composição
+        Use esta tool quando o usuário:
+        - Enviar uma imagem e pedir para modificar (adicionar/remover objetos, mudar fundo, etc.)
+        - Pedir para transformar o estilo (cartoon, pintura, minimalista, hiper-realista, etc.)
+        - Pedir ajustes na última imagem gerada ("faz mais realista", "muda o fundo", etc.)
+        - Gerar uma nova versão baseada numa imagem anterior
 
         Args:
             edit_instructions: Instrução detalhada do que fazer com a imagem.
+                               SEJA ESPECÍFICO e inclua TODAS as modificações desejadas.
                                Ex: "Adicione um dragão voando ao fundo desta cena"
                                Ex: "Transforme esta foto em estilo aquarela"
-                               Ex: "Remova o fundo e substitua por uma praia tropical"
-            image_index: Índice da imagem a editar (0 = primeira imagem enviada).
-                         Use 0 se o usuário enviou apenas uma imagem.
+                               Ex: "Recrie a pessoa desta foto como um mago de D&D, fotorrealista, qualidade 8K"
+            source: Qual imagem usar como referência:
+                    - "original": Usa a foto ORIGINAL enviada pelo usuário.
+                      PREFIRA ESTA OPÇÃO quando o pedido envolve mudança de estilo radical
+                      (ex: "faz mais realista", "muda o estilo", "parece um desenho, quero foto real").
+                      A foto original do usuário é sempre a melhor base para recriar em outro estilo.
+                    - "last_generated": Usa a ÚLTIMA imagem gerada/editada.
+                      Use quando o pedido é um ajuste incremental na imagem já gerada
+                      (ex: "muda o fundo", "adiciona um chapéu", "tira a barba").
+                    - "auto" (padrão): Escolhe automaticamente. Se houver foto original E o pedido
+                      parecer uma recriação de estilo, usa a original. Senão, usa a última gerada.
             format: Formato/dimensão da imagem de saída.
                     Exemplos: "1:1" (quadrado), "4:3" (landscape), "9:16" (stories), "16:9" (widescreen).
-                    Se o usuário não especificar, mantenha o padrão "1:1".
 
         Returns:
             Mensagem de confirmação. A imagem editada será enviada automaticamente.
         """
-        images = get_session_images(user_id)
-        if not images:
+        session = get_session_images(user_id)
+        originals = session["originals"]
+        last_gen = session["last_generated"]
+
+        if not originals and not last_gen:
+            recovered = _try_recover_last_image(user_id)
+            if recovered:
+                store_generated_image(user_id, recovered)
+                last_gen = recovered
+
+        if not originals and not last_gen:
             return (
                 "Não encontrei nenhuma imagem na conversa atual. "
                 "O usuário precisa enviar uma imagem junto com o pedido de edição."
             )
 
-        if image_index < 0 or image_index >= len(images):
-            return f"Índice de imagem inválido. O usuário enviou {len(images)} imagem(ns) (índices 0 a {len(images) - 1})."
+        if source == "original":
+            reference_bytes = originals[0] if originals else last_gen
+        elif source == "last_generated":
+            reference_bytes = last_gen if last_gen else (originals[0] if originals else None)
+        else:
+            reference_bytes = originals[0] if originals else last_gen
 
-        reference_bytes = images[image_index]
+        if not reference_bytes:
+            return "Não encontrei a imagem de referência solicitada."
+
+        source_label = "original" if reference_bytes == (originals[0] if originals else None) else "última gerada"
         aspect_ratio = resolve_aspect_ratio(format)
 
-        print(f"[IMAGE_EDITOR] edit_image_tool | user={user_id} | channel={channel} | format={format} ({aspect_ratio}) | prompt='{edit_instructions[:60]}'")
+        print(f"[IMAGE_EDITOR] edit_image_tool | user={user_id} | channel={channel} | source={source} ({source_label}) | format={format} ({aspect_ratio}) | prompt='{edit_instructions[:80]}'")
 
         from src.events import _main_loop
         if _main_loop and _main_loop.is_running():
@@ -176,7 +245,7 @@ def create_image_editor_tools(user_id: str, channel: str = "web"):
             return "Erro interno: não foi possível iniciar a edição da imagem."
 
         return (
-            f"Edição de imagem iniciada! Estou processando sua solicitação: \"{edit_instructions[:80]}\". "
+            f"Edição de imagem iniciada (ref: {source_label})! Processando: \"{edit_instructions[:80]}\". "
             "A imagem editada será enviada automaticamente quando ficar pronta — geralmente leva menos de 1 minuto."
         )
 

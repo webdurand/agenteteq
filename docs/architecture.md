@@ -288,10 +288,13 @@ As preferências são controladas pelo usuário via conversa e armazenadas na me
 Permite ao agente gerar múltiplos slides em paralelo para o Instagram, utilizando o modelo Gemini (Nano Banana Pro) e hospedando no Cloudinary.
 
 ### Fluxo de Geração
-1. O usuário solicita a geração de um carrossel fornecendo assunto, slides e referências.
+1. O usuário solicita a geração de um carrossel fornecendo assunto, slides e (opcionalmente) uma imagem de referência.
 2. O agente aciona a tool `generate_carousel_tool` (em `src/tools/carousel_generator.py`).
+   - Se o usuário enviou uma imagem junto com o pedido, o agente passa `use_reference_image=True`.
 3. A tool grava um registro na tabela `carousels` do PostgreSQL (estado `generating`) e inicia uma rotina em background (`asyncio.create_task`), liberando o agente para responder imediatamente que o processamento foi iniciado.
 4. Em background, as imagens são geradas em paralelo usando a interface `ImageProvider` (`src/tools/image_generation/base.py`).
+   - **Com referência**: cada slide usa `provider.edit(prompt, reference_bytes)` — o Gemini recebe a foto como contexto visual e gera o slide baseado nela.
+   - **Sem referência**: cada slide usa `provider.generate(prompt)` — geração puramente textual.
 5. O provider padrão é o `NanoBananaProvider`, que encapsula o uso da API do Gemini (`gemini-3-pro-image-preview`).
 6. Cada imagem gerada (em bytes) é enviada via upload para o **Cloudinary** (usado pelo seu plano gratuito generoso com CDN global).
 7. O banco de dados é atualizado com o status `done` e as URLs finais das imagens geradas.

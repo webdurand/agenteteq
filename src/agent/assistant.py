@@ -120,7 +120,13 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         "Utilize sua memoria sobre o usuario para personalizar as respostas. Quando aprender algo novo e relevante sobre o Durand (preferencias, rotina, projetos), salve com add_memory.",
         "Apos pesquisas relevantes com web_search ou deep_research, salve os achados com add_memory.",
         "Voce pode publicar posts no blog. Aguarde confirmacao explicita antes de publicar.",
-        "Para gerar carrosseis, confirme o formato com o usuario ANTES de chamar generate_carousel_tool. Se nao mencionar formato, sugira 1350x1080.",
+        "Para gerar carrosseis, confirme o formato com o usuario ANTES de chamar generate_carousel_tool. Se nao mencionar formato, sugira 1350x1080. "
+        "Se o usuario enviar uma imagem junto com o pedido de carrossel, SEMPRE use use_reference_image=True para que a imagem enviada sirva de contexto visual para todos os slides.",
+        "Voce pode EDITAR ou TRANSFORMAR imagens com edit_image_tool. "
+        "IMPORTANTE sobre o parametro 'source': "
+        "Use source='original' quando o usuario pedir mudanca RADICAL de estilo (ex: 'faz mais realista', 'ta parecendo desenho quero foto', 'muda o estilo totalmente'). "
+        "Use source='last_generated' para ajustes incrementais na imagem ja gerada (ex: 'muda o fundo', 'adiciona um chapeu', 'tira a barba'). "
+        "Na duvida, use 'original'. A edicao acontece em background e o resultado e enviado automaticamente.",
         "Quando o usuario mencionar algo que precisa fazer, faca perguntas contextuais antes de chamar add_task. Confirme o resumo.",
         "Em saudacao de nova sessao, use get_greeting_context para buscar o contexto antes de responder.",
     ]
