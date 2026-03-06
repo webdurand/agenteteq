@@ -60,6 +60,22 @@ def _init_pg():
                 stripe_customer_id TEXT
             )
         """))
+        
+        conn.execute(__import__("sqlalchemy").text("""
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id          BIGSERIAL PRIMARY KEY,
+                user_id     TEXT NOT NULL REFERENCES users(phone_number),
+                session_id  TEXT NOT NULL,
+                role        TEXT NOT NULL CHECK (role IN ('user', 'agent')),
+                text        TEXT NOT NULL,
+                created_at  TIMESTAMPTZ DEFAULT now()
+            )
+        """))
+        conn.execute(__import__("sqlalchemy").text("""
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_user_created
+                ON chat_messages (user_id, created_at DESC)
+        """))
+
         # Adiciona colunas se ja existir a tabela sem ela (migracao segura)
         for col in [
             "last_seen_at TIMESTAMPTZ",
@@ -112,6 +128,23 @@ def _init_sqlite():
             stripe_customer_id TEXT
         )
     """)
+    
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     TEXT NOT NULL,
+            session_id  TEXT NOT NULL,
+            role        TEXT NOT NULL CHECK (role IN ('user', 'agent')),
+            text        TEXT NOT NULL,
+            created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(phone_number)
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_user_created
+            ON chat_messages (user_id, created_at DESC)
+    """)
+
     # Adiciona colunas se ja existir a tabela sem ela (migracao segura)
     for col in [
         "last_seen_at TEXT",

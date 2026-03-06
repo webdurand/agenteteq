@@ -1,7 +1,7 @@
 import asyncio
 import io
 import os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from src.models.carousel import create_carousel, update_carousel_status
 from src.tools.image_generation import get_image_provider
 from src.events import emit_event_sync
@@ -17,10 +17,15 @@ if os.getenv("CLOUDINARY_CLOUD_NAME"):
     )
 
 
-async def _process_carousel_background(carousel_id: str, user_id: str, slides: List[Dict[str, Any]]):
+async def _process_carousel_background(
+    carousel_id: str,
+    user_id: str,
+    slides: List[Dict[str, Any]],
+    channel: str = "web"
+):
     """
-    Função assíncrona rodada no event loop principal para gerar imagens em paralelo,
-    fazer upload no Cloudinary e notificar via WebSocket.
+    Gera imagens em paralelo, faz upload no Cloudinary e notifica o usuário
+    pelo canal de origem (web via WS ou whatsapp via API).
     """
     try:
         provider = get_image_provider()
@@ -53,7 +58,12 @@ async def _process_carousel_background(carousel_id: str, user_id: str, slides: L
 
         update_carousel_status(carousel_id, "done", list(updated_slides))
         print(f"[CAROUSEL] Carrossel {carousel_id} finalizado com sucesso.")
+
+        # Notifica o frontend via WS (sempre, para atualizar o painel)
         emit_event_sync(user_id, "carousel_generated")
+
+        # Envia de volta pelo canal de origem
+        await _notify_user(user_id, channel, list(updated_slides))
 
     except Exception as e:
         import traceback
@@ -62,9 +72,48 @@ async def _process_carousel_background(carousel_id: str, user_id: str, slides: L
         emit_event_sync(user_id, "carousel_generated")
 
 
-def create_carousel_tools(user_id: str):
+async def _notify_user(user_id: str, channel: str, slides: List[Dict[str, Any]]):
+    """Envia o resultado pelo canal correto após a geração."""
+
+    done_slides = [s for s in slides if s.get("image_url")]
+    if not done_slides:
+        return
+
+    if channel in ("whatsapp_text", "whatsapp"):
+        _notify_whatsapp(user_id, done_slides)
+
+    elif channel in ("web", "web_voice", "web_text"):
+        from src.endpoints.web import ws_manager
+        await ws_manager.send_personal_message(user_id, {
+            "type": "carousel_ready",
+            "slides": done_slides,
+        })
+
+
+def _notify_whatsapp(user_id: str, slides: List[Dict[str, Any]]):
+    """Envia as imagens geradas para o WhatsApp do usuário."""
+    try:
+        from src.integrations.whatsapp import whatsapp_client
+
+        total = len(slides)
+        header = f"✅ Seu carrossel ficou pronto! ({total} slides)\n\n"
+        lines = []
+        for i, slide in enumerate(slides):
+            num = slide.get("slide_number") or (i + 1)
+            style = slide.get("style", "")
+            url = slide.get("image_url", "")
+            lines.append(f"*Slide {num}* — {style}\n{url}")
+
+        full_msg = header + "\n\n".join(lines)
+        asyncio.run(whatsapp_client.send_text_message(user_id, full_msg))
+        print(f"[CAROUSEL] Resultado enviado via WhatsApp para {user_id}")
+    except Exception as e:
+        print(f"[CAROUSEL] Erro ao enviar resultado via WhatsApp: {e}")
+
+
+def create_carousel_tools(user_id: str, channel: str = "web"):
     """
-    Factory que cria as tools de carrossel com o user_id pre-injetado.
+    Factory que cria as tools de carrossel com user_id e canal de origem pre-injetados.
     """
 
     def generate_carousel_tool(
@@ -74,7 +123,8 @@ def create_carousel_tools(user_id: str):
     ) -> str:
         """
         Inicia a geração de um carrossel para o Instagram.
-        Gera as imagens em background e notifica o usuário ao terminar.
+        Gera as imagens em background e notifica o usuário ao terminar,
+        pelo mesmo canal em que o pedido foi feito (web ou whatsapp).
 
         Args:
             title: Título do carrossel.
@@ -87,31 +137,25 @@ def create_carousel_tools(user_id: str):
         Returns:
             Mensagem de confirmação imediata.
         """
-        print(f"[CAROUSEL] generate_carousel_tool | user={user_id} | title='{title}' | slides={len(slides)}")
+        print(f"[CAROUSEL] generate_carousel_tool | user={user_id} | channel={channel} | title='{title}' | slides={len(slides)}")
 
         try:
             carousel_id = create_carousel(user_id, title, slides, reference_images)
             print(f"[CAROUSEL] Registro criado no banco: {carousel_id}")
 
-            # Como a tool roda em thread (asyncio.to_thread), precisamos usar o loop
-            # principal do servidor para agendar a corrotina de background.
             from src.events import _main_loop
             if _main_loop and _main_loop.is_running():
                 asyncio.run_coroutine_threadsafe(
-                    _process_carousel_background(carousel_id, user_id, list(slides)),
+                    _process_carousel_background(carousel_id, user_id, list(slides), channel),
                     _main_loop
                 )
             else:
-                print("[CAROUSEL] AVISO: loop principal não disponível, tentando fallback.")
-                loop = asyncio.new_event_loop()
-                loop.run_until_complete(
-                    _process_carousel_background(carousel_id, user_id, list(slides))
-                )
+                print("[CAROUSEL] AVISO: loop principal não disponível.")
 
+            canal_label = "WhatsApp" if "whatsapp" in channel else "painel de Imagens na web"
             return (
                 f"Carrossel '{title}' com {len(slides)} slides iniciado! "
-                "As imagens estão sendo geradas agora em paralelo. "
-                "Avise o usuário que o painel de Imagens na web será atualizado automaticamente assim que ficarem prontas — "
+                f"As imagens estão sendo geradas agora em paralelo e serão enviadas para você no {canal_label} assim que ficarem prontas — "
                 "geralmente leva entre 1 a 3 minutos."
             )
         except Exception as e:

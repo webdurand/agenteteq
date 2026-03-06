@@ -19,6 +19,7 @@ from src.tools.web_search import create_web_search_tool, create_fetch_page_tool
 from src.tools.deep_research import create_deep_research_tool
 from src.auth.jwt import decode_token
 from src.memory.analytics import log_event, log_agent_tools
+from src.models.chat_messages import save_message
 import time
 
 router = APIRouter()

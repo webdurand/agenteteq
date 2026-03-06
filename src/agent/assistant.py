@@ -43,7 +43,7 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         from src.tools.scheduler_tool import create_scheduler_tools
         schedule_message, list_schedules, cancel_schedule = create_scheduler_tools(session_id)
         from src.tools.carousel_generator import create_carousel_tools
-        generate_carousel, list_carousels = create_carousel_tools(session_id)
+        generate_carousel, list_carousels = create_carousel_tools(session_id, channel=channel)
         tools = [
             *publish_post_tools,
             add_memory, delete_memory, list_memories,
