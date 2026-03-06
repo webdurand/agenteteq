@@ -115,13 +115,13 @@ def reconcile_reminders():
                 
                 run_dt = None
                 if run_date_str:
-                    run_dt = datetime.fromisoformat(run_date_str)
+                    run_dt = datetime.fromisoformat(run_date_str) if isinstance(run_date_str, str) else run_date_str
                     if run_dt.tzinfo is None:
                         run_dt = run_dt.replace(tzinfo=user_tz)
                 elif minutes_from_now is not None:
                     created_at_str = r.get("created_at")
                     if created_at_str:
-                        created_at = datetime.fromisoformat(created_at_str)
+                        created_at = datetime.fromisoformat(created_at_str) if isinstance(created_at_str, str) else created_at_str
                         if created_at.tzinfo is None:
                             created_at = created_at.replace(tzinfo=timezone.utc)
                         run_dt = created_at + timedelta(minutes=minutes_from_now)

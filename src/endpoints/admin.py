@@ -337,3 +337,159 @@ def get_system_metrics(days: int = 7, user: dict = Depends(require_admin)):
         metrics["user_usage"] = [{"user_id": r[0], "generates": r[1]} for r in rows]
         
     return metrics
+
+@router.get("/business/analytics")
+def get_business_analytics(days: int = 30, user: dict = Depends(require_admin)):
+    import datetime as dt_module
+    from sqlalchemy import text
+    from src.memory.identity import _use_postgres, _get_pg_engine, _get_sqlite_conn
+    from src.config.system_config import _get_sqlite_conn as _get_sqlite_sys_conn
+    
+    analytics = {
+        "financial": {"mrr_cents": 0, "active_subs": 0, "status_distribution": [], "conversion_rate": 0, "churn_rate": 0},
+        "engagement": {"dau": [], "new_users_by_day": [], "messages_by_day": [], "channel_distribution": []},
+        "features": {"tools_ranking": [], "tools_trend_by_day": [], "tasks_stats": {}, "reminders_active": 0, "carousel_stats": {}, "image_edit_stats": {}},
+        "operational": {"error_rate": 0, "latency_by_tool": []}
+    }
+
+    try:
+        engine = _get_pg_engine()
+        if engine and _use_postgres():
+            with engine.connect() as conn:
+                # 1. Financial
+                mrr = conn.execute(text("SELECT COALESCE(SUM(amount_cents), 0) FROM subscriptions s JOIN billing_plans p ON s.plan_code = p.code WHERE s.status IN ('active', 'trialing')")).scalar()
+                analytics["financial"]["mrr_cents"] = int(mrr or 0)
+                
+                active_subs = conn.execute(text("SELECT COUNT(*) FROM subscriptions WHERE status IN ('active', 'trialing')")).scalar()
+                analytics["financial"]["active_subs"] = int(active_subs or 0)
+                
+                rows = conn.execute(text("SELECT status, COUNT(*) FROM subscriptions GROUP BY status")).fetchall()
+                analytics["financial"]["status_distribution"] = [{"name": r[0] or 'unknown', "value": r[1]} for r in rows]
+                
+                # 2. Engagement
+                rows = conn.execute(text("""
+                    SELECT DATE(created_at) as d, COUNT(DISTINCT user_id) 
+                    FROM usage_events 
+                    WHERE created_at >= NOW() - make_interval(days => :d)
+                    GROUP BY d ORDER BY d
+                """), {"d": days}).fetchall()
+                analytics["engagement"]["dau"] = [{"date": str(r[0]), "users": r[1]} for r in rows]
+                
+                rows = conn.execute(text("""
+                    SELECT DATE(created_at) as d, 
+                           SUM(CASE WHEN event_type = 'message_received' THEN 1 ELSE 0 END) as received,
+                           SUM(CASE WHEN event_type = 'message_sent' THEN 1 ELSE 0 END) as sent
+                    FROM usage_events 
+                    WHERE created_at >= NOW() - make_interval(days => :d)
+                    GROUP BY d ORDER BY d
+                """), {"d": days}).fetchall()
+                analytics["engagement"]["messages_by_day"] = [{"date": str(r[0]), "received": r[1], "sent": r[2]} for r in rows]
+                
+                rows = conn.execute(text("SELECT channel, COUNT(DISTINCT user_id) FROM usage_events WHERE created_at >= NOW() - make_interval(days => :d) GROUP BY channel"), {"d": days}).fetchall()
+                analytics["engagement"]["channel_distribution"] = [{"name": r[0] or 'unknown', "value": r[1]} for r in rows]
+                
+                # 3. Features
+                rows = conn.execute(text("""
+                    SELECT tool_name, COUNT(*) 
+                    FROM usage_events 
+                    WHERE event_type = 'tool_called' AND created_at >= NOW() - make_interval(days => :d) 
+                    GROUP BY tool_name ORDER BY COUNT(*) DESC LIMIT 10
+                """), {"d": days}).fetchall()
+                analytics["features"]["tools_ranking"] = [{"name": r[0] or 'unknown', "calls": r[1]} for r in rows]
+                
+                top_tools = [r[0] for r in rows[:5] if r[0]]
+                if top_tools:
+                    tool_filter = "('" + "','".join(top_tools) + "')"
+                    rows = conn.execute(text(f"""
+                        SELECT DATE(created_at) as d, tool_name, COUNT(*)
+                        FROM usage_events
+                        WHERE event_type = 'tool_called' AND tool_name IN {tool_filter} AND created_at >= NOW() - make_interval(days => :d)
+                        GROUP BY d, tool_name ORDER BY d
+                    """), {"d": days}).fetchall()
+                    trend = {}
+                    for r in rows:
+                        dt = str(r[0])
+                        if dt not in trend: trend[dt] = {"date": dt}
+                        trend[dt][r[1]] = r[2]
+                    analytics["features"]["tools_trend_by_day"] = list(trend.values())
+                    
+                rows = conn.execute(text("SELECT status, COUNT(*) FROM tasks GROUP BY status")).fetchall()
+                for r in rows:
+                    analytics["features"]["tasks_stats"][r[0] or 'unknown'] = r[1]
+                
+                rows = conn.execute(text("SELECT status, COUNT(*) FROM background_tasks WHERE task_type = 'carousel' GROUP BY status")).fetchall()
+                for r in rows:
+                    analytics["features"]["carousel_stats"][r[0] or 'unknown'] = r[1]
+                    
+                # 4. Operational
+                failed = conn.execute(text("SELECT COUNT(*) FROM usage_events WHERE event_type = 'tool_failed' AND created_at >= NOW() - make_interval(days => :d)"), {"d": days}).scalar() or 0
+                called = conn.execute(text("SELECT COUNT(*) FROM usage_events WHERE event_type = 'tool_called' AND created_at >= NOW() - make_interval(days => :d)"), {"d": days}).scalar() or 1
+                if called == 0: called = 1
+                analytics["operational"]["error_rate"] = round((failed / called) * 100, 2)
+                
+                rows = conn.execute(text("""
+                    SELECT tool_name, AVG(latency_ms) 
+                    FROM usage_events 
+                    WHERE event_type = 'tool_called' AND latency_ms IS NOT NULL AND created_at >= NOW() - make_interval(days => :d)
+                    GROUP BY tool_name ORDER BY AVG(latency_ms) DESC LIMIT 10
+                """), {"d": days}).fetchall()
+                analytics["operational"]["latency_by_tool"] = [{"name": r[0] or 'unknown', "avg_ms": int(r[1] or 0)} for r in rows]
+                
+        else:
+            with _get_sqlite_conn() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT COALESCE(SUM(amount_cents), 0) FROM subscriptions s JOIN billing_plans p ON s.plan_code = p.code WHERE s.status IN ('active', 'trialing')")
+                analytics["financial"]["mrr_cents"] = int(cur.fetchone()[0] or 0)
+                
+                cur.execute("SELECT COUNT(*) FROM subscriptions WHERE status IN ('active', 'trialing')")
+                analytics["financial"]["active_subs"] = int(cur.fetchone()[0] or 0)
+                
+                cur.execute("SELECT status, COUNT(*) FROM subscriptions GROUP BY status")
+                analytics["financial"]["status_distribution"] = [{"name": r[0] or 'unknown', "value": r[1]} for r in cur.fetchall()]
+                
+                cur.execute(f"SELECT date(created_at) as d, COUNT(DISTINCT user_id) FROM usage_events WHERE created_at >= date('now', '-{days} days') GROUP BY d ORDER BY d")
+                analytics["engagement"]["dau"] = [{"date": r[0], "users": r[1]} for r in cur.fetchall()]
+                
+                cur.execute(f"SELECT date(created_at) as d, SUM(CASE WHEN event_type = 'message_received' THEN 1 ELSE 0 END), SUM(CASE WHEN event_type = 'message_sent' THEN 1 ELSE 0 END) FROM usage_events WHERE created_at >= date('now', '-{days} days') GROUP BY d ORDER BY d")
+                analytics["engagement"]["messages_by_day"] = [{"date": r[0], "received": r[1] or 0, "sent": r[2] or 0} for r in cur.fetchall()]
+                
+                cur.execute(f"SELECT channel, COUNT(DISTINCT user_id) FROM usage_events WHERE created_at >= date('now', '-{days} days') GROUP BY channel")
+                analytics["engagement"]["channel_distribution"] = [{"name": r[0] or 'unknown', "value": r[1]} for r in cur.fetchall()]
+                
+                cur.execute(f"SELECT tool_name, COUNT(*) FROM usage_events WHERE event_type = 'tool_called' AND created_at >= date('now', '-{days} days') GROUP BY tool_name ORDER BY COUNT(*) DESC LIMIT 10")
+                rows = cur.fetchall()
+                analytics["features"]["tools_ranking"] = [{"name": r[0] or 'unknown', "calls": r[1]} for r in rows]
+                
+                top_tools = [r[0] for r in rows[:5] if r[0]]
+                if top_tools:
+                    tool_filter = "('" + "','".join(top_tools) + "')"
+                    cur.execute(f"SELECT date(created_at) as d, tool_name, COUNT(*) FROM usage_events WHERE event_type = 'tool_called' AND tool_name IN {tool_filter} AND created_at >= date('now', '-{days} days') GROUP BY d, tool_name ORDER BY d")
+                    trend = {}
+                    for r in cur.fetchall():
+                        dt = r[0]
+                        if dt not in trend: trend[dt] = {"date": dt}
+                        trend[dt][r[1]] = r[2]
+                    analytics["features"]["tools_trend_by_day"] = list(trend.values())
+                    
+                cur.execute("SELECT status, COUNT(*) FROM tasks GROUP BY status")
+                for r in cur.fetchall(): analytics["features"]["tasks_stats"][r[0] or 'unknown'] = r[1]
+                
+                cur.execute(f"SELECT COUNT(*) FROM usage_events WHERE event_type = 'tool_failed' AND created_at >= date('now', '-{days} days')")
+                failed = cur.fetchone()[0] or 0
+                cur.execute(f"SELECT COUNT(*) FROM usage_events WHERE event_type = 'tool_called' AND created_at >= date('now', '-{days} days')")
+                called = cur.fetchone()[0] or 1
+                if called == 0: called = 1
+                analytics["operational"]["error_rate"] = round((failed / called) * 100, 2)
+                
+                cur.execute(f"SELECT tool_name, AVG(latency_ms) FROM usage_events WHERE event_type = 'tool_called' AND latency_ms IS NOT NULL AND created_at >= date('now', '-{days} days') GROUP BY tool_name ORDER BY AVG(latency_ms) DESC LIMIT 10")
+                analytics["operational"]["latency_by_tool"] = [{"name": r[0] or 'unknown', "avg_ms": int(r[1] or 0)} for r in cur.fetchall()]
+
+            with _get_sqlite_sys_conn() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT status, COUNT(*) FROM background_tasks WHERE task_type = 'carousel' GROUP BY status")
+                for r in cur.fetchall(): analytics["features"]["carousel_stats"][r[0] or 'unknown'] = r[1]
+                
+    except Exception as e:
+        print(f"[ANALYTICS] Erro ao buscar metricas: {e}")
+        
+    return analytics

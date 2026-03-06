@@ -180,11 +180,13 @@ Aplicado em: `whatsapp.py`, `web.py` e `dispatcher.py`.
 
 ## Personalidade do Agente (Teq)
 
-O agente tem tom descontraído e informal, como um amigo próximo e inteligente. As instruções de personalidade estão em `src/agent/assistant.py` no parâmetro `instructions[]` do `Agent`. Principais características:
+O agente se identifica como **Teq**, criado por **Pedro Durand**. Tem tom descontraído e informal, como um amigo próximo e inteligente. As instruções de identidade, personalidade e capacidades estão em `src/agent/assistant.py` no parâmetro `instructions[]` do `Agent`. O mesmo padrão de identidade é replicado em `src/endpoints/voice_live.py` para o canal de voz em tempo real. Principais características:
 
-- Linguagem informal brasileira, contrações naturais, emojis com moderação
+- Identidade clara: sabe que é o Teq, criado pelo Pedro Durand, e conhece todas as suas capacidades
+- Linguagem informal brasileira, contrações naturais, emojis com moderação (WhatsApp) ou sem emojis/markdown (voz)
 - Conciso e direto ao ponto; sem introduções longas ou repetições
 - Usa ferramentas de memória para personalizar as respostas ao longo do tempo
+- Capacidades listadas no prompt: memória, tarefas, lembretes/agendamentos, pesquisa web, previsão do tempo, blog, carrosséis de imagens, edição de imagens, voz e WhatsApp
 
 ## Previsão do Tempo (`src/tools/weather.py`)
 
@@ -460,17 +462,18 @@ O sistema conta com um Painel Administrativo integrado ao frontend principal (`a
 - Os pontos de entrada (`whatsapp.py`, `web.py` e o orquestrador do `assistant.py`) são instrumentados para gravar de forma assíncrona estes eventos.
 
 ### Endpoints Admin (`src/endpoints/admin.py`)
-- `/admin/business/summary`: KPIs de negócio (total usuários, mensagens, etc).
-- `/admin/business/users`: Lista de usuários.
-- `/admin/business/messages`: Estatísticas de mensagens por usuário.
-- `/admin/business/tools`: Métricas de uso de ferramentas.
+- `/admin/business/analytics`: Endpoint centralizado que retorna métricas agregadas de negócio divididas em financeiro, engajamento, features e operacional.
+- `/admin/business/users`: Lista de usuários com informações de assinatura.
 - `/admin/health/summary`: Checks de saúde do banco, scheduler e integrações.
 - `/admin/admins`: Gestão básica de administradores.
+- `/admin/system/*`: Gestão da fila de tarefas, configuração (`system_config`) e listagem de métricas de infraestrutura.
 
-### Dashboard Frontend
-- **Negócio**: Exibe métricas como novos cadastros, taxa de verificação, usuários ativos, volume de uso e ferramentas mais acionadas.
-- **Saúde**: Foca na disponibilidade dos serviços (DB, PgVector, WhatsApp, TTS) e relata os últimos erros ou latência média do agente.
-- **Admins**: Interface de CRUD para definir papéis na plataforma.
+### Dashboard Frontend (Admin)
+- **Negócio**: Exibe cards financeiros (MRR, assinantes), gráficos de engajamento (DAU, mensagens por dia), rankings de features (top tools, tendências) e visão operacional (taxa de erro, latência). Gráficos renderizados com **Recharts**.
+- **Sistema / Fila**: Monitoramento da fila em tempo real, edição de limites globais e por plano.
+- **Saúde**: Foca na disponibilidade dos serviços (DB, PgVector, WhatsApp, TTS).
+- **Admins & Usuários**: Interface de CRUD para definir papéis na plataforma e monitorar status de assinatura.
+- **Planos & Assinaturas**: Gestão de pacotes do Stripe e atribuição manual de acessos.
 
 *(Este arquivo deve ser atualizado sempre que novas ferramentas, rotas ou fluxos forem adicionados)*
 
