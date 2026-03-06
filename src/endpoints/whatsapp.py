@@ -14,7 +14,7 @@ from src.memory.identity import get_user, create_user, update_user_name, update_
 from src.memory.knowledge import get_vector_db
 from src.memory.extractor import extract_and_save_facts
 from src.tools.memory_manager import add_memory
-from src.tools.web_search import create_web_search_tool, create_fetch_page_tool
+from src.tools.web_search import create_web_search_tool, create_fetch_page_tool, create_explore_site_tool
 from src.tools.deep_research import create_deep_research_tool
 from src.memory.analytics import log_event, log_agent_tools
 
@@ -36,15 +36,65 @@ def deduplicate(dedup_key: str) -> bool:
             del processed_message_ids[k]
     return False
 
+# Buffer global para agrupar mensagens (Debounce Universal)
+message_buffer = {}
+BUFFER_TIMEOUT = 3.0
+
+async def flush_buffer(from_number: str, background_tasks: BackgroundTasks):
+    await asyncio.sleep(BUFFER_TIMEOUT)
+    if from_number in message_buffer:
+        data = message_buffer.pop(from_number)
+        events = data.get("events", [])
+        if events:
+            aggregated = aggregate_events(events)
+            background_tasks.add_task(orchestrate_message, aggregated)
+
+def aggregate_events(events: list) -> dict:
+    base = events[0].copy()
+    texts = []
+    audios = []
+    images = []
+    message_ids = []
+    
+    for ev in events:
+        message_ids.append(ev["id"])
+        msg_type = ev["type"]
+        raw = ev["raw_message"]
+        
+        if msg_type == "text":
+            text_body = raw.get("text", {}).get("body", "")
+            quoted = raw.get("quoted_text")
+            if quoted:
+                text_body = f'[Mensagem citada pelo usuario: "{quoted}"]\n\n{text_body}'
+            if text_body:
+                texts.append(text_body)
+        elif msg_type == "audio":
+            audios.append(raw["audio"]["id"])
+        elif msg_type == "image":
+            images.append({
+                "id": raw["image"]["id"],
+                "caption": raw["image"].get("caption", "")
+            })
+            if raw["image"].get("caption"):
+                texts.append(raw["image"]["caption"])
+
+    base["id"] = message_ids[0]  # usa o id da primeira mensagem para replies
+    base["all_ids"] = message_ids
+    base["aggregated_text"] = "\n\n".join(texts)
+    base["raw_message"] = {
+        "images": images,
+        "all_audios": audios,
+        "text": {"body": base["aggregated_text"]}
+    }
+    # Mantém o type base consistente, mas a info real está no raw_message agrupado
+    return base
+
 @router.get("/webhook/whatsapp")
 def verify_webhook(
     hub_mode: str = Query(None, alias="hub.mode"),
     hub_challenge: str = Query(None, alias="hub.challenge"),
     hub_verify_token: str = Query(None, alias="hub.verify_token"),
 ):
-    """
-    Endpoint para verificação do webhook da Meta.
-    """
     if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
         print("[WEBHOOK] Webhook verificado com sucesso!")
         return int(hub_challenge)
@@ -52,9 +102,6 @@ def verify_webhook(
 
 @router.post("/webhook/whatsapp")
 async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
-    """
-    Endpoint imperativo que recebe as mensagens do WhatsApp (compatível com Meta e Evolution API).
-    """
     try:
         data = await request.json()
     except Exception as e:
@@ -64,7 +111,6 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
     try:
         events = parse_webhook_payload(data)
         for event in events:
-            # Pula status, acks não processáveis ou mensagens enviadas por mim
             if not event.get("should_process", False):
                 reason = event.get("skip_reason", "Desconhecido")
                 if reason not in ["Status message", "Enviado por mim", "Protocol message"] and not reason.startswith("Evento não processável"):
@@ -76,15 +122,31 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                 print(f"[WEBHOOK] Mensagem duplicada ignorada no Dedup. Chave: {dedup_key}")
                 continue
                 
-            print(f"[WEBHOOK] Nova mensagem enfileirada. De: {event['from_number']} | Tipo: {event['type']} | ID: {event['id']}")
-            background_tasks.add_task(orchestrate_message, event)
+            from_number = event["from_number"]
+            print(f"[WEBHOOK] Nova mensagem enfileirada no buffer. De: {from_number} | Tipo: {event['type']} | ID: {event['id']}")
+            
+            if from_number not in message_buffer:
+                # O typing indicator é enviado na primeira mensagem do buffer
+                try:
+                    asyncio.create_task(whatsapp_client.mark_message_as_read_and_typing(event["id"], from_number, is_audio=(event["type"]=="audio")))
+                except Exception:
+                    pass
+                
+                message_buffer[from_number] = {
+                    "events": [event], 
+                    "timer": asyncio.create_task(flush_buffer(from_number, background_tasks))
+                }
+            else:
+                message_buffer[from_number]["events"].append(event)
+                message_buffer[from_number]["timer"].cancel()
+                message_buffer[from_number]["timer"] = asyncio.create_task(flush_buffer(from_number, background_tasks))
+                
     except Exception as e:
         print(f"[ERROR] Falha ao processar webhook payload: {e}")
         
     return {"status": "success"}
 
 def parse_webhook_payload(data: dict) -> list:
-    """Extrai e normaliza os eventos de ambos os providers (Meta/Evolution)."""
     events = []
     
     # Padrão Meta API
@@ -106,6 +168,10 @@ def parse_webhook_payload(data: dict) -> list:
                         content_str = ""
                         if msg_type == "text":
                             content_str = msg.get("text", {}).get("body", "")
+                        elif msg_type == "image":
+                            content_str = msg.get("image", {}).get("id", "")
+                        elif msg_type == "audio":
+                            content_str = msg.get("audio", {}).get("id", "")
                         
                         dedup_key = f"meta_{msg_id}_{hashlib.md5(content_str.encode()).hexdigest()}"
                         
@@ -143,7 +209,7 @@ def parse_webhook_payload(data: dict) -> list:
                     events.append({"should_process": False, "skip_reason": "Protocol message"})
                     return events
                     
-                if msg_type not in ["conversation", "extendedTextMessage", "audioMessage"]:
+                if msg_type not in ["conversation", "extendedTextMessage", "audioMessage", "imageMessage"]:
                     events.append({"should_process": False, "skip_reason": f"Tipo não suportado: {msg_type}"})
                     return events
                     
@@ -164,7 +230,6 @@ def parse_webhook_payload(data: dict) -> list:
                     normalized_type = "text"
                     normalized_msg = {"text": {"body": content_str}}
                     
-                    # Extrair mensagem citada (se houver)
                     quoted_msg = msg_content.get("extendedTextMessage", {}).get("contextInfo", {}).get("quotedMessage", {})
                     if quoted_msg:
                         quoted_text = quoted_msg.get("conversation", "") or quoted_msg.get("extendedTextMessage", {}).get("text", "")
@@ -174,9 +239,17 @@ def parse_webhook_payload(data: dict) -> list:
                     normalized_type = "audio"
                     base64_data = evo_data.get("base64", "") or msg_content.get("base64", "")
                     if not base64_data:
-                        # getBase64FromMediaMessage exige key + message para identificar a mídia
                         base64_data = json.dumps({"message": {"key": key, "message": msg_content}})
                     normalized_msg = {"audio": {"id": base64_data}}
+                    dedup_key = f"evo_{msg_id}_{hashlib.md5(base64_data[:50].encode()).hexdigest()}"
+                elif msg_type == "imageMessage":
+                    normalized_type = "image"
+                    base64_data = evo_data.get("base64", "") or msg_content.get("base64", "")
+                    if not base64_data:
+                        base64_data = json.dumps({"message": {"key": key, "message": msg_content}})
+                    caption = msg_content.get("imageMessage", {}).get("caption", "")
+                    normalized_msg = {"image": {"id": base64_data, "caption": caption}}
+                    dedup_key = f"evo_{msg_id}_{hashlib.md5(base64_data[:50].encode()).hexdigest()}"
                     
                 events.append({
                     "provider": "evolution",
@@ -211,22 +284,16 @@ CONTINUATION_INJECTION = (
     "Mensagem do usuario: ]"
 )
 
-# Guarda a mensagem original do usuario enquanto aguarda a resposta de 'continuar ou novo?'
-# Chave: numero do usuario | Valor: texto da mensagem original
 pending_session_choices: dict[str, str] = {}
 
 async def orchestrate_message(event: dict):
     from_number = event["from_number"]
     message_id = event["id"]
-    msg_type = event["type"]
-    raw_msg = event["raw_message"]
     
     try:
         user = get_user(from_number)
+        print(f"[PROCESS] Iniciando orquestracao do evento agrupado {message_id} de {from_number}")
         
-        print(f"[PROCESS] Iniciando orquestracao da mensagem {message_id} de {from_number}")
-        
-        # Fluxo de Registro (Deterministico)
         if not user or not user.get("whatsapp_verified"):
             print(f"[ONBOARDING] Usuario nao verificado ou inexistente: {from_number}. Solicitando cadastro.")
             frontend_url = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
@@ -237,11 +304,12 @@ async def orchestrate_message(event: dict):
             )
             return
 
+        aggregated_text = event.get("aggregated_text", "")
+        
         # --- Resposta ao "continuar ou novo?" ---
-        # Prioridade maxima: usuario estava aguardando resposta da pergunta de sessao
-        if from_number in pending_session_choices and msg_type == "text":
+        if from_number in pending_session_choices and aggregated_text:
             original_message = pending_session_choices.pop(from_number)
-            response_text = raw_msg["text"]["body"].strip().lower()
+            response_text = aggregated_text.strip().lower()
 
             yes_keywords = {"sim", "s", "yes", "continuar", "continua", "pode", "bora", "claro", "vamos", "quero"}
             is_yes = any(response_text == kw or response_text.startswith(kw + " ") for kw in yes_keywords)
@@ -250,7 +318,6 @@ async def orchestrate_message(event: dict):
             log_label = "continuacao" if is_yes else "nova sessao (usuario recusou)"
             print(f"[SESSION] Usuario {from_number} escolheu: {log_label}.")
 
-            await whatsapp_client.mark_message_as_read_and_typing(message_id, from_number, is_audio=False)
             notifier = None
             search_tools = [
                 create_web_search_tool(notifier),
@@ -258,17 +325,19 @@ async def orchestrate_message(event: dict):
                 create_deep_research_tool(notifier, from_number),
             ]
             agent = get_assistant(session_id=from_number, extra_tools=search_tools)
-            await process_text_message(from_number, message_id, {"text": {"body": original_message}}, agent, injection=injection)
+            
+            # Substitui o texto pelo original que estava pendente (o usuario so respondeu sim/nao)
+            event["aggregated_text"] = original_message
+            await process_aggregated_message(from_number, message_id, event, agent, injection=injection)
             update_last_seen(from_number)
             return
 
         # --- Deteccao de nova sessao (>4h sem contato) ---
         if is_new_session(user, threshold_hours=4):
-            if msg_type == "text":
-                # Guarda a mensagem original e pergunta ao usuario o que prefere
-                original_text = raw_msg["text"]["body"]
-                pending_session_choices[from_number] = original_text
-                update_last_seen(from_number)  # Evita re-disparar a pergunta na resposta seguinte
+            # Se a mensagem só tiver mídia sem texto importante, aplicamos o greeting direto
+            if aggregated_text.strip():
+                pending_session_choices[from_number] = aggregated_text
+                update_last_seen(from_number)
                 print(f"[SESSION] Nova sessao detectada para {from_number}. Perguntando ao usuario.")
                 await whatsapp_client.send_text_message(
                     from_number,
@@ -277,9 +346,7 @@ async def orchestrate_message(event: dict):
                 )
                 return
             else:
-                # Audio: pula a pergunta, vai direto pro greeting
-                print(f"[SESSION] Nova sessao (audio) para {from_number}. Aplicando greeting injection.")
-                await whatsapp_client.mark_message_as_read_and_typing(message_id, from_number, is_audio=False)
+                print(f"[SESSION] Nova sessao (sem texto relevante) para {from_number}. Aplicando greeting injection.")
                 notifier = StatusNotifier(to_number=from_number, reply_to_message_id=message_id)
                 search_tools = [
                     create_web_search_tool(notifier),
@@ -287,106 +354,99 @@ async def orchestrate_message(event: dict):
                     create_deep_research_tool(notifier, from_number),
                 ]
                 agent = get_assistant(session_id=from_number, extra_tools=search_tools)
-                await process_audio_message(from_number, message_id, raw_msg, agent, injection=GREETING_INJECTION)
+                await process_aggregated_message(from_number, message_id, event, agent, injection=GREETING_INJECTION)
                 update_last_seen(from_number)
                 return
 
         # --- Fluxo normal (sessao ativa, <4h) ---
-        print(f"[OUT] Enviando indicador de digitando para {from_number}")
-        await whatsapp_client.mark_message_as_read_and_typing(message_id, from_number, is_audio=False)
-
         notifier = StatusNotifier(to_number=from_number, reply_to_message_id=message_id)
         search_tools = [
             create_web_search_tool(notifier),
             create_fetch_page_tool(notifier),
+            create_explore_site_tool(notifier),
             create_deep_research_tool(notifier, from_number),
         ]
-
         agent = get_assistant(session_id=from_number, extra_tools=search_tools)
         
-        if msg_type == "audio":
-            await process_audio_message(from_number, message_id, raw_msg, agent)
-        elif msg_type == "text":
-            await process_text_message(from_number, message_id, raw_msg, agent)
-
+        await process_aggregated_message(from_number, message_id, event, agent)
         update_last_seen(from_number)
             
     except Exception as e:
         print(f"[ERROR] Falha na orquestracao para {from_number}: {e}")
+        import traceback
+        print(traceback.format_exc())
         try:
             if from_number not in ["16315551181", "16505551111"]:
                 await whatsapp_client.send_text_message(from_number, "Eita, deu um erro interno aqui. Tenta de novo em breve!", reply_to_message_id=message_id)
-        except Exception as e2:
-            print(f"[ERROR] Falha ao enviar erro para WhatsApp: {e2}")
+        except Exception:
+            pass
 
-async def process_audio_message(from_number: str, message_id: str, raw_msg: dict, agent, injection: str | None = None):
+
+async def process_aggregated_message(from_number: str, message_id: str, event: dict, agent, injection: str | None = None):
     start_time = time.time()
     log_event(user_id=from_number, channel="whatsapp", event_type="message_received", status="success")
-    audio_id = raw_msg["audio"]["id"]
-    print(f"[PROCESS] Baixando audio...")
-    media_url = await whatsapp_client.get_media_url(audio_id)
-    audio_bytes = await whatsapp_client.download_media(media_url) if media_url else b""
-
-    if not audio_bytes:
-        print(f"[PROCESS] Audio vazio ou falha no download para {from_number}. Abortando.")
-        if from_number not in ["16315551181", "16505551111"]:
-            await whatsapp_client.send_text_message(
-                from_number,
-                "Não consegui processar esse áudio 😕 Pode tentar enviar de novo? Se quiser, pode escrever também!",
-                reply_to_message_id=message_id,
-            )
-        return
     
+    texts = event.get("aggregated_text", "")
+    images = event.get("raw_message", {}).get("images", [])
+    audios = event.get("raw_message", {}).get("all_audios", [])
+    
+    if len(images) > 10:
+        try:
+            if from_number not in ["16315551181", "16505551111"]:
+                await whatsapp_client.send_text_message(from_number, "Só consigo processar até 10 imagens por vez! 😅 Vou analisar apenas as 10 primeiras, tá?", reply_to_message_id=message_id)
+        except Exception:
+            pass
+        images = images[:10]
+    
+    # 1. Processar audios (transcrever ou enviar p/ multimodal)
+    audio_bytes_list = []
+    for aud_id in audios:
+        media_url = await whatsapp_client.get_media_url(aud_id)
+        if media_url:
+            a_bytes = await whatsapp_client.download_media(media_url)
+            if a_bytes:
+                audio_bytes_list.append(a_bytes)
+                
     provider = os.getenv("LLM_PROVIDER", "openai").lower()
     
+    from agno.media import Audio, Image
+    agent_images = []
+    agent_audios = []
+    
     if provider == "gemini":
-        from agno.media import Audio
-        base_prompt = "O usuario enviou este audio. Responda naturalmente ao que foi dito."
-        if injection:
-            base_prompt = injection + " " + base_prompt
-        print(f"[PROCESS] Enviando audio multimodal para Gemini")
-        response = agent.run(base_prompt, audio=[Audio(content=audio_bytes)], knowledge_filters={"user_id": from_number})
-        final_text = extract_final_response(response)
-        asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, "Audio do usuario", final_text))
+        for a_bytes in audio_bytes_list:
+            agent_audios.append(Audio(content=a_bytes))
     else:
-        print(f"[PROCESS] Transcrevendo audio com: {provider}")
-        transcription = await transcriber.transcribe(audio_bytes)
-        print(f"[PROCESS] Transcricao concluida: {transcription[:100]}...")
-        
-        prompt = f"O usuario enviou um audio com a seguinte transcricao:\n\n{transcription}"
-        if injection:
-            prompt = injection + "\n\n" + prompt
-        response = agent.run(prompt, knowledge_filters={"user_id": from_number})
-        log_agent_tools(from_number, "whatsapp", agent)
-        final_text = extract_final_response(response)
-        asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, transcription, final_text))
+        for a_bytes in audio_bytes_list:
+            transcript = await transcriber.transcribe(a_bytes)
+            texts += f"\n\n[Áudio transcrito]: {transcript}"
+            
+    # 2. Processar imagens
+    image_bytes_list = []
+    for img in images:
+        img_id = img["id"]
+        media_url = await whatsapp_client.get_media_url(img_id)
+        if media_url:
+            i_bytes = await whatsapp_client.download_media(media_url)
+            if i_bytes:
+                image_bytes_list.append(i_bytes)
+                agent_images.append(Image(content=i_bytes))
+                
+    # Salvar imagens em background no Cloudinary + KB
+    if image_bytes_list:
+        from src.integrations.image_storage import describe_and_store_images
+        asyncio.create_task(describe_and_store_images(from_number, image_bytes_list))
     
-    if from_number not in ["16315551181", "16505551111"]:
-        print(f"[OUT] Enviando resposta para {from_number}")
-        parts = split_whatsapp_messages(final_text)
-        for i, part in enumerate(parts):
-            reply_id = message_id if i == 0 else None
-            await whatsapp_client.send_text_message(from_number, part, reply_to_message_id=reply_id)
-        latency = int((time.time() - start_time) * 1000)
-        log_event(user_id=from_number, channel="whatsapp", event_type="message_sent", status="success", latency_ms=latency)
-
-async def process_text_message(from_number: str, message_id: str, raw_msg: dict, agent, injection: str | None = None):
-    start_time = time.time()
-    log_event(user_id=from_number, channel="whatsapp", event_type="message_received", status="success")
-    text_body = raw_msg["text"]["body"]
+    text_body = texts.strip()
     
-    quoted = raw_msg.get("quoted_text")
-    if quoted:
-        text_body = f'[Mensagem citada pelo usuario: "{quoted}"]\n\n{text_body}'
+    if not text_body and not agent_audios and not agent_images:
+        return
         
-    print(f"[PROCESS] Texto recebido: {text_body[:50]}...")
-
-    # Atalho deterministico para pedidos diretos de lembrete rapido (ex: "me avisa daqui 5 min").
-    # Evita falso-positivo de "confirmei mas nao agendou" quando o LLM responde sem chamar tool.
-    if not injection:
+    print(f"[PROCESS] Texto agregado ({len(agent_images)} imgs, {len(agent_audios)} audios): {text_body[:50]}...")
+    
+    if not injection and text_body:
         try:
             from src.tools.reminder_shortcuts import try_schedule_quick_reminder
-
             shortcut_msg = try_schedule_quick_reminder(
                 user_phone=from_number,
                 text=text_body,
@@ -401,9 +461,8 @@ async def process_text_message(from_number: str, message_id: str, raw_msg: dict,
         except Exception as e:
             print(f"[SHORTCUT] Falha no atalho de lembrete rapido: {e}")
     
-    # Always-on memory injection
     memory_mode = os.getenv("MEMORY_MODE", "agentic").lower()
-    if memory_mode == "always-on":
+    if memory_mode == "always-on" and text_body:
         vector_db = get_vector_db()
         if vector_db:
             try:
@@ -417,8 +476,18 @@ async def process_text_message(from_number: str, message_id: str, raw_msg: dict,
 
     if injection:
         text_body = injection + "\n\n" + text_body
-    
-    response = agent.run(text_body, knowledge_filters={"user_id": from_number})
+        
+    if not text_body.strip():
+        text_body = "O usuário enviou uma ou mais mídias (áudio/imagem). Responda de acordo."
+
+    # Executa o agente
+    kwargs = {"knowledge_filters": {"user_id": from_number}}
+    if agent_images:
+        kwargs["images"] = agent_images
+    if agent_audios:
+        kwargs["audio"] = agent_audios
+        
+    response = await asyncio.to_thread(agent.run, text_body, **kwargs)
     log_agent_tools(from_number, "whatsapp", agent)
     final_text = extract_final_response(response)
     asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, text_body, final_text))

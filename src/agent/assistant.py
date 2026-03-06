@@ -82,6 +82,9 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         "O usuario pode te enviar textos ou audios. Responda sempre no mesmo tom da conversa.",
         "Utilize sua memoria sobre o usuario para personalizar as respostas. Quando aprender algo novo e relevante sobre o Durand (preferencias, rotina, projetos), salve com add_memory.",
         "Voce tem ferramentas de pesquisa: use web_search para buscas rapidas e pontuais, e deep_research para temas que precisam de profundidade ou multiplas fontes. Apos pesquisas relevantes, salve os achados com add_memory.",
+        "Para ler o conteudo de qualquer site, use a tool fetch_page (funciona para noticias, artigos, documentacoes, etc).",
+        "Se o usuario pedir para 'ver o que tem no site', 'navegar pelo site' ou procurar uma secao especifica, use a tool explore_site para mapear os links internos e, em seguida, chame fetch_page nos links relevantes.",
+        "IMPORTANTE: Redes sociais (Instagram, Facebook, LinkedIn) bloqueiam acesso de robos. Se o usuario enviar um link de rede social, avise de forma descontraida que voce ainda nao tem acesso a perfis do Instagram/Facebook, mas que futuramente tera.",
         "Voce pode publicar posts no blog. Se o usuario quiser criar um post, ajude com titulo criativo e leitura fluida. Aguarde confirmacao explicita antes de publicar.",
         "Voce pode gerar carrosséis para o Instagram com a tool generate_carousel_tool. "
         "SEMPRE confirme o formato das imagens com o usuario ANTES de chamar a tool. "

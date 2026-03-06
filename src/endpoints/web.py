@@ -15,7 +15,7 @@ from src.integrations.tts import get_tts
 from src.memory.identity import get_user, update_user_name, update_last_seen, is_new_session, is_plan_active
 from src.memory.extractor import extract_and_save_facts
 from src.tools.memory_manager import add_memory
-from src.tools.web_search import create_web_search_tool, create_fetch_page_tool
+from src.tools.web_search import create_web_search_tool, create_fetch_page_tool, create_explore_site_tool
 from src.tools.deep_research import create_deep_research_tool
 from src.auth.jwt import decode_token
 from src.memory.analytics import log_event, log_agent_tools
@@ -70,16 +70,42 @@ class WebSocketNotifier:
             print(f"[WS NOTIFIER] Falha ao enviar status '{message[:40]}': {e}")
 
 
-async def _process_text(websocket, phone_number: str, user_text: str, tts, user: dict, mode: str = "voice"):
+async def _process_text(websocket, phone_number: str, user_text: str, tts, user: dict, mode: str = "voice", images_b64: list = None):
+    if images_b64 is None:
+        images_b64 = []
+        
     start_time = time.time()
     log_event(user_id=phone_number, channel="web", event_type="message_received", status="success")
-    asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "user", user_text))
+    
+    # Decodificar imagens
+    image_bytes_list = []
+    for b64 in images_b64:
+        try:
+            if b64.startswith("data:"):
+                b64 = b64.split(",", 1)[1]
+            image_bytes_list.append(base64.b64decode(b64))
+        except Exception as e:
+            print(f"[WEB WS] Erro ao decodificar imagem base64: {e}")
+
+    agent_images = []
+    if image_bytes_list:
+        from agno.media import Image
+        for i_bytes in image_bytes_list:
+            agent_images.append(Image(content=i_bytes))
+        from src.integrations.image_storage import describe_and_store_images
+        asyncio.create_task(describe_and_store_images(phone_number, image_bytes_list))
+        
+    # Salva no histórico a mensagem
+    display_text = user_text if user_text else "[Imagens]"
+    asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "user", display_text))
+    
     new_session = is_new_session(user, threshold_hours=4)
     loop = asyncio.get_event_loop()
 
     await websocket.send_json({"type": "status", "text": "Pensando..."})
 
-    if not new_session:
+    # Atalho só deve ser executado se não for nova sessão E se não tiver imagens (imagens exigem agente)
+    if not new_session and not agent_images and user_text.strip():
         try:
             from src.tools.reminder_shortcuts import try_schedule_quick_reminder
 
@@ -108,18 +134,22 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     search_tools = [
         create_web_search_tool(notifier),
         create_fetch_page_tool(notifier),
+        create_explore_site_tool(notifier),
         create_deep_research_tool(notifier, phone_number),
     ]
     agent = get_assistant(session_id=phone_number, extra_tools=search_tools, channel="web")
 
-    prompt = user_text
+    prompt = user_text.strip()
+    if not prompt and agent_images:
+        prompt = "O usuário enviou imagens."
+        
     memory_mode = os.getenv("MEMORY_MODE", "agentic").lower()
-    if memory_mode == "always-on":
+    if memory_mode == "always-on" and prompt:
         from src.memory.knowledge import get_vector_db
         vector_db = get_vector_db()
         if vector_db:
             try:
-                results = vector_db.search(query=user_text, limit=3, filters={"user_id": phone_number})
+                results = vector_db.search(query=prompt, limit=3, filters={"user_id": phone_number})
                 if results:
                     memories = "\n".join([f"- {doc.content}" for doc in results])
                     prompt += f"\n\n[Contexto da Memoria para considerar:\n{memories}]"
@@ -129,8 +159,12 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     if new_session:
         prompt = GREETING_INJECTION + "\n\n" + prompt
 
+    kwargs = {"knowledge_filters": {"user_id": phone_number}}
+    if agent_images:
+        kwargs["images"] = agent_images
+
     response = await asyncio.to_thread(
-        agent.run, prompt, knowledge_filters={"user_id": phone_number}
+        agent.run, prompt, **kwargs
     )
     log_agent_tools(phone_number, "web", agent)
     final_text = extract_final_response(response)
@@ -254,9 +288,9 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
     ws_manager.connect(websocket, phone_number)
     print(f"[WEB WS] Cliente conectado: {phone_number}")
 
-    async def run_text(user_text: str, mode: str = "voice") -> None:
+    async def run_text(user_text: str, mode: str = "voice", images_b64: list = None) -> None:
         try:
-            await _process_text(websocket, phone_number, user_text, tts, user, mode)
+            await _process_text(websocket, phone_number, user_text, tts, user, mode, images_b64)
         except asyncio.CancelledError:
             print(f"[WEB WS] Processamento cancelado: \"{user_text[:60]}\"")
         except Exception as e:
@@ -300,11 +334,12 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
 
                 if msg_type == "user_message":
                     user_text = msg.get("text", "").strip()
-                    if not user_text:
+                    images_b64 = msg.get("images", [])
+                    if not user_text and not images_b64:
                         continue
-                    print(f"[WEB WS] Texto do usuario: \"{user_text[:80]}\"")
+                    print(f"[WEB WS] Texto do usuario: \"{user_text[:80]}\" | {len(images_b64)} imagens")
                     await _cancel_task(current_task)
-                    current_task = asyncio.create_task(run_text(user_text, mode))
+                    current_task = asyncio.create_task(run_text(user_text, mode, images_b64))
                     continue
 
                 continue

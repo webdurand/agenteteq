@@ -56,6 +56,22 @@ Mensagem do usuário
                                        agente
 ```
 
+## Suporte a Imagens Multimodal e Debounce
+
+O Teq suporta entrada multimodal através do modelo Gemini (visão) tanto pelo canal Web quanto pelo WhatsApp.
+
+### Fluxo de Debounce Universal (WhatsApp)
+Como o webhook do WhatsApp (Evolution/Meta) emite um evento por mensagem, implementamos um **MessageBuffer Universal** para agrupar mensagens consecutivas do mesmo usuário:
+- O buffer aguarda 3 segundos de silêncio antes de processar.
+- **Concatena textos** (ex: "oi", "me ajuda", "com isso" -> 1 prompt).
+- **Agrupa múltiplas imagens** e áudios enviados em sequência.
+- O *typing indicator* é enviado imediatamente na primeira mensagem recebida.
+
+### Armazenamento e Indexação de Imagens (`src/integrations/image_storage.py`)
+1. **Upload**: Toda imagem enviada é convertida e enviada para o **Cloudinary** (na pasta `user_uploads/{user_id}`).
+2. **Processamento**: As imagens (em bytes) são injetadas no Agente (`agent.run(images=[Image(content=bytes)])`).
+3. **Indexação na Base de Conhecimento**: Em background, o próprio Gemini gera uma descrição curta para cada imagem, que é então salva na base de conhecimento `PgVector` junto com a URL permanente. Quando o agente busca em sua memória no futuro, ele pode resgatar a referência e URL originais.
+
 ## Módulos de Pesquisa (novos)
 
 ### Status Notifier (`src/integrations/status_notifier.py`)
@@ -68,9 +84,10 @@ Mensagem do usuário
 ### Web Search Tools (`src/tools/web_search.py`)
 
 - **`get_search_toolkit()`**: factory de provider de busca, controlada por `SEARCH_PROVIDER` no `.env`
-- **`get_scraper_toolkit()`**: factory de provider de scraping, controlada por `SCRAPER_PROVIDER` no `.env`
+- **`get_scraper_toolkit()`**: factory de provider de scraping, controlada por `SCRAPER_PROVIDER` no `.env` (padrão atual: `jina`, acessando `r.jina.ai` para retornar Markdown otimizado)
 - **`web_search_raw()`** / **`fetch_page_raw()`**: camada interna, sem notificação, usada por sub-agentes
-- **`create_web_search_tool(notifier)`** / **`create_fetch_page_tool(notifier)`**: camada externa para o agente principal, notifica o usuário na primeira busca
+- **`create_web_search_tool(notifier)`** / **`create_fetch_page_tool(notifier)`**: camada externa para o agente principal, notifica o usuário na primeira busca. `fetch_page` agora lê qualquer site, não apenas artigos de notícias.
+- **`create_explore_site_tool(notifier)`**: tool especializada em navegação que extrai links (seções) de um site usando Jina Reader para que o agente possa escolher páginas filhas para aprofundar a pesquisa.
 
 ### Multi-Agent Coordinator (`src/agent/multi_agent.py`)
 
@@ -369,7 +386,7 @@ VITE_WS_URL=ws://localhost:8000   # em produção: wss://seu-dominio.com
 | WhatsApp | `WHATSAPP_PROVIDER` | `meta` | `meta`, `evolution` |
 | Transcrição | `TRANSCRIBER_PROVIDER` | `openai` | `openai`, `mock` |
 | Busca web | `SEARCH_PROVIDER` | `duckduckgo` | `duckduckgo`, `tavily`, `exa`, `serper`, `brave` |
-| Scraping | `SCRAPER_PROVIDER` | `newspaper4k` | `newspaper4k`, `crawl4ai` |
+| Scraping | `SCRAPER_PROVIDER` | `jina` | `jina`, `newspaper4k`, `crawl4ai` |
 | Memória | `MEMORY_MODE` | `agentic` | `agentic`, `always-on` |
 | Agendamentos | `scheduler.db` | SQLite local | — (persistência automática) |
 | TTS | `TTS_PROVIDER` | `gemini` | `gemini`, `openai`, `elevenlabs`, `browser` |
