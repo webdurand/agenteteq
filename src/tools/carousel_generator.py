@@ -99,6 +99,20 @@ async def _notify_user(user_id: str, channel: str, slides: List[Dict[str, Any]])
             "slides": done_slides,
         })
 
+        # Persiste o carrossel no histórico de chat igual ao que o frontend renderiza
+        try:
+            from src.models.chat_messages import save_message
+            lines = []
+            for i, s in enumerate(done_slides):
+                num = s.get("slide_number") or (i + 1)
+                style = f" — {s['style']}" if s.get("style") else ""
+                url = s.get("image_url", "")
+                lines.append(f"**Slide {num}{style}**\n{url}")
+            formatted = f"🎨 Carrossel pronto! Confira os {len(done_slides)} slides:\n\n" + "\n\n".join(lines)
+            await asyncio.to_thread(save_message, user_id, user_id, "agent", formatted)
+        except Exception as e:
+            print(f"[CAROUSEL] Erro ao persistir mensagem de carrossel: {e}")
+
 
 def _notify_whatsapp(user_id: str, slides: List[Dict[str, Any]]):
     """Envia as imagens geradas para o WhatsApp do usuário."""
