@@ -88,6 +88,21 @@ def cancel_subscription(subscription_id: str, immediately: bool = False) -> stri
 def reactivate_subscription(subscription_id: str) -> stripe.Subscription:
     return stripe.Subscription.modify(subscription_id, cancel_at_period_end=False)
 
+def create_setup_intent(customer_id: str) -> stripe.SetupIntent:
+    return stripe.SetupIntent.create(
+        customer=customer_id,
+        payment_method_types=["card"],
+        usage="off_session",
+    )
+
+def set_default_payment_method(customer_id: str, subscription_id: str, payment_method_id: str):
+    stripe.PaymentMethod.attach(payment_method_id, customer=customer_id)
+    stripe.Customer.modify(
+        customer_id,
+        invoice_settings={"default_payment_method": payment_method_id},
+    )
+    stripe.Subscription.modify(subscription_id, default_payment_method=payment_method_id)
+
 def construct_webhook_event(payload: bytes, sig_header: str) -> stripe.Event:
     webhook_secret = get_webhook_secret()
     return stripe.Webhook.construct_event(

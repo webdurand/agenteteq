@@ -15,7 +15,9 @@ from src.integrations.stripe import (
     create_subscription,
     create_portal_session,
     cancel_subscription,
-    construct_webhook_event
+    construct_webhook_event,
+    create_setup_intent,
+    set_default_payment_method,
 )
 from src.models.subscriptions import upsert_subscription
 
@@ -112,6 +114,35 @@ def get_subscription_status(user: dict = Depends(get_current_user)):
 @router.get("/plans")
 def get_available_plans(user: dict = Depends(get_current_user)):
     return {"plans": list_plans(active_only=True)}
+
+
+@router.post("/setup-payment-method")
+def setup_payment_method(user: dict = Depends(get_current_user)):
+    customer_id = get_or_create_customer(user)
+    try:
+        intent = create_setup_intent(customer_id)
+        return {"client_secret": intent.client_secret}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class UpdateDefaultPaymentRequest(BaseModel):
+    payment_method_id: str
+
+@router.post("/update-default-payment")
+def update_default_payment(req: UpdateDefaultPaymentRequest, user: dict = Depends(get_current_user)):
+    from src.models.subscriptions import get_active_subscription
+    customer_id = user.get("stripe_customer_id")
+    if not customer_id:
+        raise HTTPException(status_code=400, detail="Sem cadastro Stripe")
+    sub = get_active_subscription(user["phone_number"])
+    if not sub:
+        raise HTTPException(status_code=400, detail="Sem assinatura ativa")
+    try:
+        set_default_payment_method(customer_id, sub["provider_subscription_id"], req.payment_method_id)
+        return {"status": "updated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/cancel")
