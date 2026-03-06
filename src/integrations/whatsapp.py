@@ -6,6 +6,9 @@ class WhatsAppProvider(Protocol):
     async def send_text_message(self, to_number: str, text: str, reply_to_message_id: Optional[str] = None) -> dict:
         ...
 
+    async def send_image(self, to_number: str, image_url: str, caption: Optional[str] = None) -> dict:
+        ...
+
     async def mark_message_as_read_and_typing(self, message_id: str, to_number: str, is_audio: bool = False) -> Optional[dict]:
         ...
 
@@ -44,6 +47,23 @@ class MetaWhatsAppClient:
             payload["context"] = {"message_id": reply_to_message_id}
 
         async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, headers=self._get_headers())
+            response.raise_for_status()
+            return response.json()
+
+    async def send_image(self, to_number: str, image_url: str, caption: Optional[str] = None) -> dict:
+        url = f"{self.base_url}/{self.phone_number_id}/messages"
+        image_payload: dict = {"link": image_url}
+        if caption:
+            image_payload["caption"] = caption
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": to_number,
+            "type": "image",
+            "image": image_payload,
+        }
+        async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(url, json=payload, headers=self._get_headers())
             response.raise_for_status()
             return response.json()
@@ -116,6 +136,21 @@ class EvolutionWhatsAppClient:
         }
         
         async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, headers=self._get_headers())
+            response.raise_for_status()
+            return response.json()
+
+    async def send_image(self, to_number: str, image_url: str, caption: Optional[str] = None) -> dict:
+        url = f"{self.api_url}/message/sendMedia/{self.instance_name}"
+        payload: dict = {
+            "number": to_number,
+            "mediatype": "image",
+            "media": image_url,
+            "delay": 1200,
+        }
+        if caption:
+            payload["caption"] = caption
+        async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(url, json=payload, headers=self._get_headers())
             response.raise_for_status()
             return response.json()

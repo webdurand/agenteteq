@@ -115,22 +115,32 @@ async def _notify_user(user_id: str, channel: str, slides: List[Dict[str, Any]])
 
 
 async def _notify_whatsapp(user_id: str, slides: List[Dict[str, Any]]):
-    """Envia as imagens geradas para o WhatsApp do usuário."""
+    """Envia as imagens geradas como mídia no WhatsApp do usuário."""
     try:
         from src.integrations.whatsapp import whatsapp_client
 
         total = len(slides)
-        header = f"✅ Seu carrossel ficou pronto! ({total} slides)\n\n"
-        lines = []
+        await whatsapp_client.send_text_message(
+            user_id,
+            f"✅ Seu carrossel ficou pronto! Enviando {total} slides..."
+        )
+
         for i, slide in enumerate(slides):
+            url = slide.get("image_url")
+            if not url:
+                continue
             num = slide.get("slide_number") or (i + 1)
             style = slide.get("style", "")
-            url = slide.get("image_url", "")
-            lines.append(f"*Slide {num}* — {style}\n{url}")
+            caption = f"Slide {num}/{total}"
+            if style:
+                caption += f" — {style}"
+            try:
+                await whatsapp_client.send_image(user_id, url, caption=caption)
+            except Exception as img_err:
+                print(f"[CAROUSEL] Erro ao enviar slide {num} via WhatsApp: {img_err}")
+                await whatsapp_client.send_text_message(user_id, f"Slide {num}: {url}")
 
-        full_msg = header + "\n\n".join(lines)
-        await whatsapp_client.send_text_message(user_id, full_msg)
-        print(f"[CAROUSEL] Resultado enviado via WhatsApp para {user_id}")
+        print(f"[CAROUSEL] {total} slides enviados via WhatsApp para {user_id}")
     except Exception as e:
         print(f"[CAROUSEL] Erro ao enviar resultado via WhatsApp: {e}")
 
