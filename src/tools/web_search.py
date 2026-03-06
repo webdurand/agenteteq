@@ -97,7 +97,8 @@ def create_web_search_tool(notifier: StatusNotifier):
         Use para buscar informações atualizadas, notícias, fatos ou
         qualquer coisa que precise de dados recentes da web.
         """
-        notifier.notify("Beleza, vou dar uma olhada e já te respondo!")
+        if notifier:
+            notifier.notify("Beleza, vou dar uma olhada e já te respondo!")
         return web_search_raw(query, max_results)
 
     return web_search
@@ -114,7 +115,8 @@ def create_fetch_page_tool(notifier: StatusNotifier):
         Use quando precisar detalhar o conteúdo de um link específico encontrado
         em uma busca ou fornecido pelo usuário.
         """
-        notifier.notify("Beleza, vou dar uma olhada e já te respondo!")
+        if notifier:
+            notifier.notify("Beleza, vou dar uma olhada e já te respondo!")
         return fetch_page_raw(url)
 
     return fetch_page

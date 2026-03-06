@@ -243,7 +243,7 @@ async def orchestrate_message(event: dict):
             print(f"[SESSION] Usuario {from_number} escolheu: {log_label}.")
 
             await whatsapp_client.mark_message_as_read_and_typing(message_id, from_number, is_audio=False)
-            notifier = StatusNotifier(to_number=from_number, reply_to_message_id=message_id)
+            notifier = None
             search_tools = [
                 create_web_search_tool(notifier),
                 create_fetch_page_tool(notifier),

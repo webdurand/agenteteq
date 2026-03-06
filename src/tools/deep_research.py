@@ -154,7 +154,8 @@ def create_deep_research_tool(notifier: StatusNotifier, user_id: str) -> Callabl
         Para buscas simples e rápidas, prefira a tool web_search.
         """
         print(f"[DEEP_RESEARCH] Iniciando pesquisa sobre: {topic}")
-        notifier.notify("Beleza, vou dar uma olhada e já te respondo!")
+        if notifier:
+            notifier.notify("Beleza, vou dar uma olhada e já te respondo!")
 
         # Busca inicial para avaliar o escopo
         initial_results = web_search_raw(topic, max_results=5)
@@ -164,7 +165,8 @@ def create_deep_research_tool(notifier: StatusNotifier, user_id: str) -> Callabl
 
         if needs_deep and subtopics:
             print(f"[DEEP_RESEARCH] Aprofundamento necessário. Sub-tópicos: {subtopics}")
-            notifier.notify("Vou detalhar mais pra te dar uma resposta mais precisa!")
+            if notifier:
+                notifier.notify("Vou detalhar mais pra te dar uma resposta mais precisa!")
             final_content = _run_deep_team(topic, subtopics)
         else:
             print(f"[DEEP_RESEARCH] Resultados iniciais suficientes.")
