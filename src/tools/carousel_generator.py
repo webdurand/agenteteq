@@ -90,7 +90,7 @@ async def _notify_user(user_id: str, channel: str, slides: List[Dict[str, Any]])
         return
 
     if channel in ("whatsapp_text", "whatsapp"):
-        _notify_whatsapp(user_id, done_slides)
+        await _notify_whatsapp(user_id, done_slides)
 
     elif channel in ("web", "web_voice", "web_text"):
         from src.endpoints.web import ws_manager
@@ -114,7 +114,7 @@ async def _notify_user(user_id: str, channel: str, slides: List[Dict[str, Any]])
             print(f"[CAROUSEL] Erro ao persistir mensagem de carrossel: {e}")
 
 
-def _notify_whatsapp(user_id: str, slides: List[Dict[str, Any]]):
+async def _notify_whatsapp(user_id: str, slides: List[Dict[str, Any]]):
     """Envia as imagens geradas para o WhatsApp do usuário."""
     try:
         from src.integrations.whatsapp import whatsapp_client
@@ -129,7 +129,7 @@ def _notify_whatsapp(user_id: str, slides: List[Dict[str, Any]]):
             lines.append(f"*Slide {num}* — {style}\n{url}")
 
         full_msg = header + "\n\n".join(lines)
-        asyncio.run(whatsapp_client.send_text_message(user_id, full_msg))
+        await whatsapp_client.send_text_message(user_id, full_msg)
         print(f"[CAROUSEL] Resultado enviado via WhatsApp para {user_id}")
     except Exception as e:
         print(f"[CAROUSEL] Erro ao enviar resultado via WhatsApp: {e}")
@@ -208,7 +208,7 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
             Resumo dos carrosséis com seus status.
         """
         from src.models.carousel import list_user_carousels
-        carousels = list_user_carousels(user_id)
+        carousels = list_user_carousels(user_id).get("carousels", [])
         if not carousels:
             return "Nenhum carrossel encontrado."
 
