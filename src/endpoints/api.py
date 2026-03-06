@@ -77,7 +77,36 @@ async def api_delete_task(task_id: int, background_tasks: BackgroundTasks, curre
 @router.get("/reminders")
 async def api_get_reminders(status: str = Query("active"), current_user: dict = Depends(get_current_user)):
     user_id = current_user["phone_number"]
-    reminders = list_user_reminders(user_id, status=status)
+
+    if status == "all":
+        from src.models.reminders import list_user_reminders as _list
+        active = _list(user_id, status="active")
+        fired = _list(user_id, status="fired")
+        reminders = active + fired
+    else:
+        reminders = list_user_reminders(user_id, status=status)
+
+    try:
+        from src.scheduler.engine import get_scheduler
+        from src.memory.identity import get_user
+        import zoneinfo
+
+        scheduler = get_scheduler()
+        user_data = get_user(user_id)
+        user_tz_str = user_data.get("timezone", "America/Sao_Paulo") if user_data else "America/Sao_Paulo"
+        user_tz = zoneinfo.ZoneInfo(user_tz_str)
+
+        for r in reminders:
+            job_id = r.get("apscheduler_job_id")
+            r["next_run_str"] = None
+            if job_id and r.get("status") == "active":
+                job = scheduler.get_job(job_id)
+                if job and job.next_run_time:
+                    next_dt = job.next_run_time.astimezone(user_tz)
+                    r["next_run_str"] = next_dt.isoformat()
+    except Exception as e:
+        print(f"[API] Erro ao enriquecer reminders com next_run: {e}")
+
     return {"reminders": reminders}
 
 @router.post("/reminders")
