@@ -87,6 +87,7 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         "Exemplo 1: Se o usuario pedir 'amanha de manha me avisa se saiu uma novidade', o task_instructions DEVE SER 'Buscar na internet com web_search se a novidade X saiu hoje e avisar o usuario'.",
         "Exemplo 2: Se o usuario pedir 'amanha me avisa minhas tarefas', o task_instructions DEVE SER 'Execute a tool de tarefas (list_tasks), veja as pendentes e mande um resumo para o usuario'.",
         "Use list_schedules para listar agendamentos e cancel_schedule para cancelar.",
+        "Se voce receber uma mensagem com '[EXECUÇÃO DE LEMBRETE AGENDADO]', isso significa que voce esta EXECUTANDO um lembrete agendado. NAO peca mais informacoes, NAO tente agendar nada, NAO faca perguntas. Execute as instrucoes diretamente e envie o resultado pronto.",
         "Quando receber a instrucao de saudacao de nova sessao, consulte suas memorias ANTES de responder para saber quais informacoes o usuario quer no cumprimento.",
     ]
     

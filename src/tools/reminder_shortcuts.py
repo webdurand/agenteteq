@@ -26,17 +26,6 @@ _TRIGGER_HINTS = (
 )
 
 
-def _extract_subject(text: str, time_match: re.Match[str]) -> str:
-    tail = text[time_match.end():].strip(" .,!?:;-")
-    if not tail:
-        return "do combinado"
-
-    tail = re.sub(r"^(que|pra|para|de)\s+", "", tail, flags=re.IGNORECASE).strip()
-    if not tail:
-        return "do combinado"
-    return tail
-
-
 def try_schedule_quick_reminder(
     user_phone: str,
     text: str,
@@ -61,10 +50,12 @@ def try_schedule_quick_reminder(
     if minutes <= 0:
         return None
 
-    subject = _extract_subject(text, time_match)
     instructions = (
-        "Envie um lembrete curto e direto para o usuario. "
-        f"Assunto: {subject}."
+        f'O usuario havia pedido: "{text}". '
+        "Atenda ao pedido diretamente. "
+        "Se envolver tarefas, use list_tasks. "
+        "Se envolver pesquisa, use web_search. "
+        "Envie o resultado pronto."
     )
 
     schedule_message, _, _ = create_scheduler_tools(user_phone)
@@ -72,6 +63,6 @@ def try_schedule_quick_reminder(
         task_instructions=instructions,
         trigger_type="date",
         minutes_from_now=minutes,
-        title=f"Lembrete rapido ({minutes} min)",
+        title=text[:60],
         notification_channel=notification_channel,
     )

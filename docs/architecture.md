@@ -164,7 +164,7 @@ Permite que o Teq envie mensagens proativas sem precisar de input do usuário. R
 |---------|-----------------|
 | `src/models/reminders.py` | CRUD da tabela `reminders` no PostgreSQL. Funciona como a **fonte de verdade** dos agendamentos, suportando canais dinâmicos. |
 | `src/scheduler/engine.py` | Singleton do APScheduler com PostgreSQL job store (`DATABASE_URL`). Possui `reconcile_reminders()` no startup para recriar jobs órfãos a partir do banco. |
-| `src/scheduler/dispatcher.py` | Função `dispatch_proactive_message(reminder_id)` executada pelo scheduler. Busca no banco, verifica status, cria um Agno Agent, roda as instruções e envia via canal (ex: `whatsapp_text`). |
+| `src/scheduler/dispatcher.py` | Função `dispatch_proactive_message(reminder_id)` executada pelo scheduler. Busca no banco, verifica status, cria um Agno Agent com prefixo proativo (evita que o agente confunda a execução com uma conversa normal e peça mais informações), roda as instruções e envia via canal (ex: `whatsapp_text`). |
 | `src/tools/scheduler_tool.py` | Tools para o agente: `schedule_message` (grava no DB e adiciona job), `list_schedules` (lê do DB) e `cancel_schedule` (marca DB e remove job). |
 
 ### Tipos de Gatilho
@@ -190,7 +190,7 @@ Todo dia às 8h (BRT): scheduler dispara → dispatcher.py
        ↓
 Busca `reminder_id` no banco → Cria Agno Agent
        ↓
-agent.run(task_instructions) → resposta
+agent.run(prefixo_proativo + task_instructions) → resposta
        ↓
 Envia resposta via notification_channel (whatsapp_text)
 ```
@@ -206,7 +206,7 @@ Para reduzir falhas de execução de tool em frases curtas de lembrete, existe u
 
 - Arquivo: `src/tools/reminder_shortcuts.py`
 - Entradas alvo: mensagens com intenção explícita de lembrete + tempo relativo em minutos (ex: "me avisa daqui 5 min")
-- Comportamento: agenda diretamente via `schedule_message(...)` com `trigger_type="date"` e `minutes_from_now`, persistindo em `reminders` e emitindo `reminder_updated`
+- Comportamento: agenda diretamente via `schedule_message(...)` com `trigger_type="date"` e `minutes_from_now`, persistindo em `reminders` e emitindo `reminder_updated`. O `task_instructions` inclui a mensagem original do usuário na íntegra, delegando a interpretação ao LLM no momento do disparo (sem tentar parsear intenção via regex).
 - Canais:
   - WhatsApp (`src/endpoints/whatsapp.py`): agenda com `notification_channel="whatsapp_text"`
   - WebSocket (`src/endpoints/web.py`): agenda com `web_voice` (modo voz) ou `whatsapp_text` (modo texto)
