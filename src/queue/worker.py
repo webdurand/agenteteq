@@ -1,7 +1,7 @@
 import asyncio
 import traceback
 import httpx
-from src.queue.task_queue import claim_next_task, complete_task, fail_task, count_processing_tasks
+from src.queue.task_queue import claim_next_task, complete_task, fail_task, count_processing_tasks, is_task_cancelled
 from src.config.system_config import get_config
 
 async def _download_image(url: str) -> bytes:
@@ -18,6 +18,10 @@ async def process_task_queue():
 
     task = claim_next_task()
     if not task:
+        return
+
+    if is_task_cancelled(task["id"]):
+        print(f"[WORKER] Task {task['id']} foi cancelada, pulando")
         return
 
     try:

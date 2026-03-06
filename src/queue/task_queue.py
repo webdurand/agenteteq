@@ -57,8 +57,29 @@ def enqueue_task(user_id: str, task_type: str, channel: str, payload: Dict[str, 
                 if daily >= max_daily:
                     return {"status": "daily_limit", "daily_limit": max_daily}
 
-    # Insert into queue
+    # Cancel stale pending tasks of same type for this user
+    # (only pending — processing tasks are already being worked on)
     engine = _get_pg_engine()
+    if engine:
+        with engine.connect() as conn:
+            cancelled = conn.execute(text("""
+                UPDATE background_tasks 
+                SET status = 'cancelled', updated_at = NOW()
+                WHERE user_id = :uid AND task_type = :ttype AND status = 'pending'
+            """), {"uid": user_id, "ttype": task_type}).rowcount
+            conn.commit()
+            if cancelled:
+                print(f"[QUEUE] Canceladas {cancelled} tasks pendentes ({task_type}) do usuario {user_id}")
+    else:
+        with _get_sqlite_conn() as conn:
+            conn.execute("""
+                UPDATE background_tasks 
+                SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ? AND task_type = ? AND status = 'pending'
+            """, (user_id, task_type))
+            conn.commit()
+
+    # Insert into queue
     task_id = None
     if engine:
         with engine.connect() as conn:
@@ -220,6 +241,20 @@ def fail_task(task_id: str, error: str):
             else:
                 conn.execute("UPDATE background_tasks SET status = 'failed', result = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (json.dumps({"error": error}), task_id))
             conn.commit()
+
+def is_task_cancelled(task_id: str) -> bool:
+    """Check if a task was cancelled (e.g. replaced by a newer one)."""
+    engine = _get_pg_engine()
+    if engine:
+        with engine.connect() as conn:
+            status = conn.execute(text("SELECT status FROM background_tasks WHERE id = :id"), {"id": task_id}).scalar()
+            return status == "cancelled"
+    else:
+        with _get_sqlite_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT status FROM background_tasks WHERE id = ?", (task_id,))
+            row = cursor.fetchone()
+            return row[0] == "cancelled" if row else True
 
 def count_processing_tasks() -> int:
     engine = _get_pg_engine()
