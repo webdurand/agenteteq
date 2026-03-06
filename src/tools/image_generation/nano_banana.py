@@ -38,12 +38,34 @@ class NanoBananaProvider(ImageProvider):
                     response_modalities=[Modality.TEXT, Modality.IMAGE],
                 )
             )
-            # Percorre as partes da resposta e extrai os bytes da imagem
-            for part in response.candidates[0].content.parts:
+
+            candidate = response.candidates[0] if response.candidates else None
+            if not candidate:
+                raise Exception(f"API retornou sem candidates. finish_reason={getattr(response, 'prompt_feedback', 'unknown')}")
+
+            content = candidate.content
+            if not content or not content.parts:
+                # A API pode bloquear o conteúdo por segurança — tenta com prompt simplificado
+                finish_reason = getattr(candidate, 'finish_reason', 'unknown')
+                print(f"[NANO_BANANA] Conteúdo vazio (finish_reason={finish_reason}), tentando prompt fallback...")
+                fallback_prompt = f"Professional editorial photo for tech blog, clean modern design, {prompt[:120]}"
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=fallback_prompt,
+                    config=GenerateContentConfig(
+                        response_modalities=[Modality.TEXT, Modality.IMAGE],
+                    )
+                )
+                candidate = response.candidates[0] if response.candidates else None
+                content = getattr(candidate, 'content', None)
+                if not content or not content.parts:
+                    raise Exception(f"API bloqueou o conteúdo mesmo após fallback. finish_reason={finish_reason}")
+
+            for part in content.parts:
                 if part.inline_data is not None:
                     print(f"[NANO_BANANA] Imagem recebida | mime={part.inline_data.mime_type} | bytes={len(part.inline_data.data)}")
                     return part.inline_data.data
 
-            raise Exception("Nenhuma imagem retornada pela API do Gemini.")
+            raise Exception("Resposta recebida mas sem inline_data de imagem.")
 
         return await loop.run_in_executor(_image_executor, _generate)

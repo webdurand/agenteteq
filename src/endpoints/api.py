@@ -105,3 +105,15 @@ async def api_delete_reminder(reminder_id: int, background_tasks: BackgroundTask
     result = cancel_schedule(str(reminder_id))
     background_tasks.add_task(emit_event, user_id, "reminder_updated")
     return {"message": result}
+
+# --- Chat History ---
+@router.get("/chat/history")
+async def api_get_chat_history(
+    limit: int = Query(20, ge=1, le=100),
+    before_id: Optional[int] = Query(None),
+    current_user: dict = Depends(get_current_user)
+):
+    from src.models.chat_messages import get_messages
+    user_id = current_user["phone_number"]
+    return get_messages(user_id=user_id, limit=limit, before_id=before_id)
+

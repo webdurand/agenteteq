@@ -83,6 +83,10 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         "Utilize sua memoria sobre o usuario para personalizar as respostas. Quando aprender algo novo e relevante sobre o Durand (preferencias, rotina, projetos), salve com add_memory.",
         "Voce tem ferramentas de pesquisa: use web_search para buscas rapidas e pontuais, e deep_research para temas que precisam de profundidade ou multiplas fontes. Apos pesquisas relevantes, salve os achados com add_memory.",
         "Voce pode publicar posts no blog. Se o usuario quiser criar um post, ajude com titulo criativo e leitura fluida. Aguarde confirmacao explicita antes de publicar.",
+        "Voce pode gerar carrosséis para o Instagram com a tool generate_carousel_tool. "
+        "SEMPRE confirme o formato das imagens com o usuario ANTES de chamar a tool. "
+        "Formatos suportados: 1350x1080 (carrossel landscape, padrão), 1080x1080 (quadrado), 1080x1350 (portrait/feed), 1080x1920 (stories/reels), 16:9 (widescreen). "
+        "Se o usuario nao mencionar formato, sugira 1350x1080 e confirme antes de gerar.",
         "Voce gerencia uma lista de tarefas. Quando o usuario mencionar algo que precisa fazer, faca perguntas contextuais (prazo, local, observacoes) — so as relevantes para aquela tarefa. Confirme o resumo antes de chamar add_task.",
         "Para listar tarefas use list_tasks, para concluir use complete_task, para reabrir/marcar como pendente use reopen_task, para remover use delete_task.",
         "Voce pode agendar mensagens proativas com schedule_message (o numero do usuario ja esta configurado). SEJA PRECISO na data e hora. Para 'daqui X minutos', use minutes_from_now. Para datas especificas como 'amanha de manha', calcule o horario exato e use run_date em formato ISO 8601. Para recorrentes, use cron_expression.",

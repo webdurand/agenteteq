@@ -73,6 +73,7 @@ class WebSocketNotifier:
 async def _process_text(websocket, phone_number: str, user_text: str, tts, user: dict, mode: str = "voice"):
     start_time = time.time()
     log_event(user_id=phone_number, channel="web", event_type="message_received", status="success")
+    asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "user", user_text))
     new_session = is_new_session(user, threshold_hours=4)
     loop = asyncio.get_event_loop()
 
@@ -168,6 +169,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
         "mime_type": mime_type,
         "needs_follow_up": follow_up,
     })
+    asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "agent", final_text))
     latency = int((time.time() - start_time) * 1000)
     log_event(user_id=phone_number, channel="web", event_type="message_sent", status="success", latency_ms=latency)
     await websocket.send_json({"type": "reminder_updated"})
@@ -352,6 +354,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                     )
                     log_agent_tools(phone_number, "web", agent)
                     response_content = extract_final_response(response)
+                    asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "user", "[Áudio]"))
                     asyncio.create_task(asyncio.to_thread(
                         extract_and_save_facts, phone_number, "Áudio do usuário", response_content
                     ))
@@ -360,6 +363,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
 
                     transcript = await transcriber.transcribe(audio_bytes, filename="audio.webm")
                     await websocket.send_json({"type": "transcript", "text": transcript})
+                    asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "user", transcript))
                     await websocket.send_json({"type": "status", "text": "Pensando..."})
 
                     if not new_session:
@@ -426,6 +430,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                     "mime_type": mime_type,
                     "needs_follow_up": follow_up,
                 })
+                asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "agent", response_content))
                 print(f"[WEB WS] Resposta enviada ao cliente: {phone_number}")
                 latency = int((time.time() - start_time) * 1000)
                 log_event(user_id=phone_number, channel="web", event_type="message_sent", status="success", latency_ms=latency)

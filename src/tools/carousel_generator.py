@@ -21,7 +21,8 @@ async def _process_carousel_background(
     carousel_id: str,
     user_id: str,
     slides: List[Dict[str, Any]],
-    channel: str = "web"
+    channel: str = "web",
+    aspect_ratio: str = "4:3"
 ):
     """
     Gera imagens em paralelo, faz upload no Cloudinary e notifica o usuário
@@ -35,7 +36,7 @@ async def _process_carousel_background(
             style = slide.get("style", "")
             full_prompt = f"Style: {style}. {prompt}"
 
-            image_bytes = await provider.generate(full_prompt, aspect_ratio="4:5")
+            image_bytes = await provider.generate(full_prompt, aspect_ratio=aspect_ratio)
 
             loop = asyncio.get_event_loop()
 
@@ -54,7 +55,17 @@ async def _process_carousel_background(
             return slide
 
         tasks = [_generate_and_upload(slide, i) for i, slide in enumerate(slides)]
-        updated_slides = await asyncio.gather(*tasks)
+        # return_exceptions=True garante que uma falha individual não cancela os outros slides
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        updated_slides = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                print(f"[CAROUSEL] Slide {i + 1} falhou: {result}")
+                slides[i]["image_url"] = None
+                updated_slides.append(slides[i])
+            else:
+                updated_slides.append(result)
 
         update_carousel_status(carousel_id, "done", list(updated_slides))
         print(f"[CAROUSEL] Carrossel {carousel_id} finalizado com sucesso.")
@@ -64,7 +75,6 @@ async def _process_carousel_background(
 
         # Envia de volta pelo canal de origem
         await _notify_user(user_id, channel, list(updated_slides))
-
     except Exception as e:
         import traceback
         print(f"[CAROUSEL] Erro na geração em background: {e}\n{traceback.format_exc()}")
@@ -119,6 +129,7 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
     def generate_carousel_tool(
         title: str,
         slides: List[Dict[str, str]],
+        format: str = "1350x1080",
         reference_images: List[str] = []
     ) -> str:
         """
@@ -128,16 +139,28 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
 
         Args:
             title: Título do carrossel.
-            slides: Lista de dicionários, cada um contendo as chaves:
+            slides: Lista de dicionários com as chaves:
                     - 'slide_number': (opcional) número do slide
-                    - 'prompt': descrição detalhada da imagem a ser gerada
+                    - 'prompt': descrição detalhada da imagem
                     - 'style': estilo visual (ex: Clean/Mockup, Cinemático)
-            reference_images: (opcional) Lista de URLs de imagens de referência enviadas pelo usuário.
+            format: Formato/dimensão das imagens. Exemplos:
+                    - "1350x1080" → carrossel Instagram landscape (padrão)
+                    - "1080x1080" → quadrado
+                    - "1080x1350" → portrait / feed vertical
+                    - "1080x1920" → stories / reels
+                    - "16:9" → widescreen
+                    O agente DEVE confirmar o formato com o usuário antes de chamar esta tool.
+            reference_images: (opcional) URLs de imagens de referência do usuário.
 
         Returns:
-            Mensagem de confirmação imediata.
+            Mensagem de confirmação imediata com o formato que será usado.
         """
-        print(f"[CAROUSEL] generate_carousel_tool | user={user_id} | channel={channel} | title='{title}' | slides={len(slides)}")
+        from src.tools.image_generation.base import resolve_aspect_ratio
+
+        aspect_ratio = resolve_aspect_ratio(format)
+        format_label = format.strip() or "1350x1080"
+
+        print(f"[CAROUSEL] generate_carousel_tool | user={user_id} | channel={channel} | format={format_label} ({aspect_ratio}) | title='{title}' | slides={len(slides)}")
 
         try:
             carousel_id = create_carousel(user_id, title, slides, reference_images)
@@ -146,7 +169,7 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
             from src.events import _main_loop
             if _main_loop and _main_loop.is_running():
                 asyncio.run_coroutine_threadsafe(
-                    _process_carousel_background(carousel_id, user_id, list(slides), channel),
+                    _process_carousel_background(carousel_id, user_id, list(slides), channel, aspect_ratio),
                     _main_loop
                 )
             else:
@@ -154,7 +177,7 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
 
             canal_label = "WhatsApp" if "whatsapp" in channel else "painel de Imagens na web"
             return (
-                f"Carrossel '{title}' com {len(slides)} slides iniciado! "
+                f"Carrossel '{title}' com {len(slides)} slides iniciado no formato {format_label} ({aspect_ratio})! "
                 f"As imagens estão sendo geradas agora em paralelo e serão enviadas para você no {canal_label} assim que ficarem prontas — "
                 "geralmente leva entre 1 a 3 minutos."
             )
