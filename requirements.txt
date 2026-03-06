@@ -26,3 +26,4 @@ sqlalchemy
 websockets
 edge-tts
 stripe>=11.0.0
+cloudinary

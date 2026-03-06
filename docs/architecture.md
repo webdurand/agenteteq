@@ -247,6 +247,24 @@ As preferências são controladas pelo usuário via conversa e armazenadas na me
 - "tira as notícias do cumprimento" → agente usa `list_memories` + `delete_memory` → saudações voltam ao padrão
 - O Agno (`search_knowledge=True`) encontra essas preferências automaticamente antes de cada saudação
 
+## Gerador de Carrossel para Instagram
+
+Permite ao agente gerar múltiplos slides em paralelo para o Instagram, utilizando o modelo Gemini (Nano Banana Pro) e hospedando no Cloudinary.
+
+### Fluxo de Geração
+1. O usuário solicita a geração de um carrossel fornecendo assunto, slides e referências.
+2. O agente aciona a tool `generate_carousel_tool` (em `src/tools/carousel_generator.py`).
+3. A tool grava um registro na tabela `carousels` do PostgreSQL (estado `generating`) e inicia uma rotina em background (`asyncio.create_task`), liberando o agente para responder imediatamente que o processamento foi iniciado.
+4. Em background, as imagens são geradas em paralelo usando a interface `ImageProvider` (`src/tools/image_generation/base.py`).
+5. O provider padrão é o `NanoBananaProvider`, que encapsula o uso da API do Gemini (`gemini-3-pro-image-preview`).
+6. Cada imagem gerada (em bytes) é enviada via upload para o **Cloudinary** (usado pelo seu plano gratuito generoso com CDN global).
+7. O banco de dados é atualizado com o status `done` e as URLs finais das imagens geradas.
+8. Um evento WebSocket (`carousel_generated`) é disparado sincronicamente (`emit_event_sync`) para atualizar o frontend.
+9. No frontend, o componente `ImagesPanel` ouve o evento, re-busca a lista de carrosséis e exibe o resultado para o usuário em tempo real.
+
+### Desacoplamento de Provedores
+A geração de imagens é isolada na interface abstrata `ImageProvider`. Para substituir o Gemini por Dall-E, Midjourney, Fal.ai ou Replicate, basta criar uma nova classe herdando de `ImageProvider` e configurar a variável de ambiente `IMAGE_PROVIDER` no `src/tools/image_generation/__init__.py`.
+
 ## Dashboard Web e Real-time (`agenteteq-front`)
 
 A aplicação React separada evoluiu de uma simples interface de voz para um **Dashboard Completo**, permitindo interação multimodal (voz e texto), gerenciamento de tarefas/lembretes via interface e visualização de ações do agente em tempo real.
@@ -283,7 +301,17 @@ O Dashboard combina CRUD direto via REST e atualizações real-time via WebSocke
 
 O usuário informa seu número de telefone na primeira visita (salvo em `localStorage`). Esse número é o `session_id` do Agno, garantindo acesso à mesma memória e histórico do WhatsApp.
 
-### Módulo TTS (`src/integrations/tts.py`)
+### Fluxo de Voz Real-time (Gemini Live API)
+
+A aplicação agora possui um fluxo de voz avançado (quando `VOICE_REALTIME=true` ou `VITE_VOICE_REALTIME=true`):
+- O frontend (`useVoiceLive.ts`) envia PCM 16kHz via WebSocket para `/ws/voice-live`.
+- O backend (`src/endpoints/voice_live.py`) atua como proxy bidirecional entre o frontend e a **Gemini Live API** via WSS.
+- O modelo processa áudio nativamente e responde em áudio (eliminando a cadeia STT -> LLM -> TTS).
+- A latência cai de ~3-10s para <1s.
+- Suporta "barge-in" (interrupção pelo usuário) e chamadas de ferramentas (*tool calling* nativo do Gemini).
+- Para as tools, usamos `src/agent/voice_tools.py` que espelha as functions existentes no Agno para o formato que a Live API do Google exige.
+
+### Módulo TTS Clássico (`src/integrations/tts.py`)
 
 Interface desacoplada `BaseTTS` com factory `get_tts()`:
 

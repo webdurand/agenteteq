@@ -42,12 +42,15 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         from src.tools.weather import get_weather
         from src.tools.scheduler_tool import create_scheduler_tools
         schedule_message, list_schedules, cancel_schedule = create_scheduler_tools(session_id)
+        from src.tools.carousel_generator import create_carousel_tools
+        generate_carousel, list_carousels = create_carousel_tools(session_id)
         tools = [
             *publish_post_tools,
             add_memory, delete_memory, list_memories,
             add_task, list_tasks, complete_task, reopen_task, delete_task,
             get_weather,
             schedule_message, list_schedules, cancel_schedule,
+            generate_carousel, list_carousels,
         ]
     except ImportError as e:
         print(f"[ASSISTANT] Aviso: algumas tools nao carregaram ({e}). Usando conjunto basico.")
