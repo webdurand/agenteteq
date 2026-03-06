@@ -55,3 +55,11 @@ class ImageProvider(ABC):
         aspect_ratio deve ser um dos valores suportados: "1:1", "3:4", "4:3", "9:16", "16:9"
         """
         pass
+
+    @abstractmethod
+    async def edit(self, prompt: str, reference_image: bytes, aspect_ratio: str = "1:1") -> bytes:
+        """
+        Edita/transforma uma imagem existente com base em uma instrução textual.
+        Recebe os bytes da imagem original e retorna os bytes da imagem editada.
+        """
+        pass

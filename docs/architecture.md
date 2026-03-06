@@ -72,6 +72,25 @@ Como o webhook do WhatsApp (Evolution/Meta) emite um evento por mensagem, implem
 2. **Processamento**: As imagens (em bytes) são injetadas no Agente (`agent.run(images=[Image(content=bytes)])`).
 3. **Indexação na Base de Conhecimento**: Em background, o próprio Gemini gera uma descrição curta para cada imagem, que é então salva na base de conhecimento `PgVector` junto com a URL permanente. Quando o agente busca em sua memória no futuro, ele pode resgatar a referência e URL originais.
 
+### Edição e Transformação de Imagens (`src/tools/image_editor.py`)
+O agente pode **editar ou transformar imagens** enviadas pelo usuário usando o modelo Gemini (`gemini-3-pro-image-preview`) que suporta image editing nativo.
+
+**Fluxo:**
+1. O usuário envia uma imagem + instrução textual (ex: "coloca um dragão nessa cena").
+2. Os bytes da imagem são armazenados em `_session_images[session_id]` antes de `agent.run()`.
+3. O agente detecta a intenção de edição e chama `edit_image_tool`.
+4. A tool recupera os bytes da sessão e dispara `_process_edit_background` (assíncrono):
+   - Envia evento WS `image_editing` → frontend exibe indicador de loading no chat.
+   - Chama `provider.edit(prompt, reference_image)` no Gemini.
+   - Faz upload do resultado no Cloudinary (`edited_images/{user_id}`).
+   - Envia evento WS `image_edit_ready` com a URL → frontend substitui loading pela imagem.
+   - Indexa a imagem editada na knowledge base para memória de longo prazo.
+5. No WhatsApp, o resultado é enviado como mídia diretamente.
+
+**Provider (`src/tools/image_generation/nano_banana.py`):**
+- `generate(prompt, aspect_ratio)`: geração do zero (text-to-image).
+- `edit(prompt, reference_image, aspect_ratio)`: edição de imagem existente (image+text-to-image). Usa `Part.from_bytes` para injetar a imagem original no `contents` da API.
+
 ## Módulos de Pesquisa (novos)
 
 ### Status Notifier (`src/integrations/status_notifier.py`)

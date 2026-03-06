@@ -40,9 +40,11 @@ def create_scheduler_tools(user_phone: str):
         Agenda uma mensagem proativa para ser enviada ao usuario.
 
         Args:
-            task_instructions: O que o seu 'eu do futuro' deve fazer quando o job disparar. Deve ser UM PROMPT COMPLETO.
-                               Se envolver tarefas, mande chamar list_tasks. Se envolver pesquisa, mande chamar web_search.
-                               Ex: "Execute a tool web_search para buscar X e mande o resumo para o usuario."
+            task_instructions: O que o seu 'eu do futuro' deve fazer quando o job disparar.
+                               Deve ser UM PROMPT COMPLETO e EXTREMAMENTE ESPECIFICO — diga quais tools chamar.
+                               Ex: "Buscar na internet com web_search se a novidade X saiu hoje e avisar o usuario."
+                               Ex: "Execute list_tasks, veja as pendentes e mande um resumo para o usuario."
+                               Ex: "Pesquisar com deep_research sobre Y e enviar um relatorio."
             trigger_type: Tipo de gatilho — "date" (unico), "cron" (recorrente), "interval" (por intervalo).
             minutes_from_now: PREFERIDO para disparo unico relativo. Numero de minutos a partir de agora.
                               Ex: 1 para "daqui 1 minuto", 60 para "daqui 1 hora".

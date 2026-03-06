@@ -53,16 +53,18 @@ def dispatch_proactive_message(reminder_id: int):
             
             from src.agent.response_utils import extract_final_response
 
-            proactive_message = (
-                "[EXECUÇÃO DE LEMBRETE AGENDADO - NÃO É UMA CONVERSA]\n"
-                "Voce esta executando um lembrete que o usuario agendou anteriormente. "
-                "NAO peca mais informacoes, NAO tente agendar nada novo, NAO faca perguntas. "
-                "Execute as instrucoes abaixo DIRETAMENTE e envie o resultado pronto para o usuario.\n\n"
-                f"Instrucoes: {task_instructions}"
-            )
+            reminder_instructions = [
+                "EXECUCAO DE LEMBRETE AGENDADO: Voce esta executando um lembrete que o usuario agendou anteriormente.",
+                "NAO peca mais informacoes, NAO tente agendar nada novo, NAO faca perguntas.",
+                "Execute as instrucoes diretamente e envie o resultado pronto.",
+            ]
 
-            agent = get_assistant(session_id=user_phone, extra_tools=search_tools)
-            response = agent.run(proactive_message, knowledge_filters={"user_id": user_phone})
+            agent = get_assistant(
+                session_id=user_phone,
+                extra_tools=search_tools,
+                extra_instructions=reminder_instructions,
+            )
+            response = agent.run(task_instructions, knowledge_filters={"user_id": user_phone})
             
             if response and response.content:
                 response_content = extract_final_response(response)

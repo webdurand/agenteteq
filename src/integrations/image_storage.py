@@ -63,32 +63,39 @@ def index_user_image(user_id: str, cloudinary_url: str, description: str):
     )
     
     try:
-        vector_db.upsert([doc])
+        content_hash = str(hash(f"{user_id}:{cloudinary_url}"))
+        vector_db.insert(content_hash=content_hash, documents=[doc])
         print(f"[IMAGE_STORAGE] Imagem indexada para {user_id}: {cloudinary_url}")
     except Exception as e:
-        print(f"[IMAGE_STORAGE] Erro ao indexar imagem: {e}")
+        err = str(e).lower()
+        if "unique" in err or "duplicate" in err:
+            print(f"[IMAGE_STORAGE] Imagem já indexada (duplicada): {cloudinary_url}")
+        else:
+            print(f"[IMAGE_STORAGE] Erro ao indexar imagem: {e}")
 
-async def describe_and_store_images(user_id: str, image_data: List[bytes], agent=None):
+async def describe_and_store_images(user_id: str, image_data: List[bytes], agent=None, pre_uploaded_urls: List[str] = None):
     """
-    Processo em background que faz upload, gera descrição e indexa as imagens.
+    Processo em background que faz upload (se necessário), gera descrição e indexa as imagens.
     Recebe as imagens como bytes brutos.
     """
     if not image_data:
         return
         
     try:
-        # 1. Upload no Cloudinary (em paralelo)
         loop = asyncio.get_event_loop()
-        upload_tasks = []
-        
-        for img_bytes in image_data:
-            # Roda o upload síncrono em thread separada
-            upload_tasks.append(
-                loop.run_in_executor(None, upload_user_image, user_id, img_bytes)
-            )
+        urls = []
+        if pre_uploaded_urls and len(pre_uploaded_urls) == len(image_data):
+            urls = pre_uploaded_urls
+        else:
+            # 1. Upload no Cloudinary (em paralelo)
+            upload_tasks = []
+            for img_bytes in image_data:
+                # Roda o upload síncrono em thread separada
+                upload_tasks.append(
+                    loop.run_in_executor(None, upload_user_image, user_id, img_bytes)
+                )
+            urls = await asyncio.gather(*upload_tasks, return_exceptions=True)
             
-        urls = await asyncio.gather(*upload_tasks, return_exceptions=True)
-        
         # 2. Descreve as imagens com Gemini
         from agno.agent import Agent
         from agno.models.google import Gemini

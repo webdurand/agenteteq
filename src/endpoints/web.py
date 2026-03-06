@@ -90,14 +90,32 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     agent_images = []
     if image_bytes_list:
         from agno.media import Image
+        from src.tools.image_editor import store_session_images
+        store_session_images(phone_number, image_bytes_list)
         for i_bytes in image_bytes_list:
             agent_images.append(Image(content=i_bytes))
-        from src.integrations.image_storage import describe_and_store_images
-        asyncio.create_task(describe_and_store_images(phone_number, image_bytes_list))
-        
-    # Salva no histórico a mensagem
-    display_text = user_text if user_text else "[Imagens]"
-    asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "user", display_text))
+            
+        async def handle_images_and_save_message():
+            from src.integrations.image_storage import upload_user_image, describe_and_store_images
+            loop = asyncio.get_event_loop()
+            upload_tasks = [loop.run_in_executor(None, upload_user_image, phone_number, img_bytes) for img_bytes in image_bytes_list]
+            urls = await asyncio.gather(*upload_tasks, return_exceptions=True)
+            
+            valid_urls = [u for u in urls if not isinstance(u, Exception) and u]
+            
+            display_text = user_text if user_text else ""
+            if valid_urls:
+                display_text += "\n" + "\n".join(valid_urls)
+            display_text = display_text.strip() or "[Imagens]"
+                
+            await asyncio.to_thread(save_message, phone_number, phone_number, "user", display_text)
+            
+            await describe_and_store_images(phone_number, image_bytes_list, pre_uploaded_urls=urls)
+
+        asyncio.create_task(handle_images_and_save_message())
+    else:
+        display_text = user_text if user_text else "[Imagens]"
+        asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "user", display_text))
     
     new_session = is_new_session(user, threshold_hours=4)
     loop = asyncio.get_event_loop()

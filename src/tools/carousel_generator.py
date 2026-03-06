@@ -29,6 +29,14 @@ async def _process_carousel_background(
     pelo canal de origem (web via WS ou whatsapp via API).
     """
     try:
+        from src.endpoints.web import ws_manager
+        await ws_manager.send_personal_message(user_id, {
+            "type": "carousel_generating",
+            "carousel_id": carousel_id,
+            "title": slides[0].get("style", "Carrossel") if slides else "Carrossel",
+            "num_slides": len(slides),
+        })
+
         provider = get_image_provider()
 
         async def _generate_and_upload(slide: Dict[str, Any], index: int):

@@ -1,7 +1,18 @@
 import os
 from typing import Optional
+from urllib.parse import urlparse
 
 from src.integrations.status_notifier import StatusNotifier
+
+_BLOCKED_DOMAINS = ("instagram.com", "facebook.com", "linkedin.com", "tiktok.com", "x.com", "twitter.com")
+
+
+def _is_blocked_url(url: str) -> bool:
+    try:
+        domain = urlparse(url).netloc.lower()
+        return any(blocked in domain for blocked in _BLOCKED_DOMAINS)
+    except Exception:
+        return False
 
 
 class JinaReaderToolkit:
@@ -128,9 +139,14 @@ def create_fetch_page_tool(notifier: StatusNotifier):
         """
         Lê e extrai o conteúdo completo de uma página web a partir de uma URL.
         Use quando precisar detalhar o conteúdo de um link específico encontrado
-        em uma busca ou fornecido pelo usuário. Funciona para qualquer site, 
+        em uma busca ou fornecido pelo usuário. Funciona para qualquer site,
         não apenas notícias.
         """
+        if _is_blocked_url(url):
+            return (
+                f"Nao consegui acessar {url} — redes sociais bloqueiam acesso de robos. "
+                "Futuramente vou ter integracao direta com essas plataformas."
+            )
         if notifier:
             notifier.notify("Beleza, vou dar uma olhada nesse link e já te respondo!")
         return fetch_page_raw(url)
@@ -148,9 +164,14 @@ def create_explore_site_tool(notifier: StatusNotifier):
         Explora um site extraindo seus links internos e seções para permitir navegação.
         Use esta ferramenta quando o usuário pedir para você "navegar pelo site",
         "ver o que tem no site", ou "procurar uma sessão específica" dentro de uma URL.
-        Ela retornará uma lista dos links encontrados na página para que você possa 
+        Ela retornará uma lista dos links encontrados na página para que você possa
         então chamar `fetch_page` nos links que parecem mais relevantes.
         """
+        if _is_blocked_url(url):
+            return (
+                f"Nao consegui acessar {url} — redes sociais bloqueiam acesso de robos. "
+                "Futuramente vou ter integracao direta com essas plataformas."
+            )
         if notifier:
             notifier.notify("Explorando as seções desse site, só um momento...")
             

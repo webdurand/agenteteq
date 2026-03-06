@@ -432,8 +432,9 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
                 image_bytes_list.append(i_bytes)
                 agent_images.append(Image(content=i_bytes))
                 
-    # Salvar imagens em background no Cloudinary + KB
     if image_bytes_list:
+        from src.tools.image_editor import store_session_images
+        store_session_images(from_number, image_bytes_list)
         from src.integrations.image_storage import describe_and_store_images
         asyncio.create_task(describe_and_store_images(from_number, image_bytes_list))
     
