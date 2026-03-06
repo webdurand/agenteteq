@@ -1,5 +1,6 @@
 import os
 from agno.agent import Agent
+from agno.db.postgres import PostgresDb
 from agno.db.sqlite import SqliteDb
 from src.memory.knowledge import get_knowledge_base
 from src.tools.memory_manager import create_memory_tools, list_memories
@@ -99,12 +100,19 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
     knowledge_base = get_knowledge_base()
     search_knowledge = os.getenv("MEMORY_MODE", "agentic").lower() == "agentic" and knowledge_base is not None
     
-    if db_url.startswith("libsql://") or db_url.startswith("https://"):
-        print("Aviso: Conexoes libsql remotas apresentam instabilidades com o ORM do Agno.")
-        print("         Fazendo fallback para banco SQLite local em 'sessions.db' para garantir o funcionamento.")
-        db_url = "sqlite:///sessions.db"
-    elif not db_url.startswith("sqlite"):
-        db_url = f"sqlite:///{db_url}"
+    db_url = os.getenv("DATABASE_URL", "")
+    if db_url.startswith("postgresql://"):
+        pg_url = db_url.replace("postgresql://", "postgresql+psycopg://")
+        storage = PostgresDb(session_table="agent_sessions", db_url=pg_url)
+    else:
+        sqlite_url = os.getenv("AGNO_DB_URL", "sqlite:///sessions.db")
+        if sqlite_url.startswith("libsql://") or sqlite_url.startswith("https://"):
+            print("Aviso: Conexoes libsql remotas apresentam instabilidades com o ORM do Agno.")
+            print("         Fazendo fallback para banco SQLite local em 'sessions.db' para garantir o funcionamento.")
+            sqlite_url = "sqlite:///sessions.db"
+        elif not sqlite_url.startswith("sqlite"):
+            sqlite_url = f"sqlite:///{sqlite_url}"
+        storage = SqliteDb(db_url=sqlite_url)
     
     base_instructions = [
         "Voce e o Teq, assistente e parceiro de confianca, direto ao ponto e com bom humor.",
@@ -156,7 +164,7 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         name="Teq",
         model=get_model(),
         session_id=session_id,
-        db=SqliteDb(db_url=db_url),
+        db=storage,
         knowledge=knowledge_base,
         search_knowledge=search_knowledge,
         add_datetime_to_context=True,

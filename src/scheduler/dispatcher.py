@@ -19,6 +19,18 @@ def dispatch_proactive_message(reminder_id: int):
     Args:
         reminder_id: ID do lembrete na tabela reminders.
     """
+    from src.config.system_config import _get_pg_engine
+    engine = _get_pg_engine()
+    
+    if engine:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            # Hash reminder_id to use as int lock key
+            lock_acquired = conn.execute(text("SELECT pg_try_advisory_lock(hashtext(:id))"), {"id": str(reminder_id)}).scalar()
+            if not lock_acquired:
+                print(f"[DISPATCHER] Outro pod ja esta processando o reminder {reminder_id}. Abortando localmente.")
+                return
+    
     print(f"[DISPATCHER] Disparando reminder_id {reminder_id}...")
     try:
         from src.models.reminders import get_reminder, mark_fired
@@ -124,3 +136,13 @@ def dispatch_proactive_message(reminder_id: int):
     except Exception as e:
         print(f"[DISPATCHER] Erro ao disparar reminder {reminder_id}: {e}")
         traceback.print_exc()
+        
+    finally:
+        if engine:
+            try:
+                from sqlalchemy import text
+                with engine.connect() as conn:
+                    conn.execute(text("SELECT pg_advisory_unlock(hashtext(:id))"), {"id": str(reminder_id)})
+                    conn.commit()
+            except Exception as e:
+                print(f"[DISPATCHER] Erro ao liberar lock do reminder {reminder_id}: {e}")

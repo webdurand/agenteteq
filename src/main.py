@@ -19,11 +19,17 @@ from src.endpoints.billing import router as billing_router, webhook_router
 from src.endpoints.carousel import router as carousel_router
 from src.scheduler.engine import start_scheduler, shutdown_scheduler
 from src.events import set_main_loop
+from src.db.init import ensure_tables
+from src.queue.task_queue import recover_stale_tasks
+from src.events_broadcast import listen_ws_events
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     set_main_loop(asyncio.get_running_loop())
+    ensure_tables()
+    recover_stale_tasks()
+    asyncio.create_task(listen_ws_events())
     start_scheduler()
     yield
     shutdown_scheduler()

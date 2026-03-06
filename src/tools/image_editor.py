@@ -17,41 +17,82 @@ if os.getenv("CLOUDINARY_CLOUD_NAME"):
         secure=True
     )
 
-# Armazena imagens por sessão. Estrutura:
-# { session_id: { "originals": [bytes, ...], "last_generated": bytes | None } }
-_session_data: dict[str, dict] = {}
+from src.config.system_config import _get_pg_engine, _get_sqlite_conn
+from src.integrations.image_storage import upload_user_image
 
+def _upsert_image_session(session_id: str, image_type: str, url: str, index: int = 0):
+    engine = _get_pg_engine()
+    if engine:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text("""
+                INSERT INTO image_sessions (session_id, image_type, image_url, image_index)
+                VALUES (:sid, :type, :url, :idx)
+                ON CONFLICT (session_id, image_type, image_index) DO UPDATE SET image_url = :url, created_at = NOW()
+            """), {"sid": session_id, "type": image_type, "url": url, "idx": index})
+            conn.commit()
+    else:
+        with _get_sqlite_conn() as conn:
+            conn.execute("""
+                INSERT INTO image_sessions (session_id, image_type, image_url, image_index)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (session_id, image_type, image_index) DO UPDATE SET image_url = excluded.image_url, created_at = CURRENT_TIMESTAMP
+            """, (session_id, image_type, url, index))
+            conn.commit()
+
+def _get_image_sessions(session_id: str) -> list:
+    engine = _get_pg_engine()
+    if engine:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT image_type, image_url FROM image_sessions WHERE session_id = :sid ORDER BY image_index ASC"), {"sid": session_id}).fetchall()
+            return [{"image_type": r[0], "image_url": r[1]} for r in rows]
+    else:
+        with _get_sqlite_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT image_type, image_url FROM image_sessions WHERE session_id = ? ORDER BY image_index ASC", (session_id,))
+            return [{"image_type": r[0], "image_url": r[1]} for r in cursor.fetchall()]
 
 def store_session_images(session_id: str, images: list[bytes]):
-    """Armazena imagens enviadas pelo usuário (originais)."""
-    if session_id not in _session_data:
-        _session_data[session_id] = {"originals": [], "last_generated": None}
-    _session_data[session_id]["originals"] = images
+    """Armazena imagens enviadas pelo usuário (originais) fazendo upload pro Cloudinary."""
+    for i, img_bytes in enumerate(images):
+        url = upload_user_image(session_id, img_bytes)
+        _upsert_image_session(session_id, "original", url, i)
 
 
-def store_generated_image(session_id: str, image_bytes: bytes):
-    """Armazena a última imagem gerada/editada."""
-    if session_id not in _session_data:
-        _session_data[session_id] = {"originals": [], "last_generated": None}
-    _session_data[session_id]["last_generated"] = image_bytes
+def store_generated_image(session_id: str, image_url: str):
+    """Armazena a URL da última imagem gerada/editada."""
+    _upsert_image_session(session_id, "generated", image_url, 0)
 
 
 def get_session_images(session_id: str) -> dict:
-    return _session_data.get(session_id, {"originals": [], "last_generated": None})
+    rows = _get_image_sessions(session_id)
+    return {
+        "originals": [r["image_url"] for r in rows if r["image_type"] == "original"],
+        "last_generated": next((r["image_url"] for r in rows if r["image_type"] == "generated"), None)
+    }
 
 
 def clear_session_images(session_id: str):
-    _session_data.pop(session_id, None)
+    engine = _get_pg_engine()
+    if engine:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text("DELETE FROM image_sessions WHERE session_id = :sid"), {"sid": session_id})
+            conn.commit()
+    else:
+        with _get_sqlite_conn() as conn:
+            conn.execute("DELETE FROM image_sessions WHERE session_id = ?", (session_id,))
+            conn.commit()
 
 
-def _try_recover_last_image(user_id: str) -> bytes | None:
+def _try_recover_last_image(user_id: str) -> str | None:
     """
     Fallback: busca a última imagem gerada/editada no histórico de chat
-    e baixa do Cloudinary para permitir edições encadeadas.
+    e retorna a URL para permitir edições encadeadas.
     """
     try:
         import re
-        import httpx
         from src.models.chat_messages import get_messages
 
         result = get_messages(user_id=user_id, limit=10)
@@ -67,9 +108,7 @@ def _try_recover_last_image(user_id: str) -> bytes | None:
             if urls:
                 url = urls[-1]
                 print(f"[IMAGE_EDITOR] Recuperando última imagem do histórico: {url}")
-                resp = httpx.get(url, timeout=15)
-                if resp.status_code == 200:
-                    return resp.content
+                return url
 
     except Exception as e:
         print(f"[IMAGE_EDITOR] Falha ao recuperar imagem do histórico: {e}")
@@ -95,8 +134,6 @@ async def _process_edit_background(
 
         result_bytes = await provider.edit(edit_prompt, reference_bytes, aspect_ratio=aspect_ratio)
 
-        store_generated_image(user_id, result_bytes)
-
         loop = asyncio.get_event_loop()
 
         def _upload():
@@ -111,6 +148,7 @@ async def _process_edit_background(
 
         upload_result = await loop.run_in_executor(None, _upload)
         image_url = upload_result.get("secure_url")
+        store_generated_image(user_id, image_url)
         print(f"[IMAGE_EDITOR] Imagem editada: {image_url}")
 
         if channel in ("web", "web_voice", "web_text"):
@@ -220,33 +258,39 @@ def create_image_editor_tools(user_id: str, channel: str = "web"):
             )
 
         if source == "original":
-            reference_bytes = originals[0] if originals else last_gen
+            reference_url = originals[0] if originals else last_gen
         elif source == "last_generated":
-            reference_bytes = last_gen if last_gen else (originals[0] if originals else None)
+            reference_url = last_gen if last_gen else (originals[0] if originals else None)
         else:
-            reference_bytes = originals[0] if originals else last_gen
+            reference_url = originals[0] if originals else last_gen
 
-        if not reference_bytes:
+        if not reference_url:
             return "Não encontrei a imagem de referência solicitada."
 
-        source_label = "original" if reference_bytes == (originals[0] if originals else None) else "última gerada"
+        source_label = "original" if reference_url == (originals[0] if originals else None) else "última gerada"
         aspect_ratio = resolve_aspect_ratio(format)
 
         print(f"[IMAGE_EDITOR] edit_image_tool | user={user_id} | channel={channel} | source={source} ({source_label}) | format={format} ({aspect_ratio}) | prompt='{edit_instructions[:80]}'")
 
-        from src.events import _main_loop
-        if _main_loop and _main_loop.is_running():
-            asyncio.run_coroutine_threadsafe(
-                _process_edit_background(user_id, edit_instructions, reference_bytes, aspect_ratio, channel),
-                _main_loop
+        import httpx
+        from src.queue.task_queue import enqueue_task
+        
+        result = enqueue_task(user_id, "image_edit", channel, {
+            "edit_instructions": edit_instructions,
+            "reference_url": reference_url,
+            "aspect_ratio": aspect_ratio
+        })
+        
+        if result["status"] == "queued":
+            return (
+                f"Edição de imagem na fila (ref: {source_label})! "
+                f"Posição {result['position']}. Estimativa: ~{result['estimated_wait']}."
             )
-        else:
-            print("[IMAGE_EDITOR] AVISO: loop principal não disponível.")
-            return "Erro interno: não foi possível iniciar a edição da imagem."
-
-        return (
-            f"Edição de imagem iniciada (ref: {source_label})! Processando: \"{edit_instructions[:80]}\". "
-            "A imagem editada será enviada automaticamente quando ficar pronta — geralmente leva menos de 1 minuto."
-        )
+        elif result["status"] == "limit_reached":
+            return f"Você já tem {result['pending_count']} pedidos na fila. Aguarde!"
+        elif result["status"] == "daily_limit":
+            return f"Limite de {result['daily_limit']} edições por dia atingido."
+            
+        return "Erro desconhecido ao colocar na fila."
 
     return edit_image_tool

@@ -500,3 +500,26 @@ O projeto utiliza **Stripe Billing** como fonte de verdade para assinaturas reco
 A função `is_plan_active` (em `src/auth/deps.py`) foi expandida para validar a assinatura real do usuário:
 - **Acesso liberado**: `trialing`, `active` ou `past_due` (com grace period de 5 dias). Admins têm bypass automático.
 - **Acesso bloqueado**: `canceled` com período encerrado, `unpaid`, `incomplete_expired` ou sem assinatura ativa após trial.
+
+## Fila Persistente e Concorrência (Multi-pod)
+
+O projeto suporta escalabilidade horizontal (autoscaling) e delega tarefas demoradas (ex: geração e edição de imagens) para uma fila persistente, garantindo resiliência e controle de recursos.
+
+### Infraestrutura Compartilhada
+- **system_config**: Tabela no banco de dados (`src/config/system_config.py`) para definir limites dinamicamente (ex: `max_concurrent_images`, `max_tasks_per_user_daily`). Suporta sufixos por plano (ex: `:trial`, `:paid`). Modificada pelo painel Admin.
+- **processed_messages**: Tabela no banco para deduplicação de mensagens recebidas de webhooks, substituindo o cache em memória para que todos os pods compartilhem o mesmo estado.
+- **Agno PostgresStorage**: O histórico de sessões do agente foi migrado de `SqliteDb` para `PostgresStorage`, permitindo continuidade do contexto entre diferentes pods.
+
+### Fila de Tasks (`background_tasks`)
+Implementada via PostgreSQL usando a diretiva `FOR UPDATE SKIP LOCKED`.
+- **Worker Integrado**: Roda como um job no `APScheduler` a cada 5 segundos. Limita a quantidade de processos concorrentes e usa `asyncio.Semaphore` nas ferramentas.
+- **Recovery**: Tasks interrompidas por crash (ex: OOM) retornam ao estado `pending` durante o startup (`lifespan`) para reprocessamento.
+- **Feedback ao Usuário**: O agente informa instantaneamente ao usuário a estimativa de tempo e a posição na fila antes de enfileirar.
+
+### Soluções Multi-pod
+- **Message Buffer (WhatsApp)**: Movido para o PostgreSQL. Mensagens próximas do mesmo usuário são enfileiradas na tabela e um job de "flush" consolida tudo, prevenindo race conditions entre pods.
+- **WebSocket Broadcast**: Como as tasks ocorrem em background e os sockets estão atrelados ao pod de conexão, utiliza o mecanismo nativo `PG LISTEN/NOTIFY` para propagar eventos de conclusão entre pods.
+- **Scheduler Dedup**: Implementa `pg_try_advisory_lock` durante os disparos de lembretes para que múltiplos pods não acionem as mesmas mensagens simultaneamente.
+
+### Admin Dashboard (Sistema e Fila)
+Uma interface exclusiva no painel administrativo permite visualizar o status da fila em tempo real, editar limites (`system_config`), gerenciar falhas, e extrair métricas detalhadas filtradas por período (total consumido, uso por plano, top usuários).

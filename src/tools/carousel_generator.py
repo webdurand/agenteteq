@@ -33,6 +33,8 @@ async def _process_carousel_background(
     """
     try:
         from src.endpoints.web import ws_manager
+        from src.config.system_config import get_config
+        
         await ws_manager.send_personal_message(user_id, {
             "type": "carousel_generating",
             "carousel_id": carousel_id,
@@ -41,32 +43,36 @@ async def _process_carousel_background(
         })
 
         provider = get_image_provider()
+        
+        max_concurrent = int(get_config("max_concurrent_images", "3"))
+        sem = asyncio.Semaphore(max_concurrent)
 
         async def _generate_and_upload(slide: Dict[str, Any], index: int):
-            prompt = slide.get("prompt", "")
-            style = slide.get("style", "")
-            full_prompt = f"Style: {style}. {prompt}"
-
-            if reference_image:
-                image_bytes = await provider.edit(full_prompt, reference_image, aspect_ratio=aspect_ratio)
-            else:
-                image_bytes = await provider.generate(full_prompt, aspect_ratio=aspect_ratio)
-
-            loop = asyncio.get_event_loop()
-
-            def _upload():
-                file_obj = io.BytesIO(image_bytes)
-                return cloudinary.uploader.upload(
-                    file_obj,
-                    folder="carousels",
-                    public_id=f"{carousel_id}_slide_{index}",
-                    overwrite=True,
-                )
-
-            upload_result = await loop.run_in_executor(None, _upload)
-            slide["image_url"] = upload_result.get("secure_url")
-            print(f"[CAROUSEL] Slide {index + 1} gerado: {slide['image_url']}")
-            return slide
+            async with sem:
+                prompt = slide.get("prompt", "")
+                style = slide.get("style", "")
+                full_prompt = f"Style: {style}. {prompt}"
+    
+                if reference_image:
+                    image_bytes = await provider.edit(full_prompt, reference_image, aspect_ratio=aspect_ratio)
+                else:
+                    image_bytes = await provider.generate(full_prompt, aspect_ratio=aspect_ratio)
+    
+                loop = asyncio.get_event_loop()
+    
+                def _upload():
+                    file_obj = io.BytesIO(image_bytes)
+                    return cloudinary.uploader.upload(
+                        file_obj,
+                        folder="carousels",
+                        public_id=f"{carousel_id}_slide_{index}",
+                        overwrite=True,
+                    )
+    
+                upload_result = await loop.run_in_executor(None, _upload)
+                slide["image_url"] = upload_result.get("secure_url")
+                print(f"[CAROUSEL] Slide {index + 1} gerado: {slide['image_url']}")
+                return slide
 
         tasks = [_generate_and_upload(slide, i) for i, slide in enumerate(slides)]
         # return_exceptions=True garante que uma falha individual não cancela os outros slides
@@ -204,48 +210,52 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
         aspect_ratio = resolve_aspect_ratio(format)
         format_label = format.strip() or "1350x1080"
 
-        ref_bytes = None
+        ref_url = None
         if use_reference_image:
             session = get_session_images(user_id)
             originals = session.get("originals", [])
             last_gen = session.get("last_generated")
             if originals:
-                ref_bytes = originals[0]
+                ref_url = originals[0]
             elif last_gen:
-                ref_bytes = last_gen
+                ref_url = last_gen
             else:
                 from src.tools.image_editor import _try_recover_last_image, store_generated_image
                 recovered = _try_recover_last_image(user_id)
                 if recovered:
                     store_generated_image(user_id, recovered)
-                    ref_bytes = recovered
+                    ref_url = recovered
 
-        ref_label = "com referência" if ref_bytes else "sem referência"
+        ref_label = "com referência" if ref_url else "sem referência"
         print(f"[CAROUSEL] generate_carousel_tool | user={user_id} | channel={channel} | format={format_label} ({aspect_ratio}) | {ref_label} | title='{title}' | slides={len(slides)}")
 
         try:
             carousel_id = create_carousel(user_id, title, slides)
             print(f"[CAROUSEL] Registro criado no banco: {carousel_id}")
 
-            from src.events import _main_loop
-            if _main_loop and _main_loop.is_running():
-                asyncio.run_coroutine_threadsafe(
-                    _process_carousel_background(
-                        carousel_id, user_id, list(slides), channel, aspect_ratio,
-                        reference_image=ref_bytes,
-                    ),
-                    _main_loop
-                )
-            else:
-                print("[CAROUSEL] AVISO: loop principal não disponível.")
-
+            from src.queue.task_queue import enqueue_task
+            result = enqueue_task(user_id, "carousel", channel, {
+                "carousel_id": carousel_id,
+                "slides": list(slides),
+                "aspect_ratio": aspect_ratio,
+                "reference_image_url": ref_url,
+            })
+            
             canal_label = "WhatsApp" if "whatsapp" in channel else "painel de Imagens na web"
-            ref_msg = " usando a imagem enviada como referência" if ref_bytes else ""
-            return (
-                f"Carrossel '{title}' com {len(slides)} slides iniciado no formato {format_label} ({aspect_ratio}){ref_msg}! "
-                f"As imagens estão sendo geradas agora em paralelo e serão enviadas para você no {canal_label} assim que ficarem prontas — "
-                "geralmente leva entre 1 a 3 minutos."
-            )
+            ref_msg = " usando a imagem enviada como referência" if ref_url else ""
+            
+            if result["status"] == "queued":
+                return (
+                    f"Carrossel '{title}' com {len(slides)} slides na fila ({format_label}{ref_msg}). "
+                    f"Posição {result['position']}. Estimativa: ~{result['estimated_wait']}. "
+                    f"Avisarei pelo {canal_label} quando estiver pronto!"
+                )
+            elif result["status"] == "limit_reached":
+                return f"Você já tem {result['pending_count']} pedidos na fila. Aguarde os anteriores terminarem!"
+            elif result["status"] == "daily_limit":
+                return f"Limite de {result['daily_limit']} gerações por dia atingido. Tente amanhã!"
+                
+            return "Erro desconhecido ao colocar na fila."
         except Exception as e:
             import traceback
             print(f"[CAROUSEL] Erro ao iniciar geração: {e}\n{traceback.format_exc()}")

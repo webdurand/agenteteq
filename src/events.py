@@ -14,10 +14,16 @@ async def emit_event(user_id: str, event_type: str, data: dict = None):
     if data is None:
         data = {}
         
-    await ws_manager.send_personal_message(user_id, {
-        "type": event_type,
-        **data
-    })
+    try:
+        from src.events_broadcast import broadcast_event
+        await broadcast_event(user_id, event_type, data)
+    except Exception as e:
+        print(f"[EVENTS] Erro no broadcast: {e}")
+        # Fallback local
+        await ws_manager.send_personal_message(user_id, {
+            "type": event_type,
+            **data
+        })
 
 def emit_event_sync(user_id: str, event_type: str, data: dict = None):
     """

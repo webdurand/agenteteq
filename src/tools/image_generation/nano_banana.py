@@ -5,8 +5,15 @@ from google import genai
 from google.genai.types import GenerateContentConfig, ImageConfig, Modality, Part
 from .base import ImageProvider
 
-_image_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="gemini_img")
+_image_executor = None
 
+def _get_executor():
+    global _image_executor
+    if _image_executor is None:
+        from src.config.system_config import get_config
+        max_workers = int(get_config("max_image_workers", "4"))
+        _image_executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="gemini_img")
+    return _image_executor
 
 def _extract_image_from_response(response) -> bytes:
     """Extrai bytes de imagem da resposta do Gemini."""
@@ -66,7 +73,7 @@ class NanoBananaProvider(ImageProvider):
                 )
                 return _extract_image_from_response(response)
 
-        return await loop.run_in_executor(_image_executor, _generate)
+        return await loop.run_in_executor(_get_executor(), _generate)
 
     async def edit(self, prompt: str, reference_image: bytes, aspect_ratio: str = "1:1") -> bytes:
         loop = asyncio.get_event_loop()
@@ -88,4 +95,4 @@ class NanoBananaProvider(ImageProvider):
             )
             return _extract_image_from_response(response)
 
-        return await loop.run_in_executor(_image_executor, _edit)
+        return await loop.run_in_executor(_get_executor(), _edit)

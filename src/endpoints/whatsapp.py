@@ -22,32 +22,104 @@ router = APIRouter()
 
 VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "meu_token_super_secreto")
 
-# Cache para evitar processamento duplicado da mesma mensagem
-processed_message_ids = {}
+from src.config.system_config import _get_pg_engine, _get_sqlite_conn
 
 def deduplicate(dedup_key: str) -> bool:
-    global processed_message_ids
-    if dedup_key in processed_message_ids:
-        return True
-    processed_message_ids[dedup_key] = time.time()
-    if len(processed_message_ids) > 1000:
-        sorted_keys = sorted(processed_message_ids.keys(), key=lambda k: processed_message_ids[k])
-        for k in sorted_keys[:-500]:
-            del processed_message_ids[k]
-    return False
+    engine = _get_pg_engine()
+    if engine:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("INSERT INTO processed_messages (message_id) VALUES (:id) ON CONFLICT DO NOTHING RETURNING message_id"),
+                {"id": dedup_key}
+            )
+            conn.commit()
+            return result.rowcount == 0  # True = ja existia (duplicata)
+    else:
+        with _get_sqlite_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM processed_messages WHERE message_id = ?", (dedup_key,))
+            if cursor.fetchone():
+                return True
+            cursor.execute("INSERT INTO processed_messages (message_id) VALUES (?)", (dedup_key,))
+            conn.commit()
+            return False
 
-# Buffer global para agrupar mensagens (Debounce Universal)
-message_buffer = {}
 BUFFER_TIMEOUT = 3.0
 
-async def flush_buffer(from_number: str):
-    await asyncio.sleep(BUFFER_TIMEOUT)
-    if from_number in message_buffer:
-        data = message_buffer.pop(from_number)
-        events = data.get("events", [])
-        if events:
-            aggregated = aggregate_events(events)
-            asyncio.create_task(orchestrate_message(aggregated))
+def flush_ready_buffers():
+    from src.config.system_config import _get_pg_engine, _get_sqlite_conn
+    engine = _get_pg_engine()
+    ready_rows = []
+    
+    if engine:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                DELETE FROM message_buffer
+                WHERE user_id IN (
+                    SELECT user_id FROM message_buffer
+                    WHERE flush_at <= NOW()
+                    FOR UPDATE SKIP LOCKED
+                )
+                RETURNING user_id, events
+            """)).fetchall()
+            conn.commit()
+            ready_rows = [(r[0], r[1]) for r in rows]
+    else:
+        with _get_sqlite_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id, events FROM message_buffer WHERE flush_at <= CURRENT_TIMESTAMP")
+            rows = cursor.fetchall()
+            if rows:
+                user_ids = [r[0] for r in rows]
+                placeholders = ",".join(["?"] * len(user_ids))
+                cursor.execute(f"DELETE FROM message_buffer WHERE user_id IN ({placeholders})", user_ids)
+                conn.commit()
+            ready_rows = rows
+            
+    for user_id, events_json in ready_rows:
+        try:
+            events = json.loads(events_json) if isinstance(events_json, str) else events_json
+            if events:
+                aggregated = aggregate_events(events)
+                from src.events import _main_loop
+                if _main_loop and _main_loop.is_running():
+                    import asyncio
+                    asyncio.run_coroutine_threadsafe(orchestrate_message(aggregated), _main_loop)
+                else:
+                    import asyncio
+                    asyncio.create_task(orchestrate_message(aggregated))
+        except Exception as e:
+            print(f"[WHATSAPP] Erro ao processar buffer do usuário {user_id}: {e}")
+
+async def buffer_message(from_number: str, event: dict):
+    from src.config.system_config import _get_pg_engine, _get_sqlite_conn
+    
+    engine = _get_pg_engine()
+    if engine:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text("""
+                INSERT INTO message_buffer (user_id, events, flush_at)
+                VALUES (:uid, :events, NOW() + INTERVAL '3 seconds')
+                ON CONFLICT (user_id) DO UPDATE SET
+                    events = message_buffer.events || :event_arr,
+                    flush_at = NOW() + INTERVAL '3 seconds'
+            """), {"uid": from_number, "events": json.dumps([event]), "event_arr": json.dumps([event])})
+            conn.commit()
+    else:
+        with _get_sqlite_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT events FROM message_buffer WHERE user_id = ?", (from_number,))
+            row = cursor.fetchone()
+            if row:
+                events = json.loads(row[0])
+                events.append(event)
+                cursor.execute("UPDATE message_buffer SET events = ?, flush_at = datetime('now', '+3 seconds') WHERE user_id = ?", (json.dumps(events), from_number))
+            else:
+                cursor.execute("INSERT INTO message_buffer (user_id, events, flush_at) VALUES (?, ?, datetime('now', '+3 seconds'))", (from_number, json.dumps([event])))
+            conn.commit()
 
 def aggregate_events(events: list) -> dict:
     base = events[0].copy()
@@ -125,21 +197,13 @@ async def receive_webhook(request: Request):
             from_number = event["from_number"]
             print(f"[WEBHOOK] Nova mensagem enfileirada no buffer. De: {from_number} | Tipo: {event['type']} | ID: {event['id']}")
             
-            if from_number not in message_buffer:
-                # O typing indicator é enviado na primeira mensagem do buffer
-                try:
-                    asyncio.create_task(whatsapp_client.mark_message_as_read_and_typing(event["id"], from_number, is_audio=(event["type"]=="audio")))
-                except Exception:
-                    pass
-                
-                message_buffer[from_number] = {
-                    "events": [event], 
-                    "timer": asyncio.create_task(flush_buffer(from_number))
-                }
-            else:
-                message_buffer[from_number]["events"].append(event)
-                message_buffer[from_number]["timer"].cancel()
-                message_buffer[from_number]["timer"] = asyncio.create_task(flush_buffer(from_number))
+            try:
+                # O typing indicator pode ser enviado na recepção
+                asyncio.create_task(whatsapp_client.mark_message_as_read_and_typing(event["id"], from_number, is_audio=(event["type"]=="audio")))
+            except Exception:
+                pass
+            
+            await buffer_message(from_number, event)
                 
     except Exception as e:
         print(f"[ERROR] Falha ao processar webhook payload: {e}")

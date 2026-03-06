@@ -30,12 +30,54 @@ def get_scheduler() -> BackgroundScheduler:
     return _scheduler
 
 
+def cleanup_old_messages():
+    from src.config.system_config import _get_pg_engine, _get_sqlite_conn
+    engine = _get_pg_engine()
+    if engine:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text("DELETE FROM processed_messages WHERE created_at < NOW() - INTERVAL '24 hours'"))
+            conn.commit()
+    else:
+        with _get_sqlite_conn() as conn:
+            conn.execute("DELETE FROM processed_messages WHERE created_at < datetime('now', '-24 hours')")
+            conn.commit()
+
 def start_scheduler():
     """Inicia o scheduler se ainda nao estiver rodando e reconcilia os dados."""
     scheduler = get_scheduler()
     if not scheduler.running:
         scheduler.start()
         print("[SCHEDULER] Iniciado com sucesso.")
+        
+        scheduler.add_job(
+            cleanup_old_messages,
+            trigger="interval",
+            hours=1,
+            id="cleanup_processed_messages",
+            replace_existing=True
+        )
+        
+        from src.queue.worker import _run_worker_sync
+        scheduler.add_job(
+            _run_worker_sync,
+            trigger="interval",
+            seconds=5,
+            id="task_queue_worker",
+            replace_existing=True,
+            misfire_grace_time=10
+        )
+        
+        from src.endpoints.whatsapp import flush_ready_buffers
+        scheduler.add_job(
+            flush_ready_buffers,
+            trigger="interval",
+            seconds=2,
+            id="flush_whatsapp_buffer",
+            replace_existing=True,
+            misfire_grace_time=10
+        )
+        
         reconcile_reminders()
 
 

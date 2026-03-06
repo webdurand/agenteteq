@@ -202,3 +202,138 @@ def remove_admin(phone_number: str, current_user: dict = Depends(require_admin))
         
     demote_admin(phone_number)
     return {"message": f"Usuário {phone_number} rebaixado para user com sucesso"}
+
+# ============================================================================
+# SYSTEM & QUEUE ENDPOINTS
+# ============================================================================
+
+from src.config.system_config import get_all_configs, set_config
+
+@router.get("/system/queue")
+def get_queue_status(user: dict = Depends(require_admin)):
+    engine = _get_pg_engine()
+    status_counts = {"pending": 0, "processing": 0, "done_today": 0, "failed_today": 0, "avg_wait": 0}
+    if engine:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            counts = conn.execute(text("""
+                SELECT status, COUNT(*) FROM background_tasks 
+                WHERE created_at >= NOW() - INTERVAL '24 hours' OR status IN ('pending', 'processing')
+                GROUP BY status
+            """)).fetchall()
+            for row in counts:
+                if row[0] == 'pending': status_counts['pending'] = row[1]
+                elif row[0] == 'processing': status_counts['processing'] = row[1]
+                elif row[0] == 'done': status_counts['done_today'] = row[1]
+                elif row[0] == 'failed': status_counts['failed_today'] = row[1]
+                
+            from src.queue.task_queue import _get_avg_processing_time
+            status_counts["avg_wait"] = round(_get_avg_processing_time(), 1)
+    else:
+        with _get_sqlite_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT status, COUNT(*) FROM background_tasks 
+                WHERE created_at >= datetime('now', '-24 hours') OR status IN ('pending', 'processing')
+                GROUP BY status
+            """)
+            for row in cursor.fetchall():
+                if row[0] == 'pending': status_counts['pending'] = row[1]
+                elif row[0] == 'processing': status_counts['processing'] = row[1]
+                elif row[0] == 'done': status_counts['done_today'] = row[1]
+                elif row[0] == 'failed': status_counts['failed_today'] = row[1]
+            from src.queue.task_queue import _get_avg_processing_time
+            status_counts["avg_wait"] = round(_get_avg_processing_time(), 1)
+            
+    return status_counts
+
+@router.get("/system/config")
+def list_system_configs(user: dict = Depends(require_admin)):
+    return get_all_configs()
+
+class ConfigUpdateRequest(BaseModel):
+    key: str
+    value: str
+
+@router.put("/system/config")
+def update_system_config(req: ConfigUpdateRequest, user: dict = Depends(require_admin)):
+    set_config(req.key, req.value)
+    return {"message": "Configuração atualizada com sucesso"}
+
+@router.get("/system/tasks")
+def list_system_tasks(status: str = None, limit: int = 50, user: dict = Depends(require_admin)):
+    engine = _get_pg_engine()
+    tasks = []
+    if engine:
+        from sqlalchemy import text
+        query = "SELECT id, user_id, task_type, channel, status, created_at, started_at, completed_at, attempts, result FROM background_tasks"
+        params = {"limit": limit}
+        if status:
+            query += " WHERE status = :status"
+            params["status"] = status
+        query += " ORDER BY created_at DESC LIMIT :limit"
+        
+        with engine.connect() as conn:
+            rows = conn.execute(text(query), params).fetchall()
+            for r in rows:
+                tasks.append({
+                    "id": str(r[0]), "user_id": r[1], "task_type": r[2], "channel": r[3],
+                    "status": r[4], "created_at": r[5].isoformat() if r[5] else None,
+                    "started_at": r[6].isoformat() if r[6] else None,
+                    "completed_at": r[7].isoformat() if r[7] else None,
+                    "attempts": r[8], "result": r[9]
+                })
+    return {"tasks": tasks}
+
+@router.post("/system/tasks/{task_id}/retry")
+def retry_task(task_id: str, user: dict = Depends(require_admin)):
+    engine = _get_pg_engine()
+    if engine:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text("UPDATE background_tasks SET status = 'pending', attempts = 0 WHERE id = :id"), {"id": task_id})
+            conn.commit()
+    return {"message": "Task enviada para retry"}
+
+@router.post("/system/tasks/{task_id}/cancel")
+def cancel_task(task_id: str, user: dict = Depends(require_admin)):
+    engine = _get_pg_engine()
+    if engine:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text("UPDATE background_tasks SET status = 'failed', result = '{\"error\": \"cancelled by admin\"}' WHERE id = :id AND status IN ('pending', 'processing')"), {"id": task_id})
+            conn.commit()
+    return {"message": "Task cancelada"}
+
+@router.get("/system/metrics")
+def get_system_metrics(days: int = 7, user: dict = Depends(require_admin)):
+    engine = _get_pg_engine()
+    if not engine:
+        return {"error": "Not supported on SQLite"}
+        
+    metrics = {
+        "tools_usage": [],
+        "user_usage": [],
+        "plan_avg": []
+    }
+    
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        # Tools usage
+        rows = conn.execute(text("""
+            SELECT tool_name, COUNT(*) as count 
+            FROM usage_events 
+            WHERE event_type = 'tool_called' AND created_at >= NOW() - make_interval(days => :d)
+            GROUP BY tool_name ORDER BY count DESC LIMIT 10
+        """), {"d": days}).fetchall()
+        metrics["tools_usage"] = [{"name": r[0], "count": r[1]} for r in rows]
+        
+        rows = conn.execute(text("""
+            SELECT user_id, COUNT(*) as count 
+            FROM background_tasks 
+            WHERE task_type = 'carousel' AND status = 'done' AND created_at >= NOW() - make_interval(days => :d)
+            GROUP BY user_id ORDER BY count DESC LIMIT 10
+        """), {"d": days}).fetchall()
+        metrics["user_usage"] = [{"user_id": r[0], "generates": r[1]} for r in rows]
+        
+    return metrics
