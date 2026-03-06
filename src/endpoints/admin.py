@@ -64,11 +64,31 @@ def list_users(user: dict = Depends(require_admin)):
             rows = conn.execute(query).fetchall()
             conn.close()
             
+        import datetime as dt_module
+        now_utc = dt_module.datetime.now(dt_module.timezone.utc)
+
         for row in rows:
-            # Determine effective status
-            eff_status = row[7] # subscription status
-            if not eff_status:
-                eff_status = "trialing" if row[6] and str(row[6]) > __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat() else "none"
+            stripe_status = row[7]  # status da assinatura Stripe (pode ser None)
+            trial_ends_at = row[6]
+
+            if stripe_status:
+                eff_status = stripe_status
+            elif trial_ends_at:
+                # Normaliza para datetime aware para comparação
+                if isinstance(trial_ends_at, str):
+                    try:
+                        trial_dt = dt_module.datetime.fromisoformat(trial_ends_at)
+                        if trial_dt.tzinfo is None:
+                            trial_dt = trial_dt.replace(tzinfo=dt_module.timezone.utc)
+                    except Exception:
+                        trial_dt = None
+                else:
+                    trial_dt = trial_ends_at
+                    if trial_dt and trial_dt.tzinfo is None:
+                        trial_dt = trial_dt.replace(tzinfo=dt_module.timezone.utc)
+                eff_status = "trialing" if trial_dt and now_utc < trial_dt else "expired"
+            else:
+                eff_status = "none"
 
             users.append({
                 "phone_number": row[0],
