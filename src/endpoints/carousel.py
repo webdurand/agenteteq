@@ -1,21 +1,21 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from typing import List, Dict, Any
 from src.auth.deps import get_current_user
 from src.models.carousel import list_user_carousels, get_carousel
 
 router = APIRouter(prefix="/carousel", tags=["Carousel"])
 
-@router.get("/", response_model=List[Dict[str, Any]])
-def get_user_carousels(user: dict = Depends(get_current_user)):
-    """
-    Retorna a lista de carrosséis do usuário logado (ordem decrescente de criação).
-    """
+@router.get("/")
+def get_user_carousels(
+    limit: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0),
+    user: dict = Depends(get_current_user)
+):
     user_id = user.get("phone_number")
     if not user_id:
         raise HTTPException(status_code=400, detail="Usuário sem identificador")
         
-    carousels = list_user_carousels(user_id)
-    return carousels
+    return list_user_carousels(user_id, limit=limit, offset=offset)
 
 @router.get("/{carousel_id}", response_model=Dict[str, Any])
 def get_carousel_by_id(carousel_id: str, user: dict = Depends(get_current_user)):

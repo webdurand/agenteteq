@@ -33,10 +33,14 @@ class ReminderCreate(BaseModel):
 
 # --- Tasks ---
 @router.get("/tasks")
-async def api_get_tasks(status: str = Query("pending"), current_user: dict = Depends(get_current_user)):
+async def api_get_tasks(
+    status: str = Query("pending"),
+    limit: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_current_user)
+):
     user_id = current_user["phone_number"]
-    tasks = get_tasks(user_id, status=status)
-    return {"tasks": tasks}
+    return get_tasks(user_id, status=status, limit=limit, offset=offset)
 
 @router.post("/tasks")
 async def api_create_task(task: TaskCreate, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
@@ -75,16 +79,24 @@ async def api_delete_task(task_id: int, background_tasks: BackgroundTasks, curre
 
 # --- Reminders ---
 @router.get("/reminders")
-async def api_get_reminders(status: str = Query("active"), current_user: dict = Depends(get_current_user)):
+async def api_get_reminders(
+    status: str = Query("active"),
+    limit: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_current_user)
+):
     user_id = current_user["phone_number"]
 
     if status == "all":
         from src.models.reminders import list_user_reminders as _list
-        active = _list(user_id, status="active")
-        fired = _list(user_id, status="fired")
-        reminders = active + fired
+        active_res = _list(user_id, status="active")
+        fired_res = _list(user_id, status="fired")
+        reminders = active_res.get("reminders", []) + fired_res.get("reminders", [])
+        has_more = False
     else:
-        reminders = list_user_reminders(user_id, status=status)
+        result = list_user_reminders(user_id, status=status, limit=limit, offset=offset)
+        reminders = result.get("reminders", [])
+        has_more = result.get("has_more", False)
 
     try:
         from src.scheduler.engine import get_scheduler
@@ -107,7 +119,7 @@ async def api_get_reminders(status: str = Query("active"), current_user: dict = 
     except Exception as e:
         print(f"[API] Erro ao enriquecer reminders com next_run: {e}")
 
-    return {"reminders": reminders}
+    return {"reminders": reminders, "has_more": has_more}
 
 @router.post("/reminders")
 async def api_create_reminder(rem: ReminderCreate, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):

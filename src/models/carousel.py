@@ -198,28 +198,41 @@ def update_carousel_status(carousel_id: str, status: str, slides: Optional[list]
     except Exception as e:
         print(f"[CAROUSELS] Erro ao atualizar status do carousel {carousel_id}: {e}")
 
-def list_user_carousels(user_id: str) -> List[Dict[str, Any]]:
+def list_user_carousels(user_id: str, limit: int = 0, offset: int = 0) -> dict:
     init_db()
+    fetch_limit = limit + 1 if limit > 0 else 0
+    cols = "id, user_id, title, status, slides, reference_images, created_at, updated_at"
     try:
         if _use_postgres():
             from sqlalchemy import text
             engine = _get_pg_engine()
             with engine.connect() as conn:
-                rows = conn.execute(
-                    text("SELECT id, user_id, title, status, slides, reference_images, created_at, updated_at FROM carousels WHERE user_id = :user_id ORDER BY created_at DESC"),
-                    {"user_id": user_id}
-                ).fetchall()
-                return [_row_to_dict(row) for row in rows]
+                q = f"SELECT {cols} FROM carousels WHERE user_id = :user_id ORDER BY created_at DESC"
+                params: dict = {"user_id": user_id}
+                if fetch_limit:
+                    q += " LIMIT :lim OFFSET :off"
+                    params["lim"] = fetch_limit
+                    params["off"] = offset
+                rows = conn.execute(text(q), params).fetchall()
         else:
             conn = _get_sqlite_conn()
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id, user_id, title, status, slides, reference_images, created_at, updated_at FROM carousels WHERE user_id = ? ORDER BY created_at DESC",
-                (user_id,)
-            )
+            q = f"SELECT {cols} FROM carousels WHERE user_id = ? ORDER BY created_at DESC"
+            params_list = [user_id]
+            if fetch_limit:
+                q += " LIMIT ? OFFSET ?"
+                params_list += [fetch_limit, offset]
+            cursor.execute(q, tuple(params_list))
             rows = cursor.fetchall()
             conn.close()
-            return [_row_to_dict(row) for row in rows]
+
+        carousels = [_row_to_dict(row) for row in rows]
+        has_more = False
+        if limit > 0 and len(carousels) > limit:
+            has_more = True
+            carousels = carousels[:limit]
+
+        return {"carousels": carousels, "has_more": has_more}
     except Exception as e:
         print(f"[CAROUSELS] Erro ao listar carousels do usuario {user_id}: {e}")
-        return []
+        return {"carousels": [], "has_more": False}

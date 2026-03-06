@@ -183,7 +183,7 @@ def create_scheduler_tools(user_phone: str):
             from src.memory.identity import get_user
             
             scheduler = get_scheduler()
-            user_jobs = list_user_reminders(user_phone, status="active")
+            user_jobs = list_user_reminders(user_phone, status="active").get("reminders", [])
 
             if not user_jobs:
                 print(f"[SCHEDULER] Nenhum agendamento ativo para {user_phone}")

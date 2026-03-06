@@ -216,39 +216,43 @@ def list_tasks(user_id: str, status: str = "pending") -> str:
         return f"Erro ao listar tarefas: {e}"
 
 
-def get_tasks(user_id: str, status: str = "pending") -> list[dict]:
+def get_tasks(user_id: str, status: str = "pending", limit: int = 0, offset: int = 0) -> dict:
     """
-    Lista as tarefas do usuário retornando uma lista de dicionários.
+    Lista as tarefas do usuário. Se limit > 0, pagina com has_more.
     """
     _init_db()
     try:
+        fetch_limit = limit + 1 if limit > 0 else 0
+        cols = "id, title, description, due_date, location, notes, status, created_at"
+
         if _use_postgres():
             from sqlalchemy import text
             engine = _get_pg_engine()
             with engine.connect() as conn:
-                if status == "all":
-                    rows = conn.execute(
-                        text("SELECT id, title, description, due_date, location, notes, status, created_at FROM tasks WHERE user_id = :u ORDER BY created_at ASC"),
-                        {"u": user_id}
-                    ).fetchall()
-                else:
-                    rows = conn.execute(
-                        text("SELECT id, title, description, due_date, location, notes, status, created_at FROM tasks WHERE user_id = :u AND status = :s ORDER BY created_at ASC"),
-                        {"u": user_id, "s": status}
-                    ).fetchall()
+                base = f"SELECT {cols} FROM tasks WHERE user_id = :u"
+                params: dict = {"u": user_id}
+                if status != "all":
+                    base += " AND status = :s"
+                    params["s"] = status
+                base += " ORDER BY created_at ASC"
+                if fetch_limit:
+                    base += " LIMIT :lim OFFSET :off"
+                    params["lim"] = fetch_limit
+                    params["off"] = offset
+                rows = conn.execute(text(base), params).fetchall()
         else:
             conn = _get_sqlite_conn()
             c = conn.cursor()
-            if status == "all":
-                c.execute(
-                    "SELECT id, title, description, due_date, location, notes, status, created_at FROM tasks WHERE user_id = ? ORDER BY created_at ASC",
-                    (user_id,)
-                )
-            else:
-                c.execute(
-                    "SELECT id, title, description, due_date, location, notes, status, created_at FROM tasks WHERE user_id = ? AND status = ? ORDER BY created_at ASC",
-                    (user_id, status)
-                )
+            base = f"SELECT {cols} FROM tasks WHERE user_id = ?"
+            params_list = [user_id]
+            if status != "all":
+                base += " AND status = ?"
+                params_list.append(status)
+            base += " ORDER BY created_at ASC"
+            if fetch_limit:
+                base += " LIMIT ? OFFSET ?"
+                params_list += [fetch_limit, offset]
+            c.execute(base, tuple(params_list))
             rows = c.fetchall()
             conn.close()
 
@@ -264,10 +268,16 @@ def get_tasks(user_id: str, status: str = "pending") -> list[dict]:
                 "status": row[6],
                 "created_at": row[7],
             })
-        return tasks
+
+        has_more = False
+        if limit > 0 and len(tasks) > limit:
+            has_more = True
+            tasks = tasks[:limit]
+
+        return {"tasks": tasks, "has_more": has_more}
     except Exception as e:
         print(f"[TASKS] Erro ao obter tarefas: {e}")
-        return []
+        return {"tasks": [], "has_more": False}
 
 def complete_task(user_id: str, task_id: int) -> str:
     """

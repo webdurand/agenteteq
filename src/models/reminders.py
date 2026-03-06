@@ -227,31 +227,44 @@ def cancel_reminder(reminder_id: int):
 def mark_fired(reminder_id: int):
     update_status(reminder_id, "fired")
 
-def list_user_reminders(user_id: str, status: str = "active") -> List[Dict[str, Any]]:
+def list_user_reminders(user_id: str, status: str = "active", limit: int = 0, offset: int = 0) -> dict:
     init_db()
+    fetch_limit = limit + 1 if limit > 0 else 0
+    cols = "id, user_id, title, task_instructions, trigger_type, trigger_config, notification_channel, status, apscheduler_job_id, created_at, updated_at"
     try:
         if _use_postgres():
             from sqlalchemy import text
             engine = _get_pg_engine()
             with engine.connect() as conn:
-                rows = conn.execute(
-                    text("SELECT id, user_id, title, task_instructions, trigger_type, trigger_config, notification_channel, status, apscheduler_job_id, created_at, updated_at FROM reminders WHERE user_id = :user_id AND status = :status ORDER BY created_at ASC"),
-                    {"user_id": user_id, "status": status}
-                ).fetchall()
-                return [_row_to_dict(row) for row in rows]
+                q = f"SELECT {cols} FROM reminders WHERE user_id = :user_id AND status = :status ORDER BY created_at DESC"
+                params: dict = {"user_id": user_id, "status": status}
+                if fetch_limit:
+                    q += " LIMIT :lim OFFSET :off"
+                    params["lim"] = fetch_limit
+                    params["off"] = offset
+                rows = conn.execute(text(q), params).fetchall()
         else:
             conn = _get_sqlite_conn()
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id, user_id, title, task_instructions, trigger_type, trigger_config, notification_channel, status, apscheduler_job_id, created_at, updated_at FROM reminders WHERE user_id = ? AND status = ? ORDER BY created_at ASC",
-                (user_id, status)
-            )
+            q = f"SELECT {cols} FROM reminders WHERE user_id = ? AND status = ? ORDER BY created_at DESC"
+            params_list = [user_id, status]
+            if fetch_limit:
+                q += " LIMIT ? OFFSET ?"
+                params_list += [fetch_limit, offset]
+            cursor.execute(q, tuple(params_list))
             rows = cursor.fetchall()
             conn.close()
-            return [_row_to_dict(row) for row in rows]
+
+        reminders = [_row_to_dict(row) for row in rows]
+        has_more = False
+        if limit > 0 and len(reminders) > limit:
+            has_more = True
+            reminders = reminders[:limit]
+
+        return {"reminders": reminders, "has_more": has_more}
     except Exception as e:
         print(f"[REMINDERS] Erro ao listar reminders do usuario {user_id}: {e}")
-        return []
+        return {"reminders": [], "has_more": False}
 
 def list_all_active_reminders() -> List[Dict[str, Any]]:
     init_db()
