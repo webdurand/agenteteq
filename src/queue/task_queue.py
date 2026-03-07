@@ -47,6 +47,79 @@ def _effective_plan_type(plan_type: str) -> str:
     return plan_type
 
 
+def get_usage_status(user_id: str) -> dict:
+    """
+    Snapshot estruturado do estado atual de limites do usuário.
+    """
+    plan_type = _get_plan_type(user_id)
+    effective = _effective_plan_type(plan_type)
+
+    status = {
+        "plan_type": plan_type,
+        "effective_plan": effective,
+        "is_admin_bypass": effective == "admin",
+        "max_daily": None,
+        "daily_used": None,
+        "daily_remaining": None,
+        "is_limited": False,
+        "limit_message": "",
+        "context": "",
+    }
+
+    if effective == "admin":
+        status["context"] = (
+            "[STATUS LIMITES: Usuario admin com bypass ativo. "
+            "Limites diarios NAO se aplicam agora. "
+            "Ignore mensagens antigas sobre limite atingido.]"
+        )
+        return status
+
+    max_daily = int(get_config_for_plan("max_tasks_per_user_daily", effective, "5"))
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+
+    with get_db() as session:
+        daily = session.query(func.count(BackgroundTask.id)).filter(
+            BackgroundTask.user_id == user_id,
+            BackgroundTask.created_at >= cutoff,
+        ).scalar() or 0
+
+    remaining = max(0, max_daily - int(daily))
+    status["max_daily"] = max_daily
+    status["daily_used"] = int(daily)
+    status["daily_remaining"] = remaining
+    status["is_limited"] = remaining == 0
+
+    if status["is_limited"]:
+        if effective == "trial":
+            status["limit_message"] = (
+                f"Poxa, seu limite de {max_daily} gerações de hoje acabou no plano gratuito. "
+                "Mas você pode virar Premium agora e repor seu limite!"
+            )
+        else:
+            status["limit_message"] = f"Limite diário de {max_daily} gerações atingido. Tente novamente amanhã!"
+
+        status["context"] = (
+            f"[STATUS LIMITES: Plano efetivo {effective}. "
+            f"Limite diario de {max_daily} geracoes atingido. 0 restantes.]"
+        )
+        return status
+
+    status["context"] = (
+        f"[STATUS LIMITES: Plano efetivo {effective}. "
+        f"{remaining}/{max_daily} geracoes restantes nas ultimas 24h.]"
+    )
+    return status
+
+
+def get_usage_context(user_id: str) -> str:
+    """
+    Retorna um bloco textual curto com o estado ATUAL de limites.
+    Esse contexto deve ser injetado no prompt para evitar que o LLM
+    assuma limites com base em mensagens antigas do histórico.
+    """
+    return get_usage_status(user_id)["context"]
+
+
 def check_daily_limit(user_id: str) -> Optional[str]:
     """
     Verifica se o usuário atingiu o limite diário de runs.
@@ -109,6 +182,16 @@ def enqueue_task(user_id: str, task_type: str, channel: str, payload: Dict[str, 
             ).scalar()
 
             if daily >= max_daily:
+                # Mantem comportamento deterministico no websocket: mesmo que o agente
+                # parafraseie o retorno da tool, o frontend recebe o evento limit_reached.
+                if effective == "trial":
+                    message = (
+                        f"Poxa, seu limite de {max_daily} gerações de hoje acabou no plano gratuito. "
+                        "Mas você pode virar Premium agora e repor seu limite!"
+                    )
+                else:
+                    message = f"Limite diário de {max_daily} gerações atingido. Tente novamente amanhã!"
+                set_limit_flag(user_id, {"message": message, "plan_type": effective})
                 return {"status": "daily_limit", "daily_limit": max_daily}
 
         cancelled = session.query(BackgroundTask).filter(

@@ -11,9 +11,29 @@ from src.endpoints.web import ws_manager, GREETING_INJECTION
 from src.integrations.gemini_live import GeminiLiveClient
 from src.agent.voice_tools import VOICE_TOOLS_DECLARATIONS, execute_voice_tool
 from src.memory.analytics import log_event
+from src.models.chat_messages import save_message
 
 router = APIRouter()
 LIVE_IDLE_TIMEOUT_SECONDS = int(os.getenv("VOICE_LIVE_IDLE_TIMEOUT_SECONDS", "90"))
+TOOL_FRIENDLY_NAMES = {
+    "add_task": "Adicionando tarefa",
+    "list_tasks": "Buscando tarefas",
+    "complete_task": "Concluindo tarefa",
+    "reopen_task": "Reabrindo tarefa",
+    "delete_task": "Removendo tarefa",
+    "get_weather": "Consultando clima",
+    "add_memory": "Salvando memoria",
+    "delete_memory": "Removendo memoria",
+    "list_memories": "Buscando memorias",
+    "schedule_message": "Criando lembrete",
+    "list_schedules": "Buscando lembretes",
+    "cancel_schedule": "Cancelando lembrete",
+    "web_search": "Pesquisando na web",
+    "publish_post": "Publicando no blog",
+    "generate_carousel": "Gerando imagens",
+    "list_carousels": "Buscando carrosseis",
+    "edit_image": "Editando imagem",
+}
 
 @router.websocket("/ws/voice-live")
 async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
@@ -57,10 +77,15 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
         "Fale como um amigo proximo que por acaso e muito inteligente: linguagem informal, sem robotice.",
         "Pode usar girias leves ('to', 'ta', 'pra', 'ne', 'cara').",
         "Seja extremamente conciso.",
-        "NUNCA narre o que voce vai fazer antes de fazer. Nao diga 'Deixa eu ver suas tarefas' ou 'Vou dar uma olhada'. Apenas execute a tool silenciosamente e quando retornar, fale o resultado.",
+        "Seja conversacional. Quando o usuario pedir algo, reconheca brevemente o pedido (ex: 'Deixa eu ver...' ou 'Ja to buscando...') e execute.",
+        "Depois da execucao, fale o resultado de forma natural e objetiva.",
+        "REGRA OBRIGATORIA: voce NAO tem acesso a dados reais do usuario sem usar ferramentas. Para tarefas, lembretes, clima, memorias, agendamentos e pesquisas, SEMPRE chame a ferramenta correspondente antes de responder.",
+        "Nunca invente, assuma ou improvise dados do usuario. Se perguntarem 'quais sao minhas tarefas', use list_tasks e responda com base no retorno real da tool.",
+        "Para operacoes demoradas (gerar imagem, carrossel, publicar), avise que ja mandou processar em background SOMENTE quando a tool confirmar sucesso/fila. Se a tool retornar limite ou bloqueio, diga isso claramente e nao diga que ja iniciou.",
         "Quando uma tool falhar, NUNCA narre o erro para o usuario. Apenas diga que nao conseguiu fazer aquilo no momento.",
         "Voce pode: gerenciar tarefas e lembretes, pesquisar na web, consultar o tempo, gerar carrosseis de imagens, editar imagens, publicar no blog e lembrar de coisas sobre o usuario entre conversas.",
-        "Seja natural. Escreva exatamente como deve ser falado. O usuario ja estara ouvindo sua voz diretamente. NUNCA use markdown, asteriscos, ou emojis."
+        "Seja natural. Escreva exatamente como deve ser falado. O usuario ja estara ouvindo sua voz diretamente. NUNCA use markdown, asteriscos, ou emojis.",
+        "Quando houver informacao de [STATUS LIMITES], trate-a como verdade absoluta sobre limites e bypass e ignore o historico antigo sobre esse tema."
     ]
     
     instruction_text = " ".join(base_instructions)
@@ -117,12 +142,35 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
 
     async def on_tool_call(call_id: str, function_name: str, args: dict):
         print(f"[VOICE LIVE] Tool call: {function_name} com args {args}")
+        label = TOOL_FRIENDLY_NAMES.get(function_name, f"Executando {function_name}")
         try:
-            await websocket.send_json({"type": "status", "text": f"Executando {function_name}..."})
-            await websocket.send_json({"type": "tool_call_start", "name": function_name})
+            await websocket.send_json({"type": "status", "text": f"{label}..."})
+            await websocket.send_json({"type": "tool_call_start", "name": function_name, "label": label})
             
             result = await execute_voice_tool(phone_number, function_name, args)
             print(f"[VOICE LIVE] Tool result: {result}")
+
+            # Mantem o chat web e o historico sincronizados com o resultado de tools
+            # disparadas no modo voz em tempo real.
+            if function_name in ["generate_carousel", "edit_image"]:
+                result_text = result.get("result") if isinstance(result, dict) else None
+                if isinstance(result_text, str) and result_text.strip():
+                    if result.get("limit_reached"):
+                        await ws_manager.send_personal_message(phone_number, {
+                            "type": "limit_reached",
+                            "message": result_text,
+                            "plan_type": result.get("plan_type", "trial"),
+                        })
+                    else:
+                        await ws_manager.send_personal_message(phone_number, {
+                            "type": "response",
+                            "text": result_text,
+                            "audio_b64": "",
+                            "mime_type": "none",
+                            "needs_follow_up": False,
+                        })
+
+                    await asyncio.to_thread(save_message, phone_number, phone_number, "agent", result_text)
             
             await client.send_tool_response(call_id, function_name, result)
             
@@ -135,6 +183,11 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
         except Exception as e:
             print(f"[VOICE LIVE] Erro executando tool: {e}")
             await client.send_tool_response(call_id, function_name, {"error": str(e)})
+        finally:
+            try:
+                await websocket.send_json({"type": "tool_call_end", "name": function_name})
+            except BaseException:
+                pass
 
     async def on_turn_complete():
         try:
@@ -144,7 +197,13 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
         except BaseException:
             pass
 
-    receive_task = asyncio.create_task(client.receive_loop(on_audio, on_tool_call, on_turn_complete))
+    async def on_interrupted():
+        try:
+            await websocket.send_json({"type": "interrupted"})
+        except BaseException:
+            pass
+
+    receive_task = asyncio.create_task(client.receive_loop(on_audio, on_tool_call, on_turn_complete, on_interrupted))
     last_activity_at = time.monotonic()
 
     try:
@@ -178,9 +237,10 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
                         pcm_bytes = base64.b64decode(b64_data)
                         await client.send_audio_chunk(pcm_bytes)
                 elif msg_type == "cancel":
-                    # O cliente pode enviar 'cancel' se o usuario quiser interromper manualmente.
-                    # Mas a VAD ja faz o barge-in, entao so paramos o playback no client-side.
-                    pass
+                    # Cancel no cliente e somente local (player stop / UI).
+                    # Evitamos repassar para o Gemini Live para nao encerrar a sessao com 1007.
+                    last_activity_at = time.monotonic()
+                    continue
                 
     except WebSocketDisconnect:
         print(f"[VOICE LIVE] Cliente desconectado: {phone_number}")

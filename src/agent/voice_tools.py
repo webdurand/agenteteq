@@ -286,8 +286,17 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
 
             elif function_name == "generate_carousel":
                 from src.tools.carousel_generator import create_carousel_tools
+                from src.queue.task_queue import pop_limit_flag
                 generate_carousel, _ = create_carousel_tools(user_id, channel="web_voice")
-                return {"result": generate_carousel(**args)}
+                tool_result = generate_carousel(**args)
+                limit_info = pop_limit_flag(user_id)
+                if limit_info:
+                    return {
+                        "result": limit_info["message"],
+                        "limit_reached": True,
+                        "plan_type": limit_info.get("plan_type", "trial"),
+                    }
+                return {"result": tool_result}
 
             elif function_name == "list_carousels":
                 from src.tools.carousel_generator import create_carousel_tools
@@ -296,8 +305,17 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
 
             elif function_name == "edit_image":
                 from src.tools.image_editor import create_image_editor_tools
+                from src.queue.task_queue import pop_limit_flag
                 edit_image = create_image_editor_tools(user_id, channel="web_voice")
-                return {"result": edit_image(**args)}
+                tool_result = edit_image(**args)
+                limit_info = pop_limit_flag(user_id)
+                if limit_info:
+                    return {
+                        "result": limit_info["message"],
+                        "limit_reached": True,
+                        "plan_type": limit_info.get("plan_type", "trial"),
+                    }
+                return {"result": tool_result}
                 
             else:
                 return {"error": f"Tool '{function_name}' not found."}

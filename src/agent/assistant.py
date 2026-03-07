@@ -140,6 +140,7 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         # Regras de execucao
         "NUNCA narre o que voce vai fazer antes de fazer. Nao diga 'Deixa eu ver suas tarefas', 'Vou pesquisar isso', 'Deixa eu dar uma olhada'. Va direto ao resultado. Se precisar usar uma ferramenta, use silenciosamente e entregue a resposta pronta.",
         "Se uma ferramenta falhar ou retornar erro, corrija silenciosamente e tente de novo. NUNCA narre falhas, retentativas ou erros de ferramentas para o usuario. Responda APENAS com o resultado final, como se tivesse funcionado de primeira.",
+        "Quando o prompt incluir [STATUS LIMITES], use essa informacao como verdade absoluta sobre limites e bypass. Ignore qualquer informacao de limites do historico anterior.",
 
         # Suas capacidades (para voce saber o que pode oferecer ao usuario)
         "CAPACIDADES COMPLETAS DO TEQ: "

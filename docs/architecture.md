@@ -301,7 +301,8 @@ O frontend foi unificado para **Voice Live-only**:
 - A aba **Chat** usa `useChat` + `/ws/voice` apenas para mensagens de texto e histórico.
 - Não existe mais modo clássico de voz no frontend (SpeechRecognition/MediaRecorder/TTS browser).
 
-As respostas de voz continuam efêmeras (não persistem em `chat_messages`). O chat de texto permanece como histórico oficial.
+As respostas gerais de voz continuam efêmeras. Exceção: no `voice-live`, retornos de tools críticas de imagem (geração/edição e mensagens de limite) também são persistidos em `chat_messages` para manter consistência após refresh.
+No canal de chat (`/ws/voice`), quando o usuário está sem limite de geração e o pedido tem intenção de imagem, o backend também emite fallback `limit_reached` mesmo se o LLM responder só pelo contexto, garantindo renderização do card Premium no frontend.
 
 ### Action Log (Notificações de Ações)
 
@@ -314,7 +315,7 @@ Isso funciona independente do canal de origem (voz, texto, WhatsApp, voice-live)
 **Módulos envolvidos:**
 - `src/events_broadcast.py`: `emit_action_log()` (async) e `emit_action_log_sync()` (para threads).
 - Tools: `image_editor`, `blog_publisher`, `carousel_generator`, `task_manager`, `scheduler_tool` — todas chamam `emit_action_log` após ações bem-sucedidas, passando o `channel` de origem.
-- Frontend: `useVoiceChat.ts` escuta `action_log` e insere como `role: "system"` na lista de mensagens.
+- Frontend: `useChat.ts` escuta `action_log` e insere como `role: "system"` na lista de mensagens.
 
 ### Compatibilidade Mobile (Voz)
 
@@ -340,6 +341,7 @@ O Dashboard combina CRUD direto via REST e atualizações real-time via WebSocke
 3. **WebSocket de Voz Live (`/ws/voice-live`)**:
    - Recebe stream PCM 16kHz do frontend e responde com áudio PCM 24kHz em tempo real.
    - Encaminha tool-calls nativas do Gemini Live para `voice_tools.py`.
+   - Emite eventos de ciclo de tool (`tool_call_start` com `label` amigavel e `tool_call_end`) para o Orb e status visual.
 4. **Event Bus (`src/events.py`)**:
    - Quando o Agente modifica o estado (ex: agenda um aviso) ou o usuário altera via REST, um evento real-time (ex: `task_updated`, `reminder_updated`, `blog_preview`) é emitido.
    - O `ws_manager` propaga esse evento para múltiplas conexões por usuário (chat + voice-live), permitindo cross-tab real.
@@ -371,6 +373,8 @@ A aplicação opera voz em modo Live por padrão no frontend:
 - Para as tools, usamos `src/agent/voice_tools.py` que espelha as functions existentes no Agno para o formato que a Live API do Google exige.
 - O setup do Gemini Live usa `automaticActivityDetection` (VAD nativo) e a sessão web é encerrada automaticamente por inatividade.
 - Fluxo de ativação UX: entrar na aba Voice conecta; tocar no Orb faz mute/unmute; sair da aba desconecta a sessão.
+- Estados visuais principais do Live no frontend: `connecting`, `listening`, `speaking`, `processing`, `muted`, `idle`.
+- Quando uma tool inicia, o backend envia `tool_call_start` (com texto amigavel) e o frontend entra em `processing`; no fim, recebe `tool_call_end` e volta para `listening`/`muted`.
 
 ### Módulo TTS Clássico (`src/integrations/tts.py`)
 
@@ -398,9 +402,9 @@ Equivalente ao `StatusNotifier` para a interface web. Como `agent.run()` executa
 
 | Arquivo | Responsabilidade |
 |---|---|
-| `hooks/useVoiceLive.ts` | Conexão de voz em tempo real com Gemini Live, controle de mute/unmute e timeout de inatividade |
+| `hooks/useVoiceLive.ts` | Conexão de voz em tempo real com Gemini Live, estados (`connecting/listening/speaking/processing/muted/idle`), controle de mute/unmute e timeout de inatividade |
 | `hooks/useChat.ts` | Mensagens de texto, histórico e atualização por eventos |
-| `components/Orb.tsx` | Orb animado navy — connecting/idle/listening/speaking/muted |
+| `components/Orb.tsx` | Orb em estilo Siri-glow com diferenciação visual de entrada (user), saída (AI) e processamento de tools |
 | `components/ChatHistory.tsx` | Painel lateral colapsável com histórico |
 | `components/LoginModal.tsx` | Tela de identificação por telefone |
 | `components/OnboardingModal.tsx` | Captura de nome no primeiro acesso |

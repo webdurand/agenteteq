@@ -104,8 +104,22 @@ class GeminiLiveClient:
             }
         }
         await self.ws.send(json.dumps(msg))
+
+    async def cancel_response(self):
+        if not self.ws:
+            return
+
+        # Best-effort cancel: sinaliza fim de turno do cliente para interromper resposta em curso.
+        msg = {
+            "clientContent": {
+                "turns": [],
+                "turnComplete": True
+            }
+        }
+        await self.ws.send(json.dumps(msg))
         
-    async def receive_loop(self, on_audio, on_tool_call, on_turn_complete):
+    async def receive_loop(self, on_audio, on_tool_call, on_turn_complete, on_interrupted=None):
+        audio_chunk_count = 0
         try:
             async for message in self.ws:
                 if isinstance(message, bytes):
@@ -120,36 +134,51 @@ class GeminiLiveClient:
                     if "serverContent" in data:
                         server_content = data["serverContent"]
                         
-                        # Interrupcao (barge-in) cancela turnos pendentes
                         if server_content.get("interrupted"):
-                            pass
+                            print(f"[Gemini Live] interrupted (after {audio_chunk_count} audio chunks)")
+                            audio_chunk_count = 0
+                            if on_interrupted:
+                                await on_interrupted()
                         
                         model_turn = server_content.get("modelTurn")
                         if model_turn:
                             parts = model_turn.get("parts", [])
                             for part in parts:
-                                # Pode conter audio
                                 if "inlineData" in part:
                                     mime = part["inlineData"].get("mimeType", "")
                                     b64_data = part["inlineData"].get("data", "")
                                     if mime.startswith("audio/pcm") and b64_data:
                                         pcm_out = base64.b64decode(b64_data)
                                         await on_audio(pcm_out)
+                                        audio_chunk_count += 1
                                         
-                                # Pode conter functionCall
                                 if "functionCall" in part:
                                     fc = part["functionCall"]
                                     call_id = fc.get("id")
                                     name = fc.get("name")
                                     args = fc.get("args", {})
+                                    print(f"[Gemini Live] functionCall (part): {name} args={args}")
                                     await on_tool_call(call_id, name, args)
+
+                                if "text" in part:
+                                    print(f"[Gemini Live] text: {part['text'][:120]}")
                                     
                         if server_content.get("turnComplete"):
+                            print(f"[Gemini Live] turnComplete (sent {audio_chunk_count} audio chunks)")
+                            audio_chunk_count = 0
                             await on_turn_complete()
                             
                     elif "toolCall" in data:
-                        # Em versoes mais novas, toolCall pode vir no nivel root
-                        pass
+                        tool_call_data = data.get("toolCall") or {}
+                        function_calls = tool_call_data.get("functionCalls", [])
+                        for fc in function_calls:
+                            call_id = fc.get("id")
+                            name = fc.get("name")
+                            args = fc.get("args", {})
+                            print(f"[Gemini Live] toolCall (root): {name} args={args}")
+                            await on_tool_call(call_id, name, args)
+                    elif "setupComplete" not in data:
+                        print(f"[Gemini Live] msg: {list(data.keys())}")
         except websockets.exceptions.ConnectionClosed:
             print("[Gemini Live] Conexão encerrada")
         except Exception as e:

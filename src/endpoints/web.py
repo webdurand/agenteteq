@@ -19,6 +19,7 @@ from src.auth.jwt import decode_token
 from src.memory.analytics import log_event, log_agent_tools
 from src.models.chat_messages import save_message
 from src.agent.prompts import GREETING_INJECTION_WEB as GREETING_INJECTION
+from src.queue.task_queue import get_usage_context, get_usage_status
 import time
 
 router = APIRouter()
@@ -45,6 +46,11 @@ _EMOJI_TAIL_RE = re.compile(
     r'\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF*_)!\s]+$'
 )
 
+_IMAGE_INTENT_RE = re.compile(
+    r"\b(imagem|imagens|foto|fotos|carrossel|gera|gerar|cria|criar|edita|editar|ilustracao|arte)\b",
+    re.IGNORECASE,
+)
+
 
 def _needs_follow_up(text: str) -> bool:
     cleaned = _EMOJI_TAIL_RE.sub('', text.strip())
@@ -52,6 +58,14 @@ def _needs_follow_up(text: str) -> bool:
         return True
     tail = cleaned[-300:] if len(cleaned) > 300 else cleaned
     return '?' in tail
+
+
+def _looks_like_image_request(user_text: str, has_images: bool) -> bool:
+    if has_images:
+        return True
+    if not user_text:
+        return False
+    return bool(_IMAGE_INTENT_RE.search(user_text))
 
 
 class WebSocketNotifier:
@@ -184,6 +198,10 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     if new_session:
         prompt = GREETING_INJECTION + "\n\n" + prompt
 
+    usage_status = await asyncio.to_thread(get_usage_status, phone_number)
+    usage_ctx = usage_status.get("context") or await asyncio.to_thread(get_usage_context, phone_number)
+    prompt = f"{usage_ctx}\n\n{prompt}"
+
     kwargs = {"knowledge_filters": {"user_id": phone_number}}
     if agent_images:
         kwargs["images"] = agent_images
@@ -213,6 +231,20 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
 
     from src.queue.task_queue import pop_limit_flag
     limit_info = pop_limit_flag(phone_number)
+    if (
+        not limit_info
+        and save_to_chat
+        and usage_status.get("effective_plan") == "trial"
+        and usage_status.get("is_limited")
+        and _looks_like_image_request(user_text, bool(agent_images))
+    ):
+        # Fallback determinístico: se o LLM respondeu por contexto de limite sem
+        # chamar tool, ainda assim disparamos o evento limit_reached para renderizar card Premium.
+        limit_info = {
+            "message": usage_status.get("limit_message") or "Seu limite diário de gerações foi atingido.",
+            "plan_type": "trial",
+        }
+
     if limit_info:
         print(f"[WEB WS] Limite atingido para {phone_number}, enviando limit_reached determinístico")
         await websocket.send_json({
@@ -469,6 +501,8 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                     base_prompt = f"O usuario enviou este audio via interface web (formato {audio_fmt}). Responda naturalmente ao que foi dito."
                     if new_session:
                         base_prompt = GREETING_INJECTION + " " + base_prompt
+                    usage_ctx = await asyncio.to_thread(get_usage_context, phone_number)
+                    base_prompt = f"{usage_ctx}\n\n{base_prompt}"
 
                     print(f"[WEB WS] Enviando {len(audio_bytes)} bytes de audio {audio_fmt} para Gemini")
                     response = await asyncio.to_thread(
@@ -516,6 +550,8 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                     prompt = f"O usuario enviou um audio com a seguinte transcricao:\n\n{transcript}"
                     if new_session:
                         prompt = GREETING_INJECTION + "\n\n" + prompt
+                    usage_ctx = await asyncio.to_thread(get_usage_context, phone_number)
+                    prompt = f"{usage_ctx}\n\n{prompt}"
 
                     response = await asyncio.to_thread(
                         agent.run,
