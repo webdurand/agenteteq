@@ -6,16 +6,10 @@ from src.tools.image_editor import get_session_images
 from src.models.carousel import create_carousel, update_carousel_status
 from src.tools.image_generation import get_image_provider
 from src.events import emit_event_sync
-import cloudinary
 import cloudinary.uploader
+from src.integrations.image_storage import _ensure_cloudinary_config
 
-if os.getenv("CLOUDINARY_CLOUD_NAME"):
-    cloudinary.config(
-        cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
-        api_key=os.getenv("CLOUDINARY_API_KEY"),
-        api_secret=os.getenv("CLOUDINARY_API_SECRET"),
-        secure=True
-    )
+_ensure_cloudinary_config()
 
 
 async def _process_carousel_background(

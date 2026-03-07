@@ -31,17 +31,13 @@ def get_scheduler() -> BackgroundScheduler:
 
 
 def cleanup_old_messages():
-    from src.config.system_config import _get_pg_engine, _get_sqlite_conn
-    engine = _get_pg_engine()
-    if engine:
-        from sqlalchemy import text
-        with engine.connect() as conn:
-            conn.execute(text("DELETE FROM processed_messages WHERE created_at < NOW() - INTERVAL '24 hours'"))
-            conn.commit()
-    else:
-        with _get_sqlite_conn() as conn:
-            conn.execute("DELETE FROM processed_messages WHERE created_at < datetime('now', '-24 hours')")
-            conn.commit()
+    from src.db.session import get_db
+    from src.db.models import ProcessedMessage
+    from datetime import datetime, timezone, timedelta
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    with get_db() as db:
+        db.query(ProcessedMessage).filter(ProcessedMessage.created_at < cutoff).delete(synchronize_session=False)
 
 def start_scheduler():
     """Inicia o scheduler se ainda nao estiver rodando e reconcilia os dados."""
@@ -99,7 +95,6 @@ def reconcile_reminders():
             trigger_type = r.get("trigger_type")
             config = r.get("trigger_config", {})
             
-            # Verificar se o job ja existe no APScheduler
             if job_id and scheduler.get_job(job_id):
                 continue
                 

@@ -19,8 +19,8 @@ def dispatch_proactive_message(reminder_id: int):
     Args:
         reminder_id: ID do lembrete na tabela reminders.
     """
-    from src.config.system_config import _get_pg_engine
-    engine = _get_pg_engine()
+    from src.db.session import get_engine, _is_sqlite
+    engine = get_engine() if not _is_sqlite() else None
     
     if engine:
         from sqlalchemy import text
@@ -53,16 +53,7 @@ def dispatch_proactive_message(reminder_id: int):
         # 1. Obter resposta do Agente (se o canal precisar)
         response_content = None
         if channel in ["whatsapp_text", "whatsapp_call", "web_voice"]:
-            from src.agent.assistant import get_assistant
-            from src.tools.web_search import create_web_search_tool, create_fetch_page_tool
-            from src.tools.deep_research import create_deep_research_tool
-
-            search_tools = [
-                create_web_search_tool(None),
-                create_fetch_page_tool(None),
-                create_deep_research_tool(None, user_phone),
-            ]
-            
+            from src.agent.factory import create_agent_with_tools
             from src.agent.response_utils import extract_final_response
 
             reminder_instructions = [
@@ -71,9 +62,9 @@ def dispatch_proactive_message(reminder_id: int):
                 "Execute as instrucoes diretamente e envie o resultado pronto.",
             ]
 
-            agent = get_assistant(
+            agent = create_agent_with_tools(
                 session_id=user_phone,
-                extra_tools=search_tools,
+                user_id=user_phone,
                 extra_instructions=reminder_instructions,
             )
             response = agent.run(task_instructions, knowledge_filters={"user_id": user_phone})

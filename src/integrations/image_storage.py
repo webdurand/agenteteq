@@ -7,6 +7,22 @@ from datetime import datetime
 # Garante que a config do Cloudinary exista
 _cloudinary_configured = False
 
+MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
+VALID_IMAGE_HEADERS = {
+    b'\xff\xd8\xff': 'jpeg',
+    b'\x89PNG': 'png',
+    b'GIF8': 'gif',
+    b'RIFF': 'webp',
+}
+
+def _validate_image(image_bytes: bytes):
+    if len(image_bytes) > MAX_IMAGE_SIZE:
+        raise ValueError(f"Image too large: {len(image_bytes)} bytes (max {MAX_IMAGE_SIZE})")
+    for magic, fmt in VALID_IMAGE_HEADERS.items():
+        if image_bytes[:len(magic)] == magic:
+            return fmt
+    raise ValueError("Invalid image format: not a recognized image type")
+
 def _ensure_cloudinary_config():
     global _cloudinary_configured
     if not _cloudinary_configured and os.getenv("CLOUDINARY_CLOUD_NAME"):
@@ -24,6 +40,7 @@ def upload_user_image(user_id: str, image_bytes: bytes, extension: str = "png") 
     Faz upload de uma imagem do usuário para o Cloudinary.
     Retorna a URL segura da imagem.
     """
+    _validate_image(image_bytes)
     _ensure_cloudinary_config()
     import cloudinary.uploader
     

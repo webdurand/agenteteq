@@ -17,7 +17,15 @@ def get_model():
         return Claude(id=os.getenv("LLM_MODEL", "claude-3-5-sonnet-20241022"))
     elif provider == "gemini":
         from agno.models.google import Gemini
-        return Gemini(id=os.getenv("LLM_MODEL", "gemini-2.5-flash"))
+        model_id = os.getenv("LLM_MODEL", "gemini-2.5-flash")
+        kwargs = {}
+        if "2.5" in model_id:
+            kwargs["thinking_budget"] = int(os.getenv("GEMINI_THINKING_BUDGET", "2048"))
+            kwargs["include_thoughts"] = True
+        # Google Search nativo (grounding): o modelo decide quando buscar na web e retorna citações
+        if os.getenv("GEMINI_GOOGLE_SEARCH", "").lower() in ("1", "true", "yes"):
+            kwargs["search"] = True  # Gemini 2.0+; para modelos antigos use grounding=True
+        return Gemini(id=model_id, **kwargs)
     else:
         from agno.models.openai import OpenAIChat
         return OpenAIChat(id="gpt-4o-mini")

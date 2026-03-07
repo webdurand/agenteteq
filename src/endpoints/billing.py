@@ -1,7 +1,10 @@
 import os
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from src.auth.deps import get_current_user
 from src.billing.service import (
@@ -33,6 +36,9 @@ def subscribe(req: SubscribeRequest, user: dict = Depends(get_current_user)):
     active_plan = None
     if req.price_id:
         active_plan = get_plan(req.price_id)
+        if not active_plan:
+            from src.models.subscriptions import get_plan_by_price_id
+            active_plan = get_plan_by_price_id(req.price_id)
         
     if not active_plan:
         active_plan = get_default_active_plan()
@@ -89,7 +95,8 @@ def subscribe(req: SubscribeRequest, user: dict = Depends(get_current_user)):
             "plan_code": active_plan["code"] if active_plan else None,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Erro ao criar assinatura")
+        raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
 
 @router.post("/portal")
@@ -103,7 +110,8 @@ def portal(user: dict = Depends(get_current_user)):
         session = create_portal_session(customer_id, return_url)
         return {"url": session.url}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Erro ao criar sessão do portal Stripe")
+        raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
 
 @router.get("/subscription")
@@ -123,7 +131,8 @@ def setup_payment_method(user: dict = Depends(get_current_user)):
         intent = create_setup_intent(customer_id)
         return {"client_secret": intent.client_secret}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Erro ao criar setup intent de pagamento")
+        raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
 
 class UpdateDefaultPaymentRequest(BaseModel):
@@ -142,7 +151,8 @@ def update_default_payment(req: UpdateDefaultPaymentRequest, user: dict = Depend
         set_default_payment_method(customer_id, sub["provider_subscription_id"], req.payment_method_id)
         return {"status": "updated"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Erro ao atualizar método de pagamento padrão")
+        raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
 
 @router.post("/cancel")
@@ -157,7 +167,8 @@ def cancel(user: dict = Depends(get_current_user)):
         updated_sub = cancel_subscription(sub["provider_subscription_id"], immediately=False)
         return {"status": "canceled_at_period_end"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Erro ao cancelar assinatura")
+        raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
         
 webhook_router = APIRouter(tags=["webhooks"])

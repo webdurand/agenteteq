@@ -9,30 +9,19 @@ def split_into_sentences(text: str) -> list[str]:
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
     return [s.strip() for s in sentences if s.strip()]
 
-from src.agent.assistant import get_assistant
+from src.agent.factory import create_agent_with_tools
 from src.agent.response_utils import extract_final_response
 from src.integrations.tts import get_tts
 from src.memory.identity import get_user, update_user_name, update_last_seen, is_new_session, is_plan_active
 from src.memory.extractor import extract_and_save_facts
 from src.tools.memory_manager import add_memory
-from src.tools.web_search import create_web_search_tool, create_fetch_page_tool, create_explore_site_tool
-from src.tools.deep_research import create_deep_research_tool
 from src.auth.jwt import decode_token
 from src.memory.analytics import log_event, log_agent_tools
 from src.models.chat_messages import save_message
+from src.agent.prompts import GREETING_INJECTION_WEB as GREETING_INJECTION
 import time
 
 router = APIRouter()
-
-GREETING_INJECTION = (
-    "[INSTRUCAO DE SISTEMA: O usuario ficou mais de 4 horas sem enviar mensagens. "
-    "Comece com uma saudacao descontraida. "
-    "ANTES de responder, consulte suas memorias (search_knowledge) para saber quais informacoes o usuario quer no cumprimento. "
-    "Por padrao (sem preferencias salvas), inclua: previsao do tempo (use get_weather — busque a cidade nas memorias; "
-    "se nao souber, pergunte de forma natural) e tarefas pendentes (use list_tasks). "
-    "Integre tudo de forma fluida e casual, sem parecer uma lista robotica. "
-    "Mensagem real do usuario: ]"
-)
 
 
 _EMOJI_TAIL_RE = re.compile(
@@ -151,13 +140,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
             print(f"[WEB WS] Falha no atalho de lembrete rapido: {e}")
 
     notifier = WebSocketNotifier(websocket, loop)
-    search_tools = [
-        create_web_search_tool(notifier),
-        create_fetch_page_tool(notifier),
-        create_explore_site_tool(notifier),
-        create_deep_research_tool(notifier, phone_number),
-    ]
-    agent = get_assistant(session_id=phone_number, extra_tools=search_tools, channel="web")
+    agent = create_agent_with_tools(phone_number, notifier, include_explore=True, user_id=phone_number, channel="web")
 
     prompt = user_text.strip()
     if not prompt and agent_images:
@@ -188,6 +171,21 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     )
     log_agent_tools(phone_number, "web", agent)
     final_text = extract_final_response(response)
+
+    if not final_text:
+        rc = getattr(response, 'reasoning_content', None)
+        print(f"[WEB WS] WARN resposta vazia — content={repr(getattr(response, 'content', None))[:200]} reasoning={repr(rc)[:200]}")
+        if hasattr(response, "messages") and response.messages:
+            for i, m in enumerate(response.messages[-5:]):
+                print(f"  msg[{i}] role={getattr(m, 'role', '?')} content={repr(getattr(m, 'content', None))[:120]} tool_calls={bool(getattr(m, 'tool_calls', None))} reasoning={repr(getattr(m, 'reasoning_content', None))[:80]}")
+
+        print("[WEB WS] Retrying agent.run()...")
+        response = await asyncio.to_thread(agent.run, prompt, **kwargs)
+        final_text = extract_final_response(response)
+
+        if not final_text:
+            final_text = "Desculpa, tive um problema ao processar sua mensagem. Pode repetir?"
+            print("[WEB WS] Retry tambem vazio, usando mensagem padrao")
 
     await asyncio.sleep(0)
 
@@ -381,12 +379,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                 await websocket.send_json({"type": "status", "text": "Ouvindo..."})
 
                 notifier = WebSocketNotifier(websocket, loop)
-                search_tools = [
-                    create_web_search_tool(notifier),
-                    create_fetch_page_tool(notifier),
-                    create_deep_research_tool(notifier, phone_number),
-                ]
-                agent = get_assistant(session_id=phone_number, extra_tools=search_tools, channel="web")
+                agent = create_agent_with_tools(phone_number, notifier, user_id=phone_number, channel="web")
 
                 llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
                 print(f"[WEB WS] Processando audio | provider={llm_provider} | new_session={new_session}")

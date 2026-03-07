@@ -29,3 +29,4 @@ stripe>=11.0.0
 cloudinary
 psycopg[binary]
 asyncpg
+slowapi

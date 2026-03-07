@@ -9,49 +9,37 @@ from src.events import emit_event_sync
 import cloudinary
 import cloudinary.uploader
 
-if os.getenv("CLOUDINARY_CLOUD_NAME"):
-    cloudinary.config(
-        cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
-        api_key=os.getenv("CLOUDINARY_API_KEY"),
-        api_secret=os.getenv("CLOUDINARY_API_SECRET"),
-        secure=True
-    )
+from src.integrations.image_storage import upload_user_image, _ensure_cloudinary_config
+from src.db.session import get_db
+from src.db.models import ImageSession
 
-from src.config.system_config import _get_pg_engine, _get_sqlite_conn
-from src.integrations.image_storage import upload_user_image
+_ensure_cloudinary_config()
+
 
 def _upsert_image_session(session_id: str, image_type: str, url: str, index: int = 0):
-    engine = _get_pg_engine()
-    if engine:
-        from sqlalchemy import text
-        with engine.connect() as conn:
-            conn.execute(text("""
-                INSERT INTO image_sessions (session_id, image_type, image_url, image_index)
-                VALUES (:sid, :type, :url, :idx)
-                ON CONFLICT (session_id, image_type, image_index) DO UPDATE SET image_url = :url, created_at = NOW()
-            """), {"sid": session_id, "type": image_type, "url": url, "idx": index})
-            conn.commit()
-    else:
-        with _get_sqlite_conn() as conn:
-            conn.execute("""
-                INSERT INTO image_sessions (session_id, image_type, image_url, image_index)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT (session_id, image_type, image_index) DO UPDATE SET image_url = excluded.image_url, created_at = CURRENT_TIMESTAMP
-            """, (session_id, image_type, url, index))
-            conn.commit()
+    with get_db() as session:
+        row = session.query(ImageSession).filter_by(
+            session_id=session_id, image_type=image_type, image_index=index
+        ).first()
+        if row:
+            row.image_url = url
+            row.created_at = datetime.utcnow().isoformat()
+        else:
+            session.add(ImageSession(
+                session_id=session_id,
+                image_type=image_type,
+                image_index=index,
+                image_url=url,
+            ))
+
 
 def _get_image_sessions(session_id: str) -> list:
-    engine = _get_pg_engine()
-    if engine:
-        from sqlalchemy import text
-        with engine.connect() as conn:
-            rows = conn.execute(text("SELECT image_type, image_url FROM image_sessions WHERE session_id = :sid ORDER BY image_index ASC"), {"sid": session_id}).fetchall()
-            return [{"image_type": r[0], "image_url": r[1]} for r in rows]
-    else:
-        with _get_sqlite_conn() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT image_type, image_url FROM image_sessions WHERE session_id = ? ORDER BY image_index ASC", (session_id,))
-            return [{"image_type": r[0], "image_url": r[1]} for r in cursor.fetchall()]
+    with get_db() as session:
+        rows = session.query(ImageSession).filter_by(
+            session_id=session_id
+        ).order_by(ImageSession.image_index).all()
+        return [{"image_type": r.image_type, "image_url": r.image_url} for r in rows]
+
 
 def store_session_images(session_id: str, images: list[bytes]):
     """Armazena imagens enviadas pelo usuário (originais) fazendo upload pro Cloudinary."""
@@ -74,16 +62,8 @@ def get_session_images(session_id: str) -> dict:
 
 
 def clear_session_images(session_id: str):
-    engine = _get_pg_engine()
-    if engine:
-        from sqlalchemy import text
-        with engine.connect() as conn:
-            conn.execute(text("DELETE FROM image_sessions WHERE session_id = :sid"), {"sid": session_id})
-            conn.commit()
-    else:
-        with _get_sqlite_conn() as conn:
-            conn.execute("DELETE FROM image_sessions WHERE session_id = ?", (session_id,))
-            conn.commit()
+    with get_db() as session:
+        session.query(ImageSession).filter_by(session_id=session_id).delete()
 
 
 def _try_recover_last_image(user_id: str) -> str | None:

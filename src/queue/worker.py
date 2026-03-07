@@ -1,10 +1,30 @@
 import asyncio
 import traceback
+import ipaddress
+from urllib.parse import urlparse
+
 import httpx
 from src.queue.task_queue import claim_next_task, complete_task, fail_task, count_processing_tasks, is_task_cancelled
 from src.config.system_config import get_config
 
+_ALLOWED_HOSTS = {"res.cloudinary.com", "oaidalleapiprodscus.blob.core.windows.net"}
+
+def _validate_url(url: str):
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Invalid scheme: {parsed.scheme}")
+    hostname = parsed.hostname or ""
+    if any(hostname == h or hostname.endswith("." + h) for h in _ALLOWED_HOSTS):
+        return
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if ip.is_private or ip.is_loopback or ip.is_reserved:
+            raise ValueError(f"Private IP not allowed: {hostname}")
+    except ValueError:
+        pass
+
 async def _download_image(url: str) -> bytes:
+    _validate_url(url)
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(url)
         resp.raise_for_status()

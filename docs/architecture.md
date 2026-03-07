@@ -120,6 +120,11 @@ O agente pode **editar ou transformar imagens** enviadas pelo usuário usando o 
 - Fluxo: notifica → busca inicial → agente decisor → (se necessário) Team broadcast → salva na memória
 - Sub-agentes do Team recebem `get_search_toolkit()` + `get_scraper_toolkit()` para pesquisa paralela
 
+### Google Search nativo (Gemini) e Deep Research da Google
+
+- **Grounding com Google Search**: Com `LLM_PROVIDER=gemini`, é possível ativar busca web nativa do Gemini via `GEMINI_GOOGLE_SEARCH=true`. O modelo passa a poder consultar a web em tempo real e retornar respostas com citações (`groundingMetadata`). No Agno isso é feito com `Gemini(..., search=True)`. Funciona como capacidade do modelo, não como tool separada; pode coexistir com as tools `web_search` e `deep_research` (provider externo).
+- **Deep Research oficial (Google)**: A Google oferece um agente "Deep Research" via **Interactions API** (`client.interactions.create(...)`), com planejamento iterativo e múltiplas buscas. O `deep_research` atual do projeto é uma implementação própria (Agno Team + sub-agentes + provider configurável). Para usar o Deep Research nativo da Google seria necessário integrar a Interactions API em um fluxo dedicado (ex.: nova tool ou endpoint que chame `genai.Client().interactions.create(...)`).
+
 ## Lista de Tarefas (`src/tools/task_manager.py`)
 
 Ferramenta para gerenciar tarefas pessoais do usuário via WhatsApp.
@@ -135,31 +140,11 @@ Ferramenta para gerenciar tarefas pessoais do usuário via WhatsApp.
 
 ### Banco de Dados
 
-Tabela `tasks` no mesmo banco já utilizado por `identity.py` (PostgreSQL via `DATABASE_URL` ou SQLite local):
-
-```sql
-CREATE TABLE tasks (
-    id          INTEGER/SERIAL PRIMARY KEY,
-    user_id     TEXT NOT NULL,   -- número de telefone (WhatsApp)
-    title       TEXT NOT NULL,
-    description TEXT,
-    due_date    TEXT,            -- texto livre ou ISO 8601
-    location    TEXT,
-    notes       TEXT,
-    status      TEXT DEFAULT 'pending',  -- 'pending' | 'done'
-    created_at  TEXT NOT NULL
-)
-```
+Modelo ORM `Task` em `src/db/models.py`, criado automaticamente via `Base.metadata.create_all()`.
 
 ### Fluxo de Interação
 
 O agente faz perguntas contextuais antes de salvar a tarefa (prazo, local, observações), confirma o resumo com o usuário e só então chama `add_task`. O `user_id` sempre é o `session_id` (número de WhatsApp), garantindo isolamento entre usuários.
-
-### Decisão Técnica
-
-- Reutiliza o mesmo banco e padrão de conexão do `identity.py` — sem novo banco, sem nova dependência.
-- Não precisa de `notifier` nem de factory, pois a interação é síncrona e conversacional (o agente faz as perguntas, não a tool).
-- O `whatsapp.py` (orchestrator) não foi alterado: as tools são registradas diretamente no `get_assistant()`.
 
 ## Frontend: Tratamento de Erros e Feedback (Toasts)
 
@@ -416,12 +401,24 @@ VITE_WS_URL=ws://localhost:8000   # em produção: wss://seu-dominio.com
 - **Python & FastAPI**: Fornecem agilidade e facilidade para hospedar webhooks.
 - **Agno**: Framework para construção de agentes stateful.
 - **Agno Team**: Usado para orquestração multi-agent nativa (em vez de implementar ThreadPoolExecutor custom). Suporta execução paralela no modo `broadcast`.
-- **Identidade e Onboarding Determinístico**: Reduz custos de LLM e garante uma experiência controlada ao coletar os dados iniciais do usuário. A checagem de identidade usa PostgreSQL (NeonDB via `DATABASE_URL`) quando disponível, caindo para SQLite local apenas em ambiente sem banco externo. Isso garante que o usuário seja reconhecido mesmo após restarts do servidor.
+- **Camada de Dados ORM (`src/db/`)**: Toda a persistência é centralizada em SQLAlchemy ORM. `db/session.py` provê um engine único (PG via `DATABASE_URL` ou SQLite `app.db` em dev) e `db/models.py` contém todos os modelos declarativos. Nenhum módulo precisa saber qual backend está em uso — o ORM abstrai isso. A criação de tabelas é feita uma única vez no startup via `db/init.py` → `Base.metadata.create_all()`.
+- **Identidade e Onboarding Determinístico**: Reduz custos de LLM e garante uma experiência controlada ao coletar os dados iniciais do usuário.
 - **Módulo de Memória**: Utiliza NeonDB com PgVector e a Knowledge Base do Agno para armazenar memórias do usuário em background e injetar contexto de forma "Agentic" ou "Always-on".
 - **Desacoplamento**: LLM, transcrição, WhatsApp provider, search provider e scraper provider são todos configuráveis via `.env`. Trocar qualquer um exige apenas mudar a variável de ambiente.
-- **Injeção de contexto por factory**: Tools que precisam de contexto do usuário (notifier, user_id) são criadas por factories no orchestrator e injetadas via `extra_tools`, mantendo o `get_assistant()` agnóstico ao contexto da requisição.
+- **Agent Factory (`src/agent/factory.py`)**: Centraliza a criação de agentes com search tools. `create_agent_with_tools(session_id, notifier, ...)` é o ponto único de instanciação, evitando duplicação entre `whatsapp.py` e `web.py`.
+- **Prompts Compartilhados (`src/agent/prompts.py`)**: Constantes de injeção de contexto (GREETING, CONTINUATION) ficam em módulo único, importadas por ambos os canais.
 - **Armazenamento de Sessão**: Agno SqliteDb para manter histórico por telefone do usuário.
 - **Integração via GitHub API**: A publicação do blog foi migrada de comandos git locais para a GitHub API (`httpx.put`), permitindo que a API e o blog sejam deployados em servidores diferentes e desacoplados (ex: backend na Koyeb, frontend na Vercel).
+
+## Segurança
+
+- **JWT**: Secret obrigatório via `JWT_SECRET` env var; o app emite warning e usa default inseguro apenas em dev.
+- **Rate Limiting**: `slowapi` protege endpoints de auth (`/auth/register`, `/auth/login`, `/auth/verify-whatsapp`, `/auth/google`) contra brute force.
+- **Webhook Signature**: O endpoint POST `/webhook/whatsapp` valida `X-Hub-Signature-256` usando HMAC-SHA256 com `WHATSAPP_APP_SECRET` (skip em dev se não configurado).
+- **Error Handling**: Endpoints nunca expõem `str(e)` ao cliente; erros são logados server-side e retornam mensagem genérica.
+- **Upload Validation**: Imagens são validadas por tamanho (10MB) e magic bytes antes do upload ao Cloudinary.
+- **SSRF Protection**: O worker de download valida URLs contra IPs privados e mantém allowlist de hosts confiáveis.
+- **Logging Estruturado**: `logging.basicConfig` configurado no startup com formato timestamped; módulos críticos usam `logger` em vez de `print()`.
 
 ## Configuração de Providers
 
@@ -431,6 +428,7 @@ VITE_WS_URL=ws://localhost:8000   # em produção: wss://seu-dominio.com
 | WhatsApp | `WHATSAPP_PROVIDER` | `meta` | `meta`, `evolution` |
 | Transcrição | `TRANSCRIBER_PROVIDER` | `openai` | `openai`, `mock` |
 | Busca web | `SEARCH_PROVIDER` | `duckduckgo` | `duckduckgo`, `tavily`, `exa`, `serper`, `brave` |
+| Google Search (Gemini) | `GEMINI_GOOGLE_SEARCH` | — | `true` habilita grounding nativo com citações (requer `LLM_PROVIDER=gemini`) |
 | Scraping | `SCRAPER_PROVIDER` | `jina` | `jina`, `newspaper4k`, `crawl4ai` |
 | Memória | `MEMORY_MODE` | `agentic` | `agentic`, `always-on` |
 | Agendamentos | `scheduler.db` | SQLite local | — (persistência automática) |

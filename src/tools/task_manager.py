@@ -1,83 +1,12 @@
-import os
-import sqlite3
 from datetime import datetime
 from typing import Optional
 
-# ---------------------------------------------------------------------------
-# Conexão: usa NeonDB (PostgreSQL) quando DATABASE_URL estiver configurado,
-# caso contrário cai para SQLite local — mesmo padrão do identity.py.
-# ---------------------------------------------------------------------------
-
-def _get_db_url() -> Optional[str]:
-    url = os.getenv("DATABASE_URL")
-    if not url:
-        return None
-    if url.startswith("postgresql://"):
-        return url.replace("postgresql://", "postgresql+psycopg2://")
-    return url
-
-
-def _use_postgres() -> bool:
-    return bool(os.getenv("DATABASE_URL"))
-
-
-_pg_engine = None
-
-def _get_pg_engine():
-    global _pg_engine
-    if _pg_engine is None:
-        from sqlalchemy import create_engine
-        _pg_engine = create_engine(
-            _get_db_url(),
-            pool_pre_ping=True,
-            pool_recycle=300,
-        )
-    return _pg_engine
-
-
-def _get_sqlite_conn():
-    return sqlite3.connect("users.db")
+from src.db.session import get_db
+from src.db.models import Task
 
 
 def _init_db():
-    try:
-        if _use_postgres():
-            from sqlalchemy import text
-            engine = _get_pg_engine()
-            with engine.connect() as conn:
-                conn.execute(text("""
-                    CREATE TABLE IF NOT EXISTS tasks (
-                        id SERIAL PRIMARY KEY,
-                        user_id TEXT NOT NULL,
-                        title TEXT NOT NULL,
-                        description TEXT,
-                        due_date TEXT,
-                        location TEXT,
-                        notes TEXT,
-                        status TEXT DEFAULT 'pending',
-                        created_at TEXT NOT NULL
-                    )
-                """))
-                conn.commit()
-        else:
-            conn = _get_sqlite_conn()
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS tasks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    description TEXT,
-                    due_date TEXT,
-                    location TEXT,
-                    notes TEXT,
-                    status TEXT DEFAULT 'pending',
-                    created_at TEXT NOT NULL
-                )
-            """)
-            conn.commit()
-            conn.close()
-    except Exception as e:
-        print(f"[TASKS] Erro ao inicializar banco: {e}")
+    pass
 
 
 def add_task(
@@ -87,6 +16,7 @@ def add_task(
     due_date: str = "",
     location: str = "",
     notes: str = "",
+    channel: str = "unknown",
 ) -> str:
     """
     Adiciona uma tarefa à lista do usuário.
@@ -98,45 +28,29 @@ def add_task(
         due_date: Prazo ou data/hora no formato ISO 8601 ou texto livre (ex: '2026-03-02 10:00'). Opcional.
         location: Endereço ou local relacionado à tarefa (opcional).
         notes: Informações adicionais ou observações (opcional).
+        channel: Canal de origem (web, whatsapp, etc).
 
     Returns:
         Mensagem de confirmação com o ID da tarefa criada.
     """
     print(f"[TASKS] add_task | user={user_id} | titulo='{title}' | prazo='{due_date}' | local='{location}'")
-    _init_db()
     created_at = datetime.now().isoformat()
     try:
-        if _use_postgres():
-            from sqlalchemy import text
-            engine = _get_pg_engine()
-            with engine.connect() as conn:
-                result = conn.execute(
-                    text("""
-                        INSERT INTO tasks (user_id, title, description, due_date, location, notes, status, created_at)
-                        VALUES (:user_id, :title, :description, :due_date, :location, :notes, 'pending', :created_at)
-                        RETURNING id
-                    """),
-                    {
-                        "user_id": user_id, "title": title, "description": description,
-                        "due_date": due_date, "location": location, "notes": notes,
-                        "created_at": created_at,
-                    }
-                )
-                task_id = result.fetchone()[0]
-                conn.commit()
-        else:
-            conn = _get_sqlite_conn()
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO tasks (user_id, title, description, due_date, location, notes, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
-                """,
-                (user_id, title, description, due_date, location, notes, created_at),
+        with get_db() as db:
+            task = Task(
+                user_id=user_id,
+                title=title,
+                description=description,
+                due_date=due_date,
+                location=location,
+                notes=notes,
+                status="pending",
+                created_at=created_at,
             )
-            task_id = cursor.lastrowid
-            conn.commit()
-            conn.close()
+            db.add(task)
+            db.flush()
+            task_id = task.id
+
         print(f"[TASKS] Tarefa #{task_id} adicionada com sucesso: '{title}'")
         from src.events import emit_event_sync
         emit_event_sync(user_id, "task_updated")
@@ -161,55 +75,30 @@ def list_tasks(user_id: str, status: str = "pending") -> str:
         Lista formatada das tarefas ou mensagem informando que não há tarefas.
     """
     print(f"[TASKS] list_tasks | user={user_id} | status={status}")
-    _init_db()
     try:
-        if _use_postgres():
-            from sqlalchemy import text
-            engine = _get_pg_engine()
-            with engine.connect() as conn:
-                if status == "all":
-                    rows = conn.execute(
-                        text("SELECT id, title, description, due_date, location, notes, status FROM tasks WHERE user_id = :u ORDER BY created_at ASC"),
-                        {"u": user_id}
-                    ).fetchall()
-                else:
-                    rows = conn.execute(
-                        text("SELECT id, title, description, due_date, location, notes, status FROM tasks WHERE user_id = :u AND status = :s ORDER BY created_at ASC"),
-                        {"u": user_id, "s": status}
-                    ).fetchall()
-        else:
-            conn = _get_sqlite_conn()
-            c = conn.cursor()
-            if status == "all":
-                c.execute(
-                    "SELECT id, title, description, due_date, location, notes, status FROM tasks WHERE user_id = ? ORDER BY created_at ASC",
-                    (user_id,)
-                )
-            else:
-                c.execute(
-                    "SELECT id, title, description, due_date, location, notes, status FROM tasks WHERE user_id = ? AND status = ? ORDER BY created_at ASC",
-                    (user_id, status)
-                )
-            rows = c.fetchall()
-            conn.close()
+        with get_db() as db:
+            q = db.query(Task).filter(Task.user_id == user_id)
+            if status != "all":
+                q = q.filter(Task.status == status)
+            q = q.order_by(Task.created_at.asc())
+            rows = q.all()
 
         if not rows:
             label = {"pending": "abertas", "done": "concluídas", "all": ""}.get(status, status)
             return f"Nenhuma tarefa {label} encontrada." if label else "Nenhuma tarefa encontrada."
 
         lines = []
-        for row in rows:
-            task_id, title, description, due_date, location, notes, task_status = row
-            emoji = "✅" if task_status == "done" else "🔲"
-            line = f"{emoji} #{task_id} — {title}"
-            if due_date:
-                line += f"\n   📅 Prazo: {due_date}"
-            if location:
-                line += f"\n   📍 Local: {location}"
-            if description:
-                line += f"\n   📝 {description}"
-            if notes:
-                line += f"\n   💬 {notes}"
+        for t in rows:
+            emoji = "✅" if t.status == "done" else "🔲"
+            line = f"{emoji} #{t.id} — {t.title}"
+            if t.due_date:
+                line += f"\n   📅 Prazo: {t.due_date}"
+            if t.location:
+                line += f"\n   📍 Local: {t.location}"
+            if t.description:
+                line += f"\n   📝 {t.description}"
+            if t.notes:
+                line += f"\n   💬 {t.notes}"
             lines.append(line)
 
         return "\n\n".join(lines)
@@ -222,55 +111,19 @@ def get_tasks(user_id: str, status: str = "pending", limit: int = 0, offset: int
     """
     Lista as tarefas do usuário. Se limit > 0, pagina com has_more.
     """
-    _init_db()
     try:
-        fetch_limit = limit + 1 if limit > 0 else 0
-        cols = "id, title, description, due_date, location, notes, status, created_at"
+        fetch_limit = limit + 1 if limit > 0 else None
 
-        if _use_postgres():
-            from sqlalchemy import text
-            engine = _get_pg_engine()
-            with engine.connect() as conn:
-                base = f"SELECT {cols} FROM tasks WHERE user_id = :u"
-                params: dict = {"u": user_id}
-                if status != "all":
-                    base += " AND status = :s"
-                    params["s"] = status
-                base += " ORDER BY created_at ASC"
-                if fetch_limit:
-                    base += " LIMIT :lim OFFSET :off"
-                    params["lim"] = fetch_limit
-                    params["off"] = offset
-                rows = conn.execute(text(base), params).fetchall()
-        else:
-            conn = _get_sqlite_conn()
-            c = conn.cursor()
-            base = f"SELECT {cols} FROM tasks WHERE user_id = ?"
-            params_list = [user_id]
+        with get_db() as db:
+            q = db.query(Task).filter(Task.user_id == user_id)
             if status != "all":
-                base += " AND status = ?"
-                params_list.append(status)
-            base += " ORDER BY created_at ASC"
+                q = q.filter(Task.status == status)
+            q = q.order_by(Task.created_at.asc())
             if fetch_limit:
-                base += " LIMIT ? OFFSET ?"
-                params_list += [fetch_limit, offset]
-            c.execute(base, tuple(params_list))
-            rows = c.fetchall()
-            conn.close()
+                q = q.limit(fetch_limit).offset(offset)
+            rows = q.all()
 
-        tasks = []
-        for row in rows:
-            tasks.append({
-                "id": row[0],
-                "title": row[1],
-                "description": row[2],
-                "due_date": row[3],
-                "location": row[4],
-                "notes": row[5],
-                "status": row[6],
-                "created_at": row[7],
-            })
-
+        tasks = [t.to_dict() for t in rows]
         has_more = False
         if limit > 0 and len(tasks) > limit:
             has_more = True
@@ -281,43 +134,27 @@ def get_tasks(user_id: str, status: str = "pending", limit: int = 0, offset: int
         print(f"[TASKS] Erro ao obter tarefas: {e}")
         return {"tasks": [], "has_more": False}
 
-def complete_task(user_id: str, task_id: int) -> str:
+
+def complete_task(user_id: str, task_id: int, channel: str = "unknown") -> str:
     """
     Marca uma tarefa como concluída.
 
     Args:
         user_id: Número de telefone do usuário (garante que só pode concluir suas próprias tarefas).
         task_id: ID numérico da tarefa a ser marcada como concluída.
+        channel: Canal de origem (web, whatsapp, etc).
 
     Returns:
         Confirmação ou mensagem de erro.
     """
     print(f"[TASKS] complete_task | user={user_id} | task_id={task_id}")
-    _init_db()
     try:
-        if _use_postgres():
-            from sqlalchemy import text
-            engine = _get_pg_engine()
-            with engine.connect() as conn:
-                result = conn.execute(
-                    text("UPDATE tasks SET status = 'done' WHERE id = :id AND user_id = :u"),
-                    {"id": task_id, "u": user_id}
-                )
-                conn.commit()
-                affected = result.rowcount
-        else:
-            conn = _get_sqlite_conn()
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE tasks SET status = 'done' WHERE id = ? AND user_id = ?",
-                (task_id, user_id)
-            )
-            conn.commit()
-            affected = cursor.rowcount
-            conn.close()
+        with get_db() as db:
+            task = db.query(Task).filter(Task.id == task_id, Task.user_id == user_id).first()
+            if not task:
+                return f"Tarefa #{task_id} não encontrada."
+            task.status = "done"
 
-        if affected == 0:
-            return f"Tarefa #{task_id} não encontrada."
         from src.events import emit_event_sync
         emit_event_sync(user_id, "task_updated")
         from src.events_broadcast import emit_action_log_sync
@@ -340,31 +177,13 @@ def reopen_task(user_id: str, task_id: int) -> str:
         Confirmação ou mensagem de erro.
     """
     print(f"[TASKS] reopen_task | user={user_id} | task_id={task_id}")
-    _init_db()
     try:
-        if _use_postgres():
-            from sqlalchemy import text
-            engine = _get_pg_engine()
-            with engine.connect() as conn:
-                result = conn.execute(
-                    text("UPDATE tasks SET status = 'pending' WHERE id = :id AND user_id = :u"),
-                    {"id": task_id, "u": user_id}
-                )
-                conn.commit()
-                affected = result.rowcount
-        else:
-            conn = _get_sqlite_conn()
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE tasks SET status = 'pending' WHERE id = ? AND user_id = ?",
-                (task_id, user_id)
-            )
-            conn.commit()
-            affected = cursor.rowcount
-            conn.close()
+        with get_db() as db:
+            task = db.query(Task).filter(Task.id == task_id, Task.user_id == user_id).first()
+            if not task:
+                return f"Tarefa #{task_id} não encontrada."
+            task.status = "pending"
 
-        if affected == 0:
-            return f"Tarefa #{task_id} não encontrada."
         from src.events import emit_event_sync
         emit_event_sync(user_id, "task_updated")
         return f"Tarefa #{task_id} marcada como pendente!"
@@ -385,31 +204,13 @@ def delete_task(user_id: str, task_id: int) -> str:
         Confirmação ou mensagem de erro.
     """
     print(f"[TASKS] delete_task | user={user_id} | task_id={task_id}")
-    _init_db()
     try:
-        if _use_postgres():
-            from sqlalchemy import text
-            engine = _get_pg_engine()
-            with engine.connect() as conn:
-                result = conn.execute(
-                    text("DELETE FROM tasks WHERE id = :id AND user_id = :u"),
-                    {"id": task_id, "u": user_id}
-                )
-                conn.commit()
-                affected = result.rowcount
-        else:
-            conn = _get_sqlite_conn()
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM tasks WHERE id = ? AND user_id = ?",
-                (task_id, user_id)
-            )
-            conn.commit()
-            affected = cursor.rowcount
-            conn.close()
+        with get_db() as db:
+            task = db.query(Task).filter(Task.id == task_id, Task.user_id == user_id).first()
+            if not task:
+                return f"Tarefa #{task_id} não encontrada."
+            db.delete(task)
 
-        if affected == 0:
-            return f"Tarefa #{task_id} não encontrada."
         from src.events import emit_event_sync
         emit_event_sync(user_id, "task_updated")
         return f"Tarefa #{task_id} removida com sucesso."
@@ -452,7 +253,7 @@ def create_task_tools(user_id: str, channel: str = "unknown"):
         Returns:
             Mensagem de confirmação com o ID da tarefa criada.
         """
-        return add_task(user_id, title, description, due_date, location, notes)
+        return add_task(user_id, title, description, due_date, location, notes, channel=channel)
 
     def list_tasks_tool(status: str = "pending") -> str:
         """
@@ -477,7 +278,7 @@ def create_task_tools(user_id: str, channel: str = "unknown"):
         Returns:
             Confirmação ou mensagem de erro.
         """
-        return complete_task(user_id, task_id)
+        return complete_task(user_id, task_id, channel=channel)
 
     def reopen_task_tool(task_id: int) -> str:
         """

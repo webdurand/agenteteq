@@ -47,21 +47,14 @@ def sync_subscription_from_stripe(event_id: str, event_type: str, stripe_obj: di
             return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else None
 
         # Determine user_id from customer_id (Requires a mapping function or looking up users table)
-        from src.memory.identity import _use_postgres, _get_pg_engine, _get_sqlite_conn
-        
+        from src.db.session import get_db
+        from src.db.models import User
+
         user_phone = None
-        if _use_postgres():
-            engine = _get_pg_engine()
-            with engine.connect() as conn:
-                row = conn.execute(__import__("sqlalchemy").text("SELECT phone_number FROM users WHERE stripe_customer_id = :c"), {"c": customer_id}).fetchone()
-                if row:
-                    user_phone = row[0]
-        else:
-            conn = _get_sqlite_conn()
-            row = conn.execute("SELECT phone_number FROM users WHERE stripe_customer_id = ?", (customer_id,)).fetchone()
-            if row:
-                user_phone = row[0]
-            conn.close()
+        with get_db() as db:
+            user_row = db.query(User).filter_by(stripe_customer_id=customer_id).first()
+            if user_row:
+                user_phone = user_row.phone_number
             
         if not user_phone:
             # Log error: unknown customer

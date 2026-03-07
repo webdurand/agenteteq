@@ -18,17 +18,29 @@ def extract_final_response(response) -> str:
 
     Percorre response.messages de trás pra frente e retorna o content da
     primeira mensagem 'assistant' que tenha texto (e não seja apenas tool_call).
+    Se todas as mensagens com content também tiverem tool_calls, aceita a última.
+    Fallback para reasoning_content em modelos que usam thinking (Gemini 2.5).
     """
     if hasattr(response, "messages") and response.messages:
+        last_with_content = None
         for msg in reversed(response.messages):
             role = getattr(msg, "role", None)
             content = getattr(msg, "content", None)
             tool_calls = getattr(msg, "tool_calls", None)
 
-            if role == "assistant" and content and not tool_calls:
-                return content
+            if role == "assistant" and content:
+                if not tool_calls:
+                    return content
+                if last_with_content is None:
+                    last_with_content = content
 
-    return response.content or ""
+        if last_with_content:
+            return last_with_content
+
+    text = response.content or ""
+    if not text:
+        text = getattr(response, "reasoning_content", None) or ""
+    return text
 
 
 def split_whatsapp_messages(text: str, max_length: int = 1500) -> list[str]:

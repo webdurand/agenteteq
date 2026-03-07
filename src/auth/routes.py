@@ -1,5 +1,7 @@
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Request
 from pydantic import BaseModel, EmailStr
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from src.auth.passwords import hash_password, verify_password
 from src.auth.jwt import create_token
 from src.auth.otp import generate_code, verify_code
@@ -16,6 +18,8 @@ from src.memory.identity import (
     change_user_phone_number,
 )
 from src.integrations.whatsapp import whatsapp_client
+
+limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -68,7 +72,8 @@ async def send_otp_whatsapp(phone: str, purpose: str):
         raise HTTPException(status_code=502, detail=f"Falha ao enviar codigo via WhatsApp. Verifique o numero.")
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
-async def register(req: RegisterRequest):
+@limiter.limit("5/minute")
+async def register(request: Request, req: RegisterRequest):
     if get_user_by_email(req.email):
         raise HTTPException(status_code=400, detail="E-mail ja cadastrado")
     if get_user_by_username(req.username):
@@ -90,7 +95,8 @@ async def register(req: RegisterRequest):
     return {"message": "Usuario criado. Codigo enviado para o WhatsApp."}
 
 @router.post("/verify-whatsapp")
-async def verify_whatsapp(req: VerifyRequest):
+@limiter.limit("5/minute")
+async def verify_whatsapp(request: Request, req: VerifyRequest):
     user = get_user(req.phone)
     if not user:
         raise HTTPException(status_code=404, detail="Usuario nao encontrado")
@@ -110,7 +116,8 @@ async def verify_whatsapp(req: VerifyRequest):
     }
 
 @router.post("/login")
-async def login(req: LoginRequest):
+@limiter.limit("10/minute")
+async def login(request: Request, req: LoginRequest):
     user = get_user_by_email(req.email)
     if not user:
         raise HTTPException(status_code=401, detail="Credenciais invalidas")
@@ -156,7 +163,8 @@ async def verify_2fa(req: VerifyRequest):
     }
 
 @router.post("/google")
-async def google_auth(req: GoogleAuthRequest):
+@limiter.limit("10/minute")
+async def google_auth(request: Request, req: GoogleAuthRequest):
     try:
         google_data = verify_google_token(req.id_token)
     except ValueError as e:

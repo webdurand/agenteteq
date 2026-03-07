@@ -1,10 +1,16 @@
 import json
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional
-from datetime import datetime, timedelta
-from sqlalchemy import text
-from src.config.system_config import _get_pg_engine, _get_sqlite_conn, get_config_for_plan, get_config
+
+from sqlalchemy import func, text
+
+from src.db.session import get_db, _is_sqlite
+from src.db.models import BackgroundTask
+from src.config.system_config import get_config, get_config_for_plan
 from src.memory.identity import get_user
 from src.billing.service import is_subscription_active
+
 
 def _get_plan_type(user_id: str) -> str:
     user = get_user(user_id)
@@ -16,104 +22,65 @@ def _get_plan_type(user_id: str) -> str:
         return "paid"
     return "trial"
 
+
 def enqueue_task(user_id: str, task_type: str, channel: str, payload: Dict[str, Any]) -> dict:
     plan_type = _get_plan_type(user_id)
-    
-    if plan_type != "admin":
-        max_concurrent = int(get_config_for_plan("max_tasks_per_user", plan_type, "2"))
-        max_daily = int(get_config_for_plan("max_tasks_per_user_daily", plan_type, "5"))
-        
-        # Check current pending/processing tasks
-        engine = _get_pg_engine()
-        if engine:
-            with engine.connect() as conn:
-                # Concurrent limit
-                concurrent = conn.execute(text("""
-                    SELECT COUNT(*) FROM background_tasks 
-                    WHERE user_id = :uid AND status IN ('pending', 'processing')
-                """), {"uid": user_id}).scalar()
-                
-                if concurrent >= max_concurrent:
-                    return {"status": "limit_reached", "pending_count": concurrent}
-                    
-                # Daily limit
-                daily = conn.execute(text("""
-                    SELECT COUNT(*) FROM background_tasks 
-                    WHERE user_id = :uid AND created_at >= NOW() - INTERVAL '24 hours'
-                """), {"uid": user_id}).scalar()
-                
-                if daily >= max_daily:
-                    return {"status": "daily_limit", "daily_limit": max_daily}
-        else:
-            with _get_sqlite_conn() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM background_tasks WHERE user_id = ? AND status IN ('pending', 'processing')", (user_id,))
-                concurrent = cursor.fetchone()[0]
-                if concurrent >= max_concurrent:
-                    return {"status": "limit_reached", "pending_count": concurrent}
-                    
-                cursor.execute("SELECT COUNT(*) FROM background_tasks WHERE user_id = ? AND created_at >= datetime('now', '-24 hours')", (user_id,))
-                daily = cursor.fetchone()[0]
-                if daily >= max_daily:
-                    return {"status": "daily_limit", "daily_limit": max_daily}
 
-    # Cancel stale pending tasks of same type for this user
-    # (only pending — processing tasks are already being worked on)
-    engine = _get_pg_engine()
-    if engine:
-        with engine.connect() as conn:
-            cancelled = conn.execute(text("""
-                UPDATE background_tasks 
-                SET status = 'cancelled', updated_at = NOW()
-                WHERE user_id = :uid AND task_type = :ttype AND status = 'pending'
-            """), {"uid": user_id, "ttype": task_type}).rowcount
-            conn.commit()
-            if cancelled:
-                print(f"[QUEUE] Canceladas {cancelled} tasks pendentes ({task_type}) do usuario {user_id}")
-    else:
-        with _get_sqlite_conn() as conn:
-            conn.execute("""
-                UPDATE background_tasks 
-                SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
-                WHERE user_id = ? AND task_type = ? AND status = 'pending'
-            """, (user_id, task_type))
-            conn.commit()
+    with get_db() as session:
+        now_iso = datetime.now(timezone.utc).isoformat()
 
-    # Insert into queue
-    task_id = None
-    if engine:
-        with engine.connect() as conn:
-            result = conn.execute(text("""
-                INSERT INTO background_tasks (user_id, task_type, channel, payload, status)
-                VALUES (:uid, :ttype, :chan, :payload, 'pending')
-                RETURNING id
-            """), {"uid": user_id, "ttype": task_type, "chan": channel, "payload": json.dumps(payload)})
-            task_id = str(result.scalar())
-            
-            # Get position
-            position = conn.execute(text("""
-                SELECT COUNT(*) FROM background_tasks WHERE status = 'pending' AND id != :id
-            """), {"id": task_id}).scalar() + 1
-            
-            conn.commit()
-    else:
-        import uuid
-        task_id = str(uuid.uuid4())
-        with _get_sqlite_conn() as conn:
-            conn.execute("""
-                INSERT INTO background_tasks (id, user_id, task_type, channel, payload, status)
-                VALUES (?, ?, ?, ?, ?, 'pending')
-            """, (task_id, user_id, task_type, channel, json.dumps(payload)))
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM background_tasks WHERE status = 'pending' AND id != ?", (task_id,))
-            position = cursor.fetchone()[0] + 1
-            conn.commit()
+        if plan_type != "admin":
+            max_concurrent = int(get_config_for_plan("max_tasks_per_user", plan_type, "2"))
+            max_daily = int(get_config_for_plan("max_tasks_per_user_daily", plan_type, "5"))
 
-    # Estimate wait time
+            concurrent = session.query(func.count(BackgroundTask.id)).filter(
+                BackgroundTask.user_id == user_id,
+                BackgroundTask.status.in_(["pending", "processing"]),
+            ).scalar()
+
+            if concurrent >= max_concurrent:
+                return {"status": "limit_reached", "pending_count": concurrent}
+
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+            daily = session.query(func.count(BackgroundTask.id)).filter(
+                BackgroundTask.user_id == user_id,
+                BackgroundTask.created_at >= cutoff,
+            ).scalar()
+
+            if daily >= max_daily:
+                return {"status": "daily_limit", "daily_limit": max_daily}
+
+        cancelled = session.query(BackgroundTask).filter(
+            BackgroundTask.user_id == user_id,
+            BackgroundTask.task_type == task_type,
+            BackgroundTask.status == "pending",
+        ).update({"status": "cancelled", "updated_at": now_iso}, synchronize_session=False)
+
+        if cancelled:
+            print(f"[QUEUE] Canceladas {cancelled} tasks pendentes ({task_type}) do usuario {user_id}")
+
+        task = BackgroundTask(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            task_type=task_type,
+            channel=channel,
+            payload=json.dumps(payload),
+            status="pending",
+            created_at=now_iso,
+            updated_at=now_iso,
+        )
+        session.add(task)
+        session.flush()
+
+        position = session.query(func.count(BackgroundTask.id)).filter(
+            BackgroundTask.status == "pending",
+            BackgroundTask.id != task.id,
+        ).scalar() + 1
+
     avg_time = _get_avg_processing_time()
     max_global = int(get_config("max_global_processing", "3"))
     estimated_seconds = (position * avg_time) / max_global
-    
+
     if estimated_seconds < 60:
         est_str = "menos de 1 minuto"
     elif estimated_seconds < 120:
@@ -123,56 +90,78 @@ def enqueue_task(user_id: str, task_type: str, channel: str, payload: Dict[str, 
 
     return {
         "status": "queued",
-        "task_id": task_id,
+        "task_id": task.id,
         "position": position,
-        "estimated_wait": est_str
+        "estimated_wait": est_str,
     }
 
+
 def _get_avg_processing_time() -> float:
-    """Returns avg processing time in seconds, defaults to 90s"""
-    engine = _get_pg_engine()
-    if engine:
-        with engine.connect() as conn:
-            avg = conn.execute(text("""
-                SELECT AVG(EXTRACT(EPOCH FROM (completed_at - started_at))) 
-                FROM (
-                    SELECT started_at, completed_at FROM background_tasks 
-                    WHERE status = 'done' AND completed_at IS NOT NULL AND started_at IS NOT NULL
-                    ORDER BY completed_at DESC LIMIT 20
-                ) t
-            """)).scalar()
-            return float(avg) if avg else 90.0
-    else:
-        with _get_sqlite_conn() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT AVG((julianday(completed_at) - julianday(started_at)) * 86400.0) 
-                FROM (
-                    SELECT started_at, completed_at FROM background_tasks 
-                    WHERE status = 'done' AND completed_at IS NOT NULL AND started_at IS NOT NULL
-                    ORDER BY completed_at DESC LIMIT 20
-                )
-            """)
-            avg = cursor.fetchone()[0]
-            return float(avg) if avg else 90.0
+    with get_db() as session:
+        tasks = (
+            session.query(BackgroundTask.started_at, BackgroundTask.completed_at)
+            .filter(
+                BackgroundTask.status == "done",
+                BackgroundTask.completed_at.isnot(None),
+                BackgroundTask.started_at.isnot(None),
+            )
+            .order_by(BackgroundTask.completed_at.desc())
+            .limit(20)
+            .all()
+        )
+
+    if not tasks:
+        return 90.0
+
+    total = 0.0
+    count = 0
+    for started, completed in tasks:
+        try:
+            s = datetime.fromisoformat(started)
+            c = datetime.fromisoformat(completed)
+            total += (c - s).total_seconds()
+            count += 1
+        except (ValueError, TypeError):
+            continue
+
+    return total / count if count > 0 else 90.0
+
 
 def claim_next_task() -> Optional[dict]:
-    engine = _get_pg_engine()
-    if engine:
-        with engine.connect() as conn:
-            row = conn.execute(text("""
-                UPDATE background_tasks 
-                SET status = 'processing', started_at = NOW(), attempts = attempts + 1
-                WHERE id = (
-                    SELECT id FROM background_tasks 
-                    WHERE status = 'pending' 
-                    ORDER BY created_at ASC 
-                    FOR UPDATE SKIP LOCKED 
-                    LIMIT 1
-                )
-                RETURNING id, user_id, task_type, channel, payload, attempts
-            """)).fetchone()
-            conn.commit()
+    with get_db() as session:
+        if _is_sqlite():
+            task = (
+                session.query(BackgroundTask)
+                .filter(BackgroundTask.status == "pending")
+                .order_by(BackgroundTask.created_at.asc())
+                .first()
+            )
+            if task:
+                task.status = "processing"
+                task.started_at = datetime.now(timezone.utc).isoformat()
+                task.attempts = (task.attempts or 0) + 1
+                session.flush()
+                return {
+                    "id": task.id,
+                    "user_id": task.user_id,
+                    "task_type": task.task_type,
+                    "channel": task.channel,
+                    "payload": json.loads(task.payload) if isinstance(task.payload, str) else task.payload,
+                    "attempts": task.attempts,
+                }
+        else:
+            row = session.execute(text(
+                "UPDATE background_tasks "
+                "SET status = 'processing', started_at = NOW(), attempts = attempts + 1 "
+                "WHERE id = ("
+                "  SELECT id FROM background_tasks "
+                "  WHERE status = 'pending' "
+                "  ORDER BY created_at ASC "
+                "  FOR UPDATE SKIP LOCKED "
+                "  LIMIT 1"
+                ") "
+                "RETURNING id, user_id, task_type, channel, payload, attempts"
+            )).fetchone()
             if row:
                 return {
                     "id": str(row[0]),
@@ -180,113 +169,63 @@ def claim_next_task() -> Optional[dict]:
                     "task_type": row[2],
                     "channel": row[3],
                     "payload": json.loads(row[4]) if isinstance(row[4], str) else row[4],
-                    "attempts": row[5]
-                }
-    else:
-        with _get_sqlite_conn() as conn:
-            cursor = conn.cursor()
-            # SQLite doesnt have SKIP LOCKED, so we just pick the oldest
-            cursor.execute("SELECT id, user_id, task_type, channel, payload, attempts FROM background_tasks WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1")
-            row = cursor.fetchone()
-            if row:
-                task_id = row[0]
-                cursor.execute("UPDATE background_tasks SET status = 'processing', started_at = CURRENT_TIMESTAMP, attempts = attempts + 1 WHERE id = ?", (task_id,))
-                conn.commit()
-                return {
-                    "id": task_id,
-                    "user_id": row[1],
-                    "task_type": row[2],
-                    "channel": row[3],
-                    "payload": json.loads(row[4]),
-                    "attempts": row[5] + 1
+                    "attempts": row[5],
                 }
     return None
 
+
 def complete_task(task_id: str, result: dict):
-    engine = _get_pg_engine()
-    if engine:
-        with engine.connect() as conn:
-            conn.execute(text("""
-                UPDATE background_tasks 
-                SET status = 'done', result = :res, completed_at = NOW(), updated_at = NOW()
-                WHERE id = :id
-            """), {"id": task_id, "res": json.dumps(result)})
-            conn.commit()
-    else:
-        with _get_sqlite_conn() as conn:
-            conn.execute("""
-                UPDATE background_tasks 
-                SET status = 'done', result = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            """, (json.dumps(result), task_id))
-            conn.commit()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with get_db() as session:
+        task = session.get(BackgroundTask, task_id)
+        if task:
+            task.status = "done"
+            task.result = json.dumps(result)
+            task.completed_at = now_iso
+            task.updated_at = now_iso
+
 
 def fail_task(task_id: str, error: str):
-    engine = _get_pg_engine()
-    if engine:
-        with engine.connect() as conn:
-            attempts = conn.execute(text("SELECT attempts FROM background_tasks WHERE id = :id"), {"id": task_id}).scalar()
-            if attempts < 3:
-                conn.execute(text("UPDATE background_tasks SET status = 'pending', updated_at = NOW() WHERE id = :id"), {"id": task_id})
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with get_db() as session:
+        task = session.get(BackgroundTask, task_id)
+        if task:
+            if (task.attempts or 0) < 3:
+                task.status = "pending"
             else:
-                conn.execute(text("UPDATE background_tasks SET status = 'failed', result = :res, updated_at = NOW() WHERE id = :id"), {"id": task_id, "res": json.dumps({"error": error})})
-            conn.commit()
-    else:
-        with _get_sqlite_conn() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT attempts FROM background_tasks WHERE id = ?", (task_id,))
-            attempts = cursor.fetchone()[0]
-            if attempts < 3:
-                conn.execute("UPDATE background_tasks SET status = 'pending', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (task_id,))
-            else:
-                conn.execute("UPDATE background_tasks SET status = 'failed', result = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (json.dumps({"error": error}), task_id))
-            conn.commit()
+                task.status = "failed"
+                task.result = json.dumps({"error": error})
+            task.updated_at = now_iso
+
 
 def is_task_cancelled(task_id: str) -> bool:
-    """Check if a task was cancelled (e.g. replaced by a newer one)."""
-    engine = _get_pg_engine()
-    if engine:
-        with engine.connect() as conn:
-            status = conn.execute(text("SELECT status FROM background_tasks WHERE id = :id"), {"id": task_id}).scalar()
-            return status == "cancelled"
-    else:
-        with _get_sqlite_conn() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT status FROM background_tasks WHERE id = ?", (task_id,))
-            row = cursor.fetchone()
-            return row[0] == "cancelled" if row else True
+    with get_db() as session:
+        task = session.get(BackgroundTask, task_id)
+        if not task:
+            return False
+        return task.status == "cancelled"
+
 
 def count_processing_tasks() -> int:
-    engine = _get_pg_engine()
-    if engine:
-        with engine.connect() as conn:
-            return conn.execute(text("SELECT COUNT(*) FROM background_tasks WHERE status = 'processing'")).scalar()
-    else:
-        with _get_sqlite_conn() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM background_tasks WHERE status = 'processing'")
-            return cursor.fetchone()[0]
+    with get_db() as session:
+        return session.query(func.count(BackgroundTask.id)).filter(
+            BackgroundTask.status == "processing",
+        ).scalar()
+
 
 def recover_stale_tasks():
     timeout = int(get_config("task_timeout_minutes", "5"))
-    engine = _get_pg_engine()
-    if engine:
-        with engine.connect() as conn:
-            conn.execute(text("""
-                UPDATE background_tasks 
-                SET status = CASE WHEN attempts < 3 THEN 'pending' ELSE 'failed' END,
-                    result = CASE WHEN attempts >= 3 THEN '{"error": "timeout"}' ELSE result END,
-                    updated_at = NOW()
-                WHERE status = 'processing' AND started_at < NOW() - make_interval(mins => :t)
-            """), {"t": timeout})
-            conn.commit()
-    else:
-        with _get_sqlite_conn() as conn:
-            conn.execute(f"""
-                UPDATE background_tasks 
-                SET status = CASE WHEN attempts < 3 THEN 'pending' ELSE 'failed' END,
-                    result = CASE WHEN attempts >= 3 THEN '{{"error": "timeout"}}' ELSE result END,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE status = 'processing' AND started_at < datetime('now', '-{timeout} minutes')
-            """)
-            conn.commit()
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=timeout)).isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    with get_db() as session:
+        session.execute(
+            text(
+                "UPDATE background_tasks "
+                "SET status = CASE WHEN attempts < 3 THEN 'pending' ELSE 'failed' END, "
+                "    result = CASE WHEN attempts >= 3 THEN :error_json ELSE result END, "
+                "    updated_at = :now "
+                "WHERE status = 'processing' AND started_at < :cutoff"
+            ),
+            {"now": now_iso, "cutoff": cutoff, "error_json": '{"error": "timeout"}'},
+        )

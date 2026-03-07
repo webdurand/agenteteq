@@ -3,7 +3,11 @@ import jwt
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-JWT_SECRET = os.getenv("JWT_SECRET", "default_secret_for_development_only")
+JWT_SECRET = os.getenv("JWT_SECRET", "")
+if not JWT_SECRET:
+    import warnings
+    warnings.warn("JWT_SECRET not set — using insecure default for development only", stacklevel=2)
+    JWT_SECRET = "dev-only-insecure-secret-do-not-use-in-production"
 ALGORITHM = "HS256"
 
 def create_token(phone_number: str, username: str, email: str, role: str = "user") -> str:

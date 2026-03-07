@@ -1,14 +1,14 @@
 import json
+import os
 import asyncio
 from src.endpoints.web import ws_manager
-from src.config.system_config import _get_db_url
 
 _asyncpg_pool = None
 
 async def _get_pool():
     global _asyncpg_pool
     if _asyncpg_pool is None:
-        url = _get_db_url()
+        url = os.getenv("DATABASE_URL")
         if url:
             url = url.replace("postgresql+psycopg2://", "postgresql://").replace("postgresql+psycopg://", "postgresql://")
             import asyncpg
