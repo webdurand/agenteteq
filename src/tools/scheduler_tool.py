@@ -35,7 +35,7 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
         cron_expression: Optional[str] = None,
         interval_minutes: Optional[int] = None,
         title: str = "",
-        notification_channel: str = "whatsapp_text",
+        notification_channel: str = "",
     ) -> str:
         """
         Agenda uma mensagem proativa para ser enviada ao usuario.
@@ -56,7 +56,12 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
             interval_minutes: Obrigatorio se trigger_type="interval". Intervalo em minutos.
                               Ex: 30 para "a cada 30 minutos".
             title: Um titulo curto descrevendo o agendamento (opcional).
-            notification_channel: Canal pelo qual a mensagem sera enviada. Opcoes: 'whatsapp_text' (padrao), 'web_voice' (fala no navegador se aberto, senao fallback p/ wpp).
+            notification_channel: Canal pelo qual a mensagem sera enviada.
+                                  Opcoes:
+                                  - 'whatsapp_text'
+                                  - 'web_text'
+                                  - 'web_voice' (fala no navegador se aberto, senao fallback p/ wpp)
+                                  - 'web_whatsapp' (envia na web + WhatsApp)
 
         Returns:
             Confirmacao com o ID do job criado ou mensagem de erro.
@@ -70,6 +75,33 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
             from src.memory.identity import get_user
 
             scheduler = get_scheduler()
+
+            raw_channel = (notification_channel or "").strip().lower()
+            if not raw_channel:
+                return "Preciso saber o canal antes de agendar. Pergunte ao usuario: web, WhatsApp ou ambos?"
+
+            channel_alias = {
+                "web": "web_text",
+                "app": "web_text",
+                "aqui": "web_text",
+                "web_text": "web_text",
+                "web_voice": "web_voice",
+                "voz_web": "web_voice",
+                "whatsapp": "whatsapp_text",
+                "wpp": "whatsapp_text",
+                "zap": "whatsapp_text",
+                "whatsapp_text": "whatsapp_text",
+                "ambos": "web_whatsapp",
+                "web_e_whatsapp": "web_whatsapp",
+                "web_whatsapp": "web_whatsapp",
+            }
+            notification_channel = channel_alias.get(raw_channel, raw_channel)
+            allowed_channels = {"whatsapp_text", "web_text", "web_voice", "web_whatsapp", "whatsapp_call"}
+            if notification_channel not in allowed_channels:
+                return (
+                    f"Canal '{raw_channel}' nao suportado. "
+                    "Use: web, whatsapp, web_voice ou ambos."
+                )
             
             # Buscar timezone do usuario
             user_data = get_user(user_phone)

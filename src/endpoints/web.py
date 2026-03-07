@@ -121,7 +121,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
             shortcut_msg = try_schedule_quick_reminder(
                 user_phone=phone_number,
                 text=user_text,
-                notification_channel="web_voice" if mode != "text" else "whatsapp_text",
+                preferred_web_channel="web_voice" if mode != "text" else "web_text",
             )
             if shortcut_msg:
                 await websocket.send_json(
@@ -140,7 +140,14 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
             print(f"[WEB WS] Falha no atalho de lembrete rapido: {e}")
 
     notifier = WebSocketNotifier(websocket, loop)
-    agent = create_agent_with_tools(phone_number, notifier, include_explore=True, user_id=phone_number, channel="web")
+    agent_channel = "web_voice" if mode != "text" else "web_text"
+    agent = create_agent_with_tools(
+        phone_number,
+        notifier,
+        include_explore=True,
+        user_id=phone_number,
+        channel=agent_channel,
+    )
 
     prompt = user_text.strip()
     if not prompt and agent_images:
@@ -379,7 +386,12 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                 await websocket.send_json({"type": "status", "text": "Ouvindo..."})
 
                 notifier = WebSocketNotifier(websocket, loop)
-                agent = create_agent_with_tools(phone_number, notifier, user_id=phone_number, channel="web")
+                agent = create_agent_with_tools(
+                    phone_number,
+                    notifier,
+                    user_id=phone_number,
+                    channel="web_voice",
+                )
 
                 llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
                 print(f"[WEB WS] Processando audio | provider={llm_provider} | new_session={new_session}")

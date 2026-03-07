@@ -26,19 +26,41 @@ _TRIGGER_HINTS = (
 )
 
 
+def _extract_channel_from_text(text: str, preferred_web_channel: str = "web_text") -> Optional[str]:
+    """Tenta detectar canal na frase do usuario. Retorna None se nao encontrar."""
+    lowered = text.lower().replace("-", " ")
+
+    has_web = bool(
+        re.search(r"\bweb\b", lowered)
+        or re.search(r"\bapp\b", lowered)
+        or re.search(r"\bsite\b", lowered)
+    )
+    has_whatsapp = bool(re.search(r"\b(whatsapp|whats|wpp|zap)\b", lowered))
+    has_both = any(k in lowered for k in ("ambos", "nos dois", "os dois"))
+
+    if has_both or (has_web and has_whatsapp):
+        return "web_whatsapp"
+    if has_whatsapp:
+        return "whatsapp_text"
+    if has_web:
+        return "web_voice" if ("voz" in lowered or "fala" in lowered) else preferred_web_channel
+
+    return None
+
+
 def try_schedule_quick_reminder(
     user_phone: str,
     text: str,
-    notification_channel: str = "whatsapp_text",
+    notification_channel: Optional[str] = None,
+    preferred_web_channel: str = "web_text",
 ) -> Optional[str]:
     """
-    Atalho deterministico para frases como:
-    "me avisa daqui 5 min que tenho reuniao".
+    Atalho deterministico para frases como "me avisa daqui 5 min".
 
-    Retorna mensagem de confirmacao/erro se detectar e agendar,
-    ou None quando a frase nao parece um pedido de lembrete rapido.
+    - Se canal vier preenchido ou for detectavel na frase, agenda direto.
+    - Se nao conseguir determinar o canal, retorna None e deixa o agente lidar.
     """
-    lowered = text.lower()
+    lowered = text.lower().strip()
     if not any(hint in lowered for hint in _TRIGGER_HINTS):
         return None
 
@@ -48,6 +70,10 @@ def try_schedule_quick_reminder(
 
     minutes = int(time_match.group(1))
     if minutes <= 0:
+        return None
+
+    chosen_channel = notification_channel or _extract_channel_from_text(text, preferred_web_channel)
+    if not chosen_channel:
         return None
 
     instructions = (
@@ -64,5 +90,5 @@ def try_schedule_quick_reminder(
         trigger_type="date",
         minutes_from_now=minutes,
         title=text[:60],
-        notification_channel=notification_channel,
+        notification_channel=chosen_channel,
     )

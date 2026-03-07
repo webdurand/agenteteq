@@ -187,7 +187,7 @@ Permite que o Teq envie mensagens proativas sem precisar de input do usuário. R
 |---------|-----------------|
 | `src/models/reminders.py` | CRUD da tabela `reminders` no PostgreSQL. Funciona como a **fonte de verdade** dos agendamentos, suportando canais dinâmicos. |
 | `src/scheduler/engine.py` | Singleton do APScheduler com PostgreSQL job store (`DATABASE_URL`). Possui `reconcile_reminders()` no startup para recriar jobs órfãos a partir do banco. |
-| `src/scheduler/dispatcher.py` | Função `dispatch_proactive_message(reminder_id)` executada pelo scheduler. Busca no banco, verifica status, cria um Agno Agent com prefixo proativo (evita que o agente confunda a execução com uma conversa normal e peça mais informações), roda as instruções e envia via canal (ex: `whatsapp_text`). |
+| `src/scheduler/dispatcher.py` | Função `dispatch_proactive_message(reminder_id)` executada pelo scheduler. Busca no banco, verifica status, cria um Agno Agent com prefixo proativo (evita que o agente confunda a execução com uma conversa normal e peça mais informações), roda as instruções e envia via canal (`whatsapp_text`, `web_text`, `web_voice` ou `web_whatsapp`). |
 | `src/tools/scheduler_tool.py` | Tools para o agente: `schedule_message` (grava no DB e adiciona job), `list_schedules` (lê do DB) e `cancel_schedule` (marca DB e remove job). |
 
 ### Tipos de Gatilho
@@ -215,7 +215,7 @@ Busca `reminder_id` no banco → Cria Agno Agent
        ↓
 agent.run(prefixo_proativo + task_instructions) → resposta
        ↓
-Envia resposta via notification_channel (whatsapp_text)
+Envia resposta via notification_channel (ex: `whatsapp_text`, `web_text`, `web_voice`, `web_whatsapp`)
 ```
 
 ### Decisão Técnica: PostgreSQL + Reconciliação
@@ -229,10 +229,13 @@ Para reduzir falhas de execução de tool em frases curtas de lembrete, existe u
 
 - Arquivo: `src/tools/reminder_shortcuts.py`
 - Entradas alvo: mensagens com intenção explícita de lembrete + tempo relativo em minutos (ex: "me avisa daqui 5 min")
-- Comportamento: agenda diretamente via `schedule_message(...)` com `trigger_type="date"` e `minutes_from_now`, persistindo em `reminders` e emitindo `reminder_updated`. O `task_instructions` inclui a mensagem original do usuário na íntegra, delegando a interpretação ao LLM no momento do disparo (sem tentar parsear intenção via regex).
-- Canais:
-  - WhatsApp (`src/endpoints/whatsapp.py`): agenda com `notification_channel="whatsapp_text"`
-  - WebSocket (`src/endpoints/web.py`): agenda com `web_voice` (modo voz) ou `whatsapp_text` (modo texto)
+- Comportamento: se o usuário **não informar canal**, o sistema pergunta antes de agendar ("web, WhatsApp ou ambos"), guarda a intenção original e só agenda após a resposta do canal. Se o canal já vier explícito na frase, agenda diretamente.
+- Agendamento: usa `schedule_message(...)` com `trigger_type="date"` e `minutes_from_now`, persiste em `reminders` e emite `reminder_updated`. O `task_instructions` inclui a mensagem original do usuário na íntegra, delegando a interpretação ao LLM no momento do disparo.
+- Canais suportados no reminder:
+  - `whatsapp_text` (mensagem no WhatsApp)
+  - `web_text` (mensagem em texto no app web; fallback para WhatsApp se offline)
+  - `web_voice` (fala no app web; fallback para WhatsApp se offline)
+  - `web_whatsapp` (envio nos dois canais)
 
 Esse fallback mantém DRY porque reaproveita o mesmo motor (`scheduler_tool`) e atua apenas como roteamento determinístico de intenção, sem duplicar lógica de agendamento.
 

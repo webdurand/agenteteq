@@ -482,7 +482,6 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
             shortcut_msg = try_schedule_quick_reminder(
                 user_phone=from_number,
                 text=text_body,
-                notification_channel="whatsapp_text",
             )
             if shortcut_msg:
                 if not _is_test_number(from_number):

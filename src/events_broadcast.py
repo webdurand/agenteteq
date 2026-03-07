@@ -28,6 +28,11 @@ async def broadcast_event(user_id: str, event_type: str, data: dict):
 
 async def emit_action_log(user_id: str, action: str, summary: str, channel: str = "unknown"):
     """Persiste uma notificacao de acao importante no chat e faz broadcast em tempo real."""
+    # Evita ruido/duplicacao no proprio chat web em modo texto.
+    # Ex.: usuario cria carousel no chat web e recebe resposta + action_log redundante.
+    if channel in {"web", "web_text"}:
+        return
+
     try:
         from src.models.chat_messages import save_message
         display = f"[{channel}] {action}: {summary}"

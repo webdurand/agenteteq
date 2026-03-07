@@ -52,7 +52,7 @@ def dispatch_proactive_message(reminder_id: int):
 
         # 1. Obter resposta do Agente (se o canal precisar)
         response_content = None
-        if channel in ["whatsapp_text", "whatsapp_call", "web_voice"]:
+        if channel in ["whatsapp_text", "whatsapp_call", "web_voice", "web_text", "web_whatsapp"]:
             from src.agent.factory import create_agent_with_tools
             from src.agent.response_utils import extract_final_response
 
@@ -62,9 +62,11 @@ def dispatch_proactive_message(reminder_id: int):
                 "Execute as instrucoes diretamente e envie o resultado pronto.",
             ]
 
+            agent_channel = "web" if channel in {"web_voice", "web_text"} else "whatsapp"
             agent = create_agent_with_tools(
                 session_id=user_phone,
                 user_id=user_phone,
+                channel=agent_channel,
                 extra_instructions=reminder_instructions,
             )
             response = agent.run(task_instructions, knowledge_filters={"user_id": user_phone})
@@ -115,6 +117,46 @@ def dispatch_proactive_message(reminder_id: int):
                 }
                 asyncio.run(ws_manager.send_personal_message(user_phone, msg_payload))
                 print(f"[DISPATCHER] Lembrete falado enviado com sucesso para {user_phone} via web_voice.")
+
+        elif channel == "web_text":
+            from src.endpoints.web import ws_manager
+            from src.integrations.whatsapp import whatsapp_client
+
+            msg_payload = {
+                "type": "response",
+                "text": response_content,
+                "audio_b64": "",
+                "mime_type": "none",
+                "needs_follow_up": False,
+            }
+
+            if asyncio.run(ws_manager.send_personal_message(user_phone, msg_payload)):
+                print(f"[DISPATCHER] Lembrete em texto enviado com sucesso para {user_phone} via web_text.")
+            else:
+                print(f"[DISPATCHER] Usuario {user_phone} nao esta online na web. Fallback para WhatsApp.")
+                fallback_msg = f"(Lembrete da web)\n\n{response_content}"
+                asyncio.run(whatsapp_client.send_text_message(user_phone, fallback_msg))
+
+        elif channel == "web_whatsapp":
+            from src.endpoints.web import ws_manager
+            from src.integrations.whatsapp import whatsapp_client
+
+            # 1) Sempre envia no WhatsApp
+            asyncio.run(whatsapp_client.send_text_message(user_phone, response_content))
+            print(f"[DISPATCHER] Lembrete enviado para {user_phone} via whatsapp_text (canal combinado).")
+
+            # 2) Tenta enviar na web (se online)
+            msg_payload = {
+                "type": "response",
+                "text": response_content,
+                "audio_b64": "",
+                "mime_type": "none",
+                "needs_follow_up": False,
+            }
+            if asyncio.run(ws_manager.send_personal_message(user_phone, msg_payload)):
+                print(f"[DISPATCHER] Lembrete enviado para {user_phone} via web_text (canal combinado).")
+            else:
+                print(f"[DISPATCHER] Usuario {user_phone} offline na web. Entrega feita apenas no WhatsApp.")
             
         else:
             print(f"[DISPATCHER] Canal nao suportado: {channel}")
