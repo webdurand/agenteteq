@@ -395,7 +395,8 @@ async def orchestrate_message(event: dict):
             return
 
         if is_new_session(user, threshold_hours=4):
-            if aggregated_text.strip():
+            has_previous_session = user.get("last_seen_at") is not None
+            if has_previous_session and aggregated_text.strip():
                 _set_pending_choice(from_number, aggregated_text)
                 update_last_seen(from_number)
                 print(f"[SESSION] Nova sessao detectada para {from_number}. Perguntando ao usuario.")
@@ -406,7 +407,8 @@ async def orchestrate_message(event: dict):
                 )
                 return
             else:
-                print(f"[SESSION] Nova sessao (sem texto relevante) para {from_number}. Aplicando greeting injection.")
+                label = "usuario retornando (sem texto)" if has_previous_session else "usuario novo"
+                print(f"[SESSION] {label} para {from_number}. Aplicando greeting injection.")
                 notifier = StatusNotifier(to_number=from_number, reply_to_message_id=message_id)
                 agent = create_agent_with_tools(from_number, notifier, user_id=from_number)
                 await process_aggregated_message(from_number, message_id, event, agent, injection=GREETING_INJECTION)
