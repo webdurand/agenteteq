@@ -1,5 +1,6 @@
 import json
 import uuid
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional
 
@@ -10,6 +11,23 @@ from src.db.models import BackgroundTask
 from src.config.system_config import get_config, get_config_for_plan
 from src.memory.identity import get_user
 from src.billing.service import is_subscription_active
+
+_limit_flags: Dict[str, dict] = {}
+_limit_lock = threading.Lock()
+
+
+def set_limit_flag(user_id: str, info: dict):
+    with _limit_lock:
+        _limit_flags[user_id] = info
+
+
+def pop_limit_flag(user_id: str) -> Optional[dict]:
+    with _limit_lock:
+        return _limit_flags.pop(user_id, None)
+
+
+def _is_admin_bypass() -> bool:
+    return get_config("admin_bypass_limits", "true").lower() in ("true", "1", "yes")
 
 
 def _get_plan_type(user_id: str) -> str:
@@ -23,15 +41,58 @@ def _get_plan_type(user_id: str) -> str:
     return "trial"
 
 
+def _effective_plan_type(plan_type: str) -> str:
+    if plan_type == "admin" and not _is_admin_bypass():
+        return "trial"
+    return plan_type
+
+
+def check_daily_limit(user_id: str) -> Optional[str]:
+    """
+    Verifica se o usuário atingiu o limite diário de runs.
+    Retorna mensagem de erro se atingiu, None se pode prosseguir.
+    Seta um flag thread-safe que _process_text pode ler para enviar resposta determinística.
+    """
+    plan_type = _get_plan_type(user_id)
+    effective = _effective_plan_type(plan_type)
+
+    if effective == "admin":
+        return None
+
+    max_daily = int(get_config_for_plan("max_tasks_per_user_daily", effective, "5"))
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+
+    with get_db() as session:
+        daily = session.query(func.count(BackgroundTask.id)).filter(
+            BackgroundTask.user_id == user_id,
+            BackgroundTask.created_at >= cutoff,
+        ).scalar()
+
+    if daily >= max_daily:
+        if effective == "trial":
+            message = (
+                f"Poxa, seu limite de {max_daily} gerações de hoje acabou no plano gratuito. "
+                "Mas você pode virar Premium agora e repor seu limite!"
+            )
+        else:
+            message = f"Limite diário de {max_daily} gerações atingido. Tente novamente amanhã!"
+
+        set_limit_flag(user_id, {"message": message, "plan_type": effective})
+        return message
+
+    return None
+
+
 def enqueue_task(user_id: str, task_type: str, channel: str, payload: Dict[str, Any]) -> dict:
     plan_type = _get_plan_type(user_id)
+    effective = _effective_plan_type(plan_type)
 
     with get_db() as session:
         now_iso = datetime.now(timezone.utc).isoformat()
 
-        if plan_type != "admin":
-            max_concurrent = int(get_config_for_plan("max_tasks_per_user", plan_type, "2"))
-            max_daily = int(get_config_for_plan("max_tasks_per_user_daily", plan_type, "5"))
+        if effective != "admin":
+            max_concurrent = int(get_config_for_plan("max_tasks_per_user", effective, "2"))
+            max_daily = int(get_config_for_plan("max_tasks_per_user_daily", effective, "5"))
 
             concurrent = session.query(func.count(BackgroundTask.id)).filter(
                 BackgroundTask.user_id == user_id,

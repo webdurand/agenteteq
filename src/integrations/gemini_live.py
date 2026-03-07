@@ -10,7 +10,7 @@ class GeminiLiveClient:
         if not self.api_key:
             raise ValueError("GOOGLE_API_KEY nao configurada")
             
-        self.model = model or os.getenv("VOICE_REALTIME_MODEL", "models/gemini-2.0-flash-exp")
+        self.model = model or os.getenv("VOICE_REALTIME_MODEL", "models/gemini-2.5-flash-native-audio-preview-12-2025")
         if not self.model.startswith("models/"):
             self.model = f"models/{self.model}"
             
@@ -19,7 +19,7 @@ class GeminiLiveClient:
         self.tools = tools or []
         
         self.ws = None
-        self.url = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key={self.api_key}"
+        self.url = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={self.api_key}"
         
     async def connect(self):
         self.ws = await websockets.connect(self.url)
@@ -50,19 +50,21 @@ class GeminiLiveClient:
             
         await self.ws.send(json.dumps(setup_msg))
         
-        # Esperar setupComplete
-        # Na v1alpha / v1beta, o primeiro retorno deve ser o setupComplete
         while True:
             response_raw = await self.ws.recv()
-            if isinstance(response_raw, str):
-                response = json.loads(response_raw)
-                if "setupComplete" in response:
-                    print("[Gemini Live] Setup completo")
-                    break
-                else:
-                    print(f"[Gemini Live] Esperando setup, recebeu: {response}")
+            if isinstance(response_raw, bytes):
+                try:
+                    response_raw = response_raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    print(f"[Gemini Live] Recebeu bytes nao-decodificaveis durante setup ({len(response_raw)} bytes)")
+                    continue
+
+            response = json.loads(response_raw)
+            if "setupComplete" in response:
+                print("[Gemini Live] Setup completo")
+                break
             else:
-                print(f"[Gemini Live] Recebeu bytes durante o setup")
+                print(f"[Gemini Live] Esperando setup, recebeu: {list(response.keys())}")
                 
     async def send_audio_chunk(self, pcm_bytes: bytes):
         if not self.ws:
@@ -97,6 +99,12 @@ class GeminiLiveClient:
     async def receive_loop(self, on_audio, on_tool_call, on_turn_complete):
         try:
             async for message in self.ws:
+                if isinstance(message, bytes):
+                    try:
+                        message = message.decode("utf-8")
+                    except UnicodeDecodeError:
+                        continue
+
                 if isinstance(message, str):
                     data = json.loads(message)
                     

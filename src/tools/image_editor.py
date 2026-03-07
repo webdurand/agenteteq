@@ -227,6 +227,11 @@ def create_image_editor_tools(user_id: str, channel: str = "web"):
         Returns:
             Mensagem de confirmação. A imagem editada será enviada automaticamente.
         """
+        from src.queue.task_queue import check_daily_limit
+        limit_msg = check_daily_limit(user_id)
+        if limit_msg:
+            return limit_msg
+
         session = get_session_images(user_id)
         originals = session["originals"]
         last_gen = session["last_generated"]

@@ -210,6 +210,11 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
             Mensagem de confirmação imediata com o formato que será usado.
         """
         from src.tools.image_generation.base import resolve_aspect_ratio
+        from src.queue.task_queue import check_daily_limit
+
+        limit_msg = check_daily_limit(user_id)
+        if limit_msg:
+            return limit_msg
 
         aspect_ratio = resolve_aspect_ratio(format)
         format_label = format.strip() or "1350x1080"

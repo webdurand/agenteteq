@@ -19,6 +19,7 @@ DEFAULT_CONFIG = {
     "max_tasks_per_user:paid": "5",
     "max_tasks_per_user_daily:trial": "5",
     "max_tasks_per_user_daily:paid": "50",
+    "admin_bypass_limits": "true",
 }
 
 

@@ -211,6 +211,22 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
 
     await asyncio.sleep(0)
 
+    from src.queue.task_queue import pop_limit_flag
+    limit_info = pop_limit_flag(phone_number)
+    if limit_info:
+        print(f"[WEB WS] Limite atingido para {phone_number}, enviando limit_reached determinístico")
+        await websocket.send_json({
+            "type": "limit_reached",
+            "message": limit_info["message"],
+            "plan_type": limit_info["plan_type"],
+        })
+        update_last_seen(phone_number)
+        if save_to_chat:
+            asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "agent", limit_info["message"]))
+        latency = int((time.time() - start_time) * 1000)
+        log_event(user_id=phone_number, channel="web", event_type="message_sent", status="success", latency_ms=latency)
+        return
+
     asyncio.create_task(asyncio.to_thread(
         extract_and_save_facts, phone_number, user_text, final_text
     ))
