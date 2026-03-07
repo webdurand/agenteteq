@@ -2,6 +2,7 @@ import os
 import json
 import base64
 import asyncio
+import time
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
 from src.auth.jwt import decode_token
@@ -12,6 +13,7 @@ from src.agent.voice_tools import VOICE_TOOLS_DECLARATIONS, execute_voice_tool
 from src.memory.analytics import log_event
 
 router = APIRouter()
+LIVE_IDLE_TIMEOUT_SECONDS = int(os.getenv("VOICE_LIVE_IDLE_TIMEOUT_SECONDS", "90"))
 
 @router.websocket("/ws/voice-live")
 async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
@@ -46,7 +48,7 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
         await websocket.close(code=1008)
         return
         
-    ws_manager.connect(websocket, phone_number)
+    ws_manager.connect(websocket, phone_number, channel="voice_live")
     print(f"[VOICE LIVE] Cliente conectado: {phone_number}")
 
     # Monta instrucoes base parecidas com assistant.py
@@ -95,15 +97,17 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
     try:
         await websocket.send_json({"type": "status", "text": "Conectando ao modelo de voz..."})
         await client.connect()
-        await websocket.send_json({"type": "status", "text": "Diga 'Teq' ou comece a falar"})
+        await websocket.send_json({"type": "status", "text": "Pode falar..."})
     except Exception as e:
         print(f"[VOICE LIVE] Erro ao conectar no Gemini Live: {e}")
         await websocket.send_json({"type": "error", "message": "Erro ao conectar motor de voz."})
-        ws_manager.disconnect(phone_number)
+        ws_manager.disconnect(phone_number, websocket=websocket)
         return
 
     async def on_audio(pcm_bytes: bytes):
         try:
+            nonlocal last_activity_at
+            last_activity_at = time.monotonic()
             await websocket.send_json({
                 "type": "audio",
                 "audio_b64": base64.b64encode(pcm_bytes).decode('utf-8')
@@ -124,9 +128,9 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
             
             # Se for tool que modifica estado, emite aviso pra recarregar a interface
             if function_name in ["add_task", "complete_task", "reopen_task", "delete_task"]:
-                await websocket.send_json({"type": "task_updated"})
+                await ws_manager.send_personal_message(phone_number, {"type": "task_updated"})
             if function_name in ["schedule_message", "cancel_schedule"]:
-                await websocket.send_json({"type": "reminder_updated"})
+                await ws_manager.send_personal_message(phone_number, {"type": "reminder_updated"})
                 
         except Exception as e:
             print(f"[VOICE LIVE] Erro executando tool: {e}")
@@ -141,10 +145,22 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
             pass
 
     receive_task = asyncio.create_task(client.receive_loop(on_audio, on_tool_call, on_turn_complete))
+    last_activity_at = time.monotonic()
 
     try:
         while True:
-            raw = await websocket.receive()
+            try:
+                raw = await asyncio.wait_for(websocket.receive(), timeout=5.0)
+            except asyncio.TimeoutError:
+                if time.monotonic() - last_activity_at > LIVE_IDLE_TIMEOUT_SECONDS:
+                    await websocket.send_json({
+                        "type": "status",
+                        "text": "Sessao de voz encerrada por inatividade."
+                    })
+                    await websocket.close(code=1000)
+                    break
+                continue
+
             frame_type = raw.get("type", "unknown")
             text_frame = raw.get("text")
             
@@ -158,6 +174,7 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
                 if msg_type == "audio_chunk":
                     b64_data = msg.get("data")
                     if b64_data:
+                        last_activity_at = time.monotonic()
                         pcm_bytes = base64.b64decode(b64_data)
                         await client.send_audio_chunk(pcm_bytes)
                 elif msg_type == "cancel":
@@ -174,4 +191,4 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
     finally:
         receive_task.cancel()
         await client.close()
-        ws_manager.disconnect(phone_number)
+        ws_manager.disconnect(phone_number, websocket=websocket)

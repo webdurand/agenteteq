@@ -296,7 +296,12 @@ A geração de imagens é isolada na interface abstrata `ImageProvider`. Para su
 
 ## Separação Voz/Chat e Notificações Cross-Channel
 
-O fluxo de voz clássico (`useVoiceChat`) foi desacoplado do histórico de chat de texto. Respostas de voz são efêmeras e não persistem em `chat_messages`. O chat de texto é o histórico "oficial", contendo apenas mensagens digitadas e notificações de ações. A aba Voice exibe apenas o Orb animado e o status atual (sem transcrição textual).
+O frontend foi unificado para **Voice Live-only**:
+- A aba **Voice** usa `useVoiceLive` + `/ws/voice-live` (Gemini Live API) para áudio bidirecional em baixa latência.
+- A aba **Chat** usa `useChat` + `/ws/voice` apenas para mensagens de texto e histórico.
+- Não existe mais modo clássico de voz no frontend (SpeechRecognition/MediaRecorder/TTS browser).
+
+As respostas de voz continuam efêmeras (não persistem em `chat_messages`). O chat de texto permanece como histórico oficial.
 
 ### Action Log (Notificações de Ações)
 
@@ -311,18 +316,9 @@ Isso funciona independente do canal de origem (voz, texto, WhatsApp, voice-live)
 - Tools: `image_editor`, `blog_publisher`, `carousel_generator`, `task_manager`, `scheduler_tool` — todas chamam `emit_action_log` após ações bem-sucedidas, passando o `channel` de origem.
 - Frontend: `useVoiceChat.ts` escuta `action_log` e insere como `role: "system"` na lista de mensagens.
 
-### Fluxo de Voz Efêmero
-
-No fluxo clássico, o hook `useVoiceChat` processa áudio sem exibir transcrição na UI. O backend (`web.py`) não salva em `chat_messages` quando `mode="voice"`. O fluxo Live (`useVoiceLive`) já era separado e continua assim.
-
 ### Compatibilidade Mobile (Voz)
 
-O sistema de voz implementa fallbacks em cascata para funcionar em mobile:
-- **STT**: `SpeechRecognition` (Chrome, Safari com Siri ativado) → após falhas persistentes, fallback automático para `MediaRecorder`.
-- **MediaRecorder**: Detecção dinâmica de mime type via `isTypeSupported()` (`audio/webm` → `audio/mp4` no iOS → default do browser). O frontend envia o formato via mensagem `audio_meta` antes do blob.
-- **Backend**: `_detect_audio_ext()` identifica formato de áudio por magic bytes (EBML → webm, ftyp → mp4, RIFF → wav) com fallback para hint do frontend. Passa o formato correto para Gemini (`Audio(format=...)`) e Whisper (`filename=audio.{ext}`).
-- **AudioContext**: Listeners `click`/`touchstart` (persistentes) garantem resume após gesto do usuário. O fluxo Live só inicia captura de mic após gesto confirmado (`hasUserGestured()`).
-- **AudioWorklet**: O fluxo Live usa `AudioWorklet` (thread separada) por padrão, com fallback para `ScriptProcessorNode` em browsers sem suporte. O worklet roda em `/mic-processor.js` e faz downsample para PCM 16kHz.
+Com Live-only, a captura usa `AudioWorklet` (com fallback `ScriptProcessorNode`) e stream PCM 16kHz para o backend. O controle de atividade de fala é prioritariamente do Gemini Live (`automaticActivityDetection`), reduzindo lógica client-side.
 
 ## Dashboard Web e Real-time (`agenteteq-front`)
 
@@ -339,11 +335,14 @@ O Dashboard combina CRUD direto via REST e atualizações real-time via WebSocke
 1. **REST API (`/api/tasks`, `/api/reminders`)**: 
    - Ações manuais na interface (como "adicionar tarefa" ou "concluir lembrete") disparam chamadas HTTP diretamente para o banco, sem passar pelo Agente.
 2. **WebSocket de Interação (`/ws/voice`)**:
-   - Áudio (WebM/Opus) é enviado para transcrição e processamento.
-   - Mensagens de texto (`mode="text"`) ignoram a geração de áudio (TTS) para um chat silencioso.
-3. **Event Bus (`src/events.py`)**:
+   - Usado como canal de chat texto no frontend (`useChat`).
+   - Mensagens são enviadas com `mode="text"` para resposta silenciosa no painel.
+3. **WebSocket de Voz Live (`/ws/voice-live`)**:
+   - Recebe stream PCM 16kHz do frontend e responde com áudio PCM 24kHz em tempo real.
+   - Encaminha tool-calls nativas do Gemini Live para `voice_tools.py`.
+4. **Event Bus (`src/events.py`)**:
    - Quando o Agente modifica o estado (ex: agenda um aviso) ou o usuário altera via REST, um evento real-time (ex: `task_updated`, `reminder_updated`, `blog_preview`) é emitido.
-   - O `ws_manager` propaga esse evento para o frontend conectado.
+   - O `ws_manager` propaga esse evento para múltiplas conexões por usuário (chat + voice-live), permitindo cross-tab real.
    - Os hooks do React (`useTasks`, `useReminders`) escutam os eventos e re-buscam os dados no backend para manter a UI sempre atualizada, criando uma sensação mágica de "co-piloto invisível" operando o sistema.
 
 ### Componentes Principais
@@ -352,7 +351,8 @@ O Dashboard combina CRUD direto via REST e atualizações real-time via WebSocke
 |---|---|
 | `components/Dashboard.tsx` | Layout principal com Orb, Sidebar (Tarefas/Lembretes) e ChatPanel. |
 | `hooks/useWebSocket.ts` | Conexão compartilhada e barramento de eventos no frontend. |
-| `hooks/useVoiceChat.ts` | Captura de microfone (VAD) + integração WebSocket + playback de áudio. |
+| `hooks/useVoiceLive.ts` | Captura de microfone (AudioWorklet) + stream de áudio real-time no `/ws/voice-live` + playback. |
+| `hooks/useChat.ts` | Canal de chat texto (`/ws/voice`) + histórico + eventos de UI (carrossel/edição/action log). |
 | `components/TasksPanel.tsx` | Lista interativa de tarefas integrando REST + WS. |
 | `components/BlogPreviewModal.tsx` | Recebe evento `blog_preview` e mostra o rascunho do post antes da publicação. |
 
@@ -362,13 +362,15 @@ O usuário informa seu número de telefone na primeira visita (salvo em `localSt
 
 ### Fluxo de Voz Real-time (Gemini Live API)
 
-A aplicação agora possui um fluxo de voz avançado (quando `VOICE_REALTIME=true` ou `VITE_VOICE_REALTIME=true`):
+A aplicação opera voz em modo Live por padrão no frontend:
 - O frontend (`useVoiceLive.ts`) envia PCM 16kHz via WebSocket para `/ws/voice-live`.
 - O backend (`src/endpoints/voice_live.py`) atua como proxy bidirecional entre o frontend e a **Gemini Live API** via WSS.
 - O modelo processa áudio nativamente e responde em áudio (eliminando a cadeia STT -> LLM -> TTS).
 - A latência cai de ~3-10s para <1s.
 - Suporta "barge-in" (interrupção pelo usuário) e chamadas de ferramentas (*tool calling* nativo do Gemini).
 - Para as tools, usamos `src/agent/voice_tools.py` que espelha as functions existentes no Agno para o formato que a Live API do Google exige.
+- O setup do Gemini Live usa `automaticActivityDetection` (VAD nativo) e a sessão web é encerrada automaticamente por inatividade.
+- Fluxo de ativação UX: entrar na aba Voice conecta; tocar no Orb faz mute/unmute; sair da aba desconecta a sessão.
 
 ### Módulo TTS Clássico (`src/integrations/tts.py`)
 
@@ -396,8 +398,9 @@ Equivalente ao `StatusNotifier` para a interface web. Como `agent.run()` executa
 
 | Arquivo | Responsabilidade |
 |---|---|
-| `hooks/useVoiceChat.ts` | WebSocket + SpeechRecognition/MediaRecorder + VAD + reprodução de áudio |
-| `components/Orb.tsx` | Orb animado navy — idle/listening/thinking/speaking |
+| `hooks/useVoiceLive.ts` | Conexão de voz em tempo real com Gemini Live, controle de mute/unmute e timeout de inatividade |
+| `hooks/useChat.ts` | Mensagens de texto, histórico e atualização por eventos |
+| `components/Orb.tsx` | Orb animado navy — connecting/idle/listening/speaking/muted |
 | `components/ChatHistory.tsx` | Painel lateral colapsável com histórico |
 | `components/LoginModal.tsx` | Tela de identificação por telefone |
 | `components/OnboardingModal.tsx` | Captura de nome no primeiro acesso |
@@ -580,7 +583,7 @@ O projeto suporta escalabilidade horizontal (autoscaling) e delega tarefas demor
 
 ### Infraestrutura Compartilhada
 - **system_config**: Tabela no banco de dados (`src/config/system_config.py`) para definir limites dinamicamente (ex: `max_concurrent_images`, `max_tasks_per_user_daily`). Suporta sufixos por plano (ex: `:trial`, `:paid`). Modificada pelo painel Admin.
-- **processed_messages**: Tabela no banco para deduplicação de mensagens recebidas de webhooks, substituindo o cache em memória para que todos os pods compartilhem o mesmo estado.
+- **processed_messages**: Tabela no banco para deduplicação de mensagens recebidas de webhooks, substituindo o cache em memória para que todos os pods compartilhem o mesmo estado. A chave de idempotência é estável por `provider + message_id` (com fallback por hash quando `message_id` não existe), evitando respostas duplicadas quando o provedor reentrega o mesmo evento com pequenas variações de payload.
 - **Agno PostgresStorage**: O histórico de sessões do agente foi migrado de `SqliteDb` para `PostgresStorage`, permitindo continuidade do contexto entre diferentes pods.
 
 ### Fila de Tasks (`background_tasks`)

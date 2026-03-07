@@ -7,6 +7,7 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Request, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 
 from src.integrations.whatsapp import whatsapp_client
 from src.integrations.transcriber import transcriber
@@ -39,8 +40,14 @@ def deduplicate(dedup_key: str) -> bool:
         existing = db.get(ProcessedMessage, dedup_key)
         if existing:
             return True
-        db.add(ProcessedMessage(message_id=dedup_key))
-        return False
+
+        # Garante idempotencia mesmo sob concorrencia (duas requests em paralelo).
+        try:
+            db.add(ProcessedMessage(message_id=dedup_key))
+            db.flush()
+            return False
+        except IntegrityError:
+            return True
 
 
 BUFFER_TIMEOUT = 3.0
@@ -218,7 +225,12 @@ def parse_webhook_payload(data: dict) -> list:
                         elif msg_type == "audio":
                             content_str = msg.get("audio", {}).get("id", "")
 
-                        dedup_key = f"meta_{msg_id}_{hashlib.md5(content_str.encode()).hexdigest()}"
+                        if msg_id:
+                            # Usar somente o id da mensagem evita duplicidade por variacoes de payload.
+                            dedup_key = f"meta_{msg_id}"
+                        else:
+                            fallback = content_str or json.dumps(msg, sort_keys=True, ensure_ascii=False)
+                            dedup_key = f"meta_fallback_{hashlib.md5(fallback.encode()).hexdigest()}"
 
                         events.append({
                             "provider": "meta",
@@ -265,7 +277,12 @@ def parse_webhook_payload(data: dict) -> list:
                 if msg_type in ["conversation", "extendedTextMessage"]:
                     content_str = msg_content.get("conversation", "") or msg_content.get("extendedTextMessage", {}).get("text", "")
 
-                dedup_key = f"evo_{msg_id}_{hashlib.md5(content_str.encode()).hexdigest()}"
+                if msg_id:
+                    # msg_id e estavel; evita chaves diferentes em retries com payload incompleto.
+                    dedup_key = f"evo_{msg_id}"
+                else:
+                    fallback = json.dumps(msg_content, sort_keys=True, ensure_ascii=False)
+                    dedup_key = f"evo_fallback_{hashlib.md5(fallback.encode()).hexdigest()}"
 
                 normalized_type = "unknown"
                 normalized_msg = {}
@@ -285,7 +302,6 @@ def parse_webhook_payload(data: dict) -> list:
                     if not base64_data:
                         base64_data = json.dumps({"message": {"key": key, "message": msg_content}})
                     normalized_msg = {"audio": {"id": base64_data}}
-                    dedup_key = f"evo_{msg_id}_{hashlib.md5(base64_data[:50].encode()).hexdigest()}"
                 elif msg_type == "imageMessage":
                     normalized_type = "image"
                     base64_data = evo_data.get("base64", "") or msg_content.get("base64", "")
@@ -293,7 +309,6 @@ def parse_webhook_payload(data: dict) -> list:
                         base64_data = json.dumps({"message": {"key": key, "message": msg_content}})
                     caption = msg_content.get("imageMessage", {}).get("caption", "")
                     normalized_msg = {"image": {"id": base64_data, "caption": caption}}
-                    dedup_key = f"evo_{msg_id}_{hashlib.md5(base64_data[:50].encode()).hexdigest()}"
 
                 events.append({
                     "provider": "evolution",

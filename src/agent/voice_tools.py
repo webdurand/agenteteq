@@ -137,6 +137,77 @@ VOICE_TOOLS_DECLARATIONS = [
             },
             "required": ["job_id"]
         }
+    },
+    {
+        "name": "web_search",
+        "description": "Pesquisa na internet e retorna resultados atualizados.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Consulta de busca"},
+                "max_results": {"type": "integer", "description": "Numero maximo de resultados (padrao 5)"}
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "publish_post",
+        "description": "Publica um post no blog do usuario.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Titulo do post"},
+                "content": {"type": "string", "description": "Conteudo em markdown/MDX"}
+            },
+            "required": ["title", "content"]
+        }
+    },
+    {
+        "name": "generate_carousel",
+        "description": "Gera imagens (carrossel ou imagem unica) em background.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Titulo da geracao"},
+                "slides": {
+                    "type": "array",
+                    "description": "Lista de slides com prompt e estilo",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "slide_number": {"type": "integer"},
+                            "prompt": {"type": "string"},
+                            "style": {"type": "string"}
+                        },
+                        "required": ["prompt"]
+                    }
+                },
+                "format": {"type": "string", "description": "Formato da imagem, ex: 1350x1080, 1:1, 16:9"},
+                "use_reference_image": {"type": "boolean", "description": "Usar imagem de referencia da conversa"}
+            },
+            "required": ["title", "slides"]
+        }
+    },
+    {
+        "name": "list_carousels",
+        "description": "Lista os carrosseis ja gerados pelo usuario.",
+        "parameters": {
+            "type": "object",
+            "properties": {}
+        }
+    },
+    {
+        "name": "edit_image",
+        "description": "Edita uma imagem existente em background.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "edit_instructions": {"type": "string", "description": "Instrucao detalhada de edicao"},
+                "source": {"type": "string", "description": "original, last_generated ou auto"},
+                "format": {"type": "string", "description": "Formato de saida, ex: 1:1, 4:3, 16:9"}
+            },
+            "required": ["edit_instructions"]
+        }
     }
 ]
 
@@ -201,6 +272,32 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
                 tools = create_scheduler_tools(user_id)
                 cancel_func = tools[2]
                 return {"result": cancel_func(**args)}
+
+            elif function_name == "web_search":
+                from src.tools.web_search import web_search_raw
+                query = args.get("query", "")
+                max_results = int(args.get("max_results", 5) or 5)
+                return {"result": web_search_raw(query, max_results=max_results)}
+
+            elif function_name == "publish_post":
+                from src.tools.blog_publisher import create_blog_tools
+                publish_post = create_blog_tools(user_id, channel="web_voice")[0]
+                return {"result": publish_post(**args)}
+
+            elif function_name == "generate_carousel":
+                from src.tools.carousel_generator import create_carousel_tools
+                generate_carousel, _ = create_carousel_tools(user_id, channel="web_voice")
+                return {"result": generate_carousel(**args)}
+
+            elif function_name == "list_carousels":
+                from src.tools.carousel_generator import create_carousel_tools
+                _, list_carousels = create_carousel_tools(user_id, channel="web_voice")
+                return {"result": list_carousels()}
+
+            elif function_name == "edit_image":
+                from src.tools.image_editor import create_image_editor_tools
+                edit_image = create_image_editor_tools(user_id, channel="web_voice")
+                return {"result": edit_image(**args)}
                 
             else:
                 return {"error": f"Tool '{function_name}' not found."}

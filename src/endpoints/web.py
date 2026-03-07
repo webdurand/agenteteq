@@ -279,28 +279,54 @@ async def _cancel_task(task: asyncio.Task | None) -> None:
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: dict[str, WebSocket] = {}
+        self.active_connections: dict[str, dict[str, WebSocket]] = {}
 
-    def connect(self, websocket: WebSocket, phone_number: str):
-        self.active_connections[phone_number] = websocket
+    def connect(self, websocket: WebSocket, phone_number: str, channel: str = "web") -> str:
+        user_connections = self.active_connections.setdefault(phone_number, {})
+        conn_key = f"{channel}:{id(websocket)}"
+        user_connections[conn_key] = websocket
+        return conn_key
 
-    def disconnect(self, phone_number: str):
-        if phone_number in self.active_connections:
+    def disconnect(self, phone_number: str, websocket: WebSocket | None = None):
+        user_connections = self.active_connections.get(phone_number)
+        if not user_connections:
+            return
+
+        if websocket is None:
             del self.active_connections[phone_number]
+            return
+
+        keys_to_remove = [k for k, ws in user_connections.items() if ws is websocket]
+        for key in keys_to_remove:
+            user_connections.pop(key, None)
+
+        if not user_connections:
+            self.active_connections.pop(phone_number, None)
 
     async def send_personal_message(self, phone_number: str, message: dict) -> bool:
-        if phone_number in self.active_connections:
-            ws = self.active_connections[phone_number]
+        user_connections = self.active_connections.get(phone_number, {})
+        if not user_connections:
+            return False
+
+        delivered = False
+        dead_keys: list[str] = []
+        for key, ws in list(user_connections.items()):
             try:
                 await ws.send_json(message)
-                return True
+                delivered = True
             except Exception as e:
-                print(f"[WS MANAGER] Erro ao enviar mensagem para {phone_number}: {e}")
-                self.disconnect(phone_number)
-        return False
+                print(f"[WS MANAGER] Erro ao enviar mensagem para {phone_number} ({key}): {e}")
+                dead_keys.append(key)
+
+        for key in dead_keys:
+            user_connections.pop(key, None)
+        if not user_connections:
+            self.active_connections.pop(phone_number, None)
+
+        return delivered
 
     def is_online(self, phone_number: str) -> bool:
-        return phone_number in self.active_connections
+        return bool(self.active_connections.get(phone_number))
 
 ws_manager = ConnectionManager()
 
@@ -343,7 +369,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
     current_task: asyncio.Task | None = None
     audio_ext_hint: str = ""
 
-    ws_manager.connect(websocket, phone_number)
+    ws_manager.connect(websocket, phone_number, channel="web")
     print(f"[WEB WS] Cliente conectado: {phone_number}")
 
     async def run_text(user_text: str, mode: str = "voice", images_b64: list = None) -> None:
@@ -540,5 +566,5 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
 
     except WebSocketDisconnect:
         await _cancel_task(current_task)
-        ws_manager.disconnect(phone_number)
+        ws_manager.disconnect(phone_number, websocket=websocket)
         print(f"[WEB WS] Cliente desconectado: {phone_number}")

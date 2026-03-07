@@ -39,6 +39,15 @@ class GeminiLiveClient:
                         }
                     }
                 },
+                "realtimeInputConfig": {
+                    "automaticActivityDetection": {
+                        "disabled": False,
+                        "startOfSpeechSensitivity": "START_SENSITIVITY_HIGH",
+                        "endOfSpeechSensitivity": "END_SENSITIVITY_LOW",
+                        "prefixPaddingMs": 200,
+                        "silenceDurationMs": 500
+                    }
+                },
                 "systemInstruction": {
                     "parts": [{"text": self.system_instruction}]
                 }
