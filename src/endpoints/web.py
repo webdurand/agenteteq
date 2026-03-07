@@ -24,6 +24,21 @@ import time
 router = APIRouter()
 
 
+def _detect_audio_ext(audio_bytes: bytes, hint: str = "") -> str:
+    """Detect audio format from magic bytes, with optional hint from frontend."""
+    if hint:
+        return hint
+    if audio_bytes[:4] == b'\x1aE\xdf\xa3':
+        return "webm"
+    if len(audio_bytes) > 7 and audio_bytes[4:8] == b'ftyp':
+        return "mp4"
+    if audio_bytes[:4] == b'RIFF':
+        return "wav"
+    if audio_bytes[:4] == b'OggS':
+        return "ogg"
+    return "webm"
+
+
 _EMOJI_TAIL_RE = re.compile(
     r'[\s\U0001F000-\U0001FAFF\U0001F600-\U0001F64F\U0001F900-\U0001F9FF'
     r'\u2600-\u27BF\uFE00-\uFE0F\u200d\u2764\u2705\u274C\u2728'
@@ -310,6 +325,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
     loop = asyncio.get_event_loop()
     tts = get_tts()
     current_task: asyncio.Task | None = None
+    audio_ext_hint: str = ""
 
     ws_manager.connect(websocket, phone_number)
     print(f"[WEB WS] Cliente conectado: {phone_number}")
@@ -358,6 +374,10 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                     # Backward compatibility, mas agora o nome vem do registro
                     continue
 
+                if msg_type == "audio_meta":
+                    audio_ext_hint = msg.get("ext", "")
+                    continue
+
                 if msg_type == "user_message":
                     user_text = msg.get("text", "").strip()
                     images_b64 = msg.get("images", [])
@@ -393,8 +413,10 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                     channel="web_voice",
                 )
 
+                audio_fmt = _detect_audio_ext(audio_bytes, audio_ext_hint)
+                audio_ext_hint = ""
                 llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
-                print(f"[WEB WS] Processando audio | provider={llm_provider} | new_session={new_session}")
+                print(f"[WEB WS] Processando audio | provider={llm_provider} | formato={audio_fmt} | new_session={new_session}")
 
                 if llm_provider == "gemini":
                     from agno.media import Audio
@@ -402,15 +424,15 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                     await websocket.send_json({"type": "transcript", "text": "..."})
                     await websocket.send_json({"type": "status", "text": "Pensando..."})
 
-                    base_prompt = "O usuario enviou este audio via interface web (formato webm/opus). Responda naturalmente ao que foi dito."
+                    base_prompt = f"O usuario enviou este audio via interface web (formato {audio_fmt}). Responda naturalmente ao que foi dito."
                     if new_session:
                         base_prompt = GREETING_INJECTION + " " + base_prompt
 
-                    print(f"[WEB WS] Enviando {len(audio_bytes)} bytes de audio webm para Gemini")
+                    print(f"[WEB WS] Enviando {len(audio_bytes)} bytes de audio {audio_fmt} para Gemini")
                     response = await asyncio.to_thread(
                         agent.run,
                         base_prompt,
-                        audio=[Audio(content=audio_bytes, format="webm")],
+                        audio=[Audio(content=audio_bytes, format=audio_fmt)],
                         knowledge_filters={"user_id": phone_number},
                     )
                     log_agent_tools(phone_number, "web", agent)
@@ -421,7 +443,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                 else:
                     from src.integrations.transcriber import transcriber
 
-                    transcript = await transcriber.transcribe(audio_bytes, filename="audio.webm")
+                    transcript = await transcriber.transcribe(audio_bytes, filename=f"audio.{audio_fmt}")
                     await websocket.send_json({"type": "transcript", "text": transcript})
                     await websocket.send_json({"type": "status", "text": "Pensando..."})
 

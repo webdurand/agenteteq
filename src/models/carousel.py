@@ -56,6 +56,15 @@ def update_carousel_status(carousel_id: str, status: str, slides: Optional[list]
             carousel.slides = json.dumps(slides)
 
 
+def delete_carousel(carousel_id: str, user_id: str) -> bool:
+    with get_db() as db:
+        carousel = db.get(Carousel, carousel_id)
+        if not carousel or carousel.user_id != user_id:
+            return False
+        db.delete(carousel)
+    return True
+
+
 def list_user_carousels(user_id: str, limit: int = 0, offset: int = 0) -> dict:
     fetch_limit = limit + 1 if limit > 0 else None
 

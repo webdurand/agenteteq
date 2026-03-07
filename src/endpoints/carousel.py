@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from typing import List, Dict, Any
 from src.auth.deps import get_current_user
-from src.models.carousel import list_user_carousels, get_carousel
+from src.models.carousel import list_user_carousels, get_carousel, delete_carousel
 
 router = APIRouter(prefix="/carousel", tags=["Carousel"])
 
@@ -19,9 +19,6 @@ def get_user_carousels(
 
 @router.get("/{carousel_id}", response_model=Dict[str, Any])
 def get_carousel_by_id(carousel_id: str, user: dict = Depends(get_current_user)):
-    """
-    Retorna os detalhes de um carrossel específico, incluindo todos os slides gerados.
-    """
     user_id = user.get("phone_number")
     
     carousel = get_carousel(carousel_id)
@@ -32,3 +29,15 @@ def get_carousel_by_id(carousel_id: str, user: dict = Depends(get_current_user))
         raise HTTPException(status_code=403, detail="Acesso negado a este carrossel")
         
     return carousel
+
+@router.delete("/{carousel_id}")
+def delete_carousel_by_id(carousel_id: str, user: dict = Depends(get_current_user)):
+    user_id = user.get("phone_number")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Usuário sem identificador")
+    
+    deleted = delete_carousel(carousel_id, user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Carrossel não encontrado")
+    
+    return {"status": "deleted"}

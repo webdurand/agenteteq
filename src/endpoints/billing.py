@@ -62,7 +62,13 @@ def subscribe(req: SubscribeRequest, user: dict = Depends(get_current_user)):
             client_secret = subscription["pending_setup_intent"].get("client_secret")
         elif subscription.get("latest_invoice") and subscription["latest_invoice"].get("payment_intent"):
             client_secret = subscription["latest_invoice"]["payment_intent"].get("client_secret")
-            
+
+        # Fallback: alguns fluxos do Stripe não retornam client_secret na criação da subscription.
+        # Nesses casos criamos um SetupIntent explícito para o frontend coletar o cartão.
+        if not client_secret:
+            setup_intent = create_setup_intent(customer_id)
+            client_secret = setup_intent.client_secret
+
         if not client_secret:
             raise HTTPException(status_code=500, detail="Failed to generate client secret")
 

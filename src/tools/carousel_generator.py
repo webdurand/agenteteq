@@ -182,16 +182,16 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
         use_reference_image: bool = False,
     ) -> str:
         """
-        Inicia a geração de um carrossel para o Instagram.
-        Gera as imagens em background e notifica o usuário ao terminar,
-        pelo mesmo canal em que o pedido foi feito (web ou whatsapp).
+        Gera imagens com IA. Pode ser um carrossel (múltiplos slides) ou uma imagem única (1 slide).
+        Para gerar uma ÚNICA imagem nova do zero, use com 1 slide apenas.
+        As imagens são geradas em background e o usuário é notificado ao terminar.
 
         Args:
-            title: Título do carrossel.
+            title: Título descritivo da geração.
             slides: Lista de dicionários com as chaves:
                     - 'slide_number': (opcional) número do slide
                     - 'prompt': descrição detalhada da imagem
-                    - 'style': estilo visual (ex: Clean/Mockup, Cinemático)
+                    - 'style': estilo visual (ex: Clean/Mockup, Cinemático, Fotorrealista)
             format: Formato/dimensão das imagens. Exemplos:
                     - "1350x1080" → carrossel Instagram landscape (padrão)
                     - "1080x1080" → quadrado
@@ -201,11 +201,10 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
                     O agente DEVE confirmar o formato com o usuário antes de chamar esta tool.
             use_reference_image: Se True, usa a imagem enviada pelo usuário como
                                  contexto/referência visual para TODOS os slides.
-                                 Ideal quando o usuário envia uma foto e pede um
-                                 carrossel baseado nela (ex: "gera um carrossel
-                                 baseado nessa imagem", "usa essa foto como referência").
-                                 SEMPRE ative quando o usuário enviar uma imagem junto
-                                 com o pedido de carrossel.
+                                 SOMENTE ative quando o usuário EXPLICITAMENTE pedir para
+                                 usar uma imagem como referência (ex: "gera baseado nessa
+                                 imagem", "usa essa foto como referência").
+                                 NUNCA ative automaticamente. O padrão é False.
 
         Returns:
             Mensagem de confirmação imediata com o formato que será usado.

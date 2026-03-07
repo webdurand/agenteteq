@@ -296,7 +296,7 @@ A geração de imagens é isolada na interface abstrata `ImageProvider`. Para su
 
 ## Separação Voz/Chat e Notificações Cross-Channel
 
-O fluxo de voz clássico (`useVoiceChat`) foi desacoplado do histórico de chat de texto. Transcrições de voz e respostas do agente por voz são efêmeras (exibidas apenas na aba Voice), sem persistir em `chat_messages`. O chat de texto é o histórico "oficial", contendo apenas mensagens digitadas e notificações de ações.
+O fluxo de voz clássico (`useVoiceChat`) foi desacoplado do histórico de chat de texto. Respostas de voz são efêmeras e não persistem em `chat_messages`. O chat de texto é o histórico "oficial", contendo apenas mensagens digitadas e notificações de ações. A aba Voice exibe apenas o Orb animado e o status atual (sem transcrição textual).
 
 ### Action Log (Notificações de Ações)
 
@@ -313,7 +313,16 @@ Isso funciona independente do canal de origem (voz, texto, WhatsApp, voice-live)
 
 ### Fluxo de Voz Efêmero
 
-No fluxo clássico, o hook `useVoiceChat` mantém um `voiceResponse` (estado local) para exibir a última resposta do agente na aba Voice. O backend (`web.py`) não salva em `chat_messages` quando `mode="voice"`. O fluxo Live (`useVoiceLive`) já era separado e continua assim.
+No fluxo clássico, o hook `useVoiceChat` processa áudio sem exibir transcrição na UI. O backend (`web.py`) não salva em `chat_messages` quando `mode="voice"`. O fluxo Live (`useVoiceLive`) já era separado e continua assim.
+
+### Compatibilidade Mobile (Voz)
+
+O sistema de voz implementa fallbacks em cascata para funcionar em mobile:
+- **STT**: `SpeechRecognition` (Chrome, Safari com Siri ativado) → após falhas persistentes, fallback automático para `MediaRecorder`.
+- **MediaRecorder**: Detecção dinâmica de mime type via `isTypeSupported()` (`audio/webm` → `audio/mp4` no iOS → default do browser). O frontend envia o formato via mensagem `audio_meta` antes do blob.
+- **Backend**: `_detect_audio_ext()` identifica formato de áudio por magic bytes (EBML → webm, ftyp → mp4, RIFF → wav) com fallback para hint do frontend. Passa o formato correto para Gemini (`Audio(format=...)`) e Whisper (`filename=audio.{ext}`).
+- **AudioContext**: Listeners `click`/`touchstart` (persistentes) garantem resume após gesto do usuário. O fluxo Live só inicia captura de mic após gesto confirmado (`hasUserGestured()`).
+- **AudioWorklet**: O fluxo Live usa `AudioWorklet` (thread separada) por padrão, com fallback para `ScriptProcessorNode` em browsers sem suporte. O worklet roda em `/mic-processor.js` e faz downsample para PCM 16kHz.
 
 ## Dashboard Web e Real-time (`agenteteq-front`)
 
@@ -387,7 +396,7 @@ Equivalente ao `StatusNotifier` para a interface web. Como `agent.run()` executa
 
 | Arquivo | Responsabilidade |
 |---|---|
-| `hooks/useVoiceChat.ts` | WebSocket + MediaRecorder + VAD + reprodução de áudio |
+| `hooks/useVoiceChat.ts` | WebSocket + SpeechRecognition/MediaRecorder + VAD + reprodução de áudio |
 | `components/Orb.tsx` | Orb animado navy — idle/listening/thinking/speaking |
 | `components/ChatHistory.tsx` | Painel lateral colapsável com histórico |
 | `components/LoginModal.tsx` | Tela de identificação por telefone |
@@ -489,6 +498,7 @@ O sistema conta com um Painel Administrativo integrado ao frontend principal (`a
 - `/admin/health/summary`: Checks de saúde do banco, scheduler e integrações.
 - `/admin/admins`: Gestão básica de administradores.
 - `/admin/system/*`: Gestão da fila de tarefas, configuração (`system_config`) e listagem de métricas de infraestrutura.
+- `/admin/campaigns*`: CRUD de campanhas in-app para popup estratégico (imagem, título, mensagem, CTA, audiência e frequência).
 
 ### Dashboard Frontend (Admin)
 - **Negócio**: Exibe cards financeiros (MRR, assinantes), gráficos de engajamento (DAU, mensagens por dia), rankings de features (top tools, tendências) e visão operacional (taxa de erro, latência). Gráficos renderizados com **Recharts**.
@@ -496,6 +506,44 @@ O sistema conta com um Painel Administrativo integrado ao frontend principal (`a
 - **Saúde**: Foca na disponibilidade dos serviços (DB, PgVector, WhatsApp, TTS).
 - **Admins & Usuários**: Interface de CRUD para definir papéis na plataforma e monitorar status de assinatura.
 - **Planos & Assinaturas**: Gestão de pacotes do Stripe e atribuição manual de acessos.
+- **Campanhas**: Gestão de popups in-app para contratação/novidades sem deploy.
+
+## Experiência Web de Conversão (Onboarding + Limites + Popup)
+
+O frontend web (`agenteteq-front`) passou a operar com três componentes independentes para conversão e clareza de uso:
+
+1. **Onboarding full-screen** (`ProductOnboardingModal`)
+   - Exibido após autenticação e após o onboarding de identidade (nome), com 4 etapas:
+     - boas-vindas,
+     - capacidades do Teq (imagens, carrosséis, backlog Diário Teq),
+     - agendamento e recorrência,
+     - limites + CTA de assinatura.
+   - Possui controle “não exibir novamente”, persistido no `localStorage` por usuário.
+   - Pode ser reaberto manualmente em Configurações de conta.
+
+2. **Exibidor de limites de uso** (`PremiumLimitsCard`)
+   - Componente fixo no dashboard (não modal), com:
+     - plano atual (`free`/`premium`),
+     - runs restantes (`runs_remaining` de `runs_limit`),
+     - barra de consumo e data estimada de reset.
+   - Para `free tier`, exibe CTA contextual: “Ganhar mais limites”.
+
+3. **Popup estratégico configurável** (`CampaignPopupModal`)
+   - Exibido por elegibilidade e prioridade, sem sobrepor onboarding da primeira sessão.
+   - Campanhas são configuradas no admin com:
+     - `title`, `message`, `image_url`,
+     - `cta_label`, `cta_action`, `cta_url`,
+     - `audience` (`all`, `free_only`, `paid_only`),
+     - `frequency` (`once`, `per_session`, `daily`),
+     - `priority`, `active`.
+
+### Endpoints de suporte (Web)
+- `GET /api/usage/limits`: retorna `plan_name`, `runs_limit`, `runs_used`, `runs_remaining`, `resets_at`.
+- `GET /api/campaigns/active`: retorna a campanha ativa elegível para o usuário atual.
+
+### Persistência
+- Tabela `in_app_campaigns` (ORM `InAppCampaign`) para campanhas de popup.
+- Preferências de exibição de onboarding e frequência de popup são armazenadas no frontend (storage do navegador), por usuário.
 
 *(Este arquivo deve ser atualizado sempre que novas ferramentas, rotas ou fluxos forem adicionados)*
 

@@ -193,14 +193,17 @@ def create_image_editor_tools(user_id: str, channel: str = "web"):
         format: str = "1:1",
     ) -> str:
         """
-        Edita ou transforma uma imagem que o usuário enviou ou que foi gerada recentemente.
+        Edita ou transforma uma imagem que o usuário EXPLICITAMENTE pediu para modificar.
         A imagem é processada em background e o resultado é enviado ao usuário.
 
-        Use esta tool quando o usuário:
+        IMPORTANTE: NÃO use esta tool para gerar imagens novas do zero.
+        Para gerar imagens novas sem referência, use generate_carousel com 1 slide.
+
+        Use esta tool SOMENTE quando o usuário:
         - Enviar uma imagem e pedir para modificar (adicionar/remover objetos, mudar fundo, etc.)
-        - Pedir para transformar o estilo (cartoon, pintura, minimalista, hiper-realista, etc.)
-        - Pedir ajustes na última imagem gerada ("faz mais realista", "muda o fundo", etc.)
-        - Gerar uma nova versão baseada numa imagem anterior
+        - Pedir para transformar o estilo de uma imagem existente (cartoon, pintura, etc.)
+        - Pedir ajustes na última imagem gerada ("muda o fundo", "adiciona um chapéu", etc.)
+        - Referir-se EXPLICITAMENTE a uma imagem anterior para editar
 
         Args:
             edit_instructions: Instrução detalhada do que fazer com a imagem.

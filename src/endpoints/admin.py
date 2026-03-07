@@ -6,7 +6,15 @@ from pydantic import BaseModel
 from sqlalchemy import func, or_, text
 
 from src.auth.deps import require_admin
-from src.db.models import BackgroundTask, BillingPlan, Subscription, Task, UsageEvent, User
+from src.db.models import (
+    BackgroundTask,
+    BillingPlan,
+    InAppCampaign,
+    Subscription,
+    Task,
+    UsageEvent,
+    User,
+)
 from src.db.session import _is_sqlite, get_db
 from src.memory.identity import get_user
 
@@ -17,6 +25,47 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 class AdminCreateRequest(BaseModel):
     phone_number: str
+
+
+class CampaignCreateRequest(BaseModel):
+    title: str
+    message: str
+    image_url: str | None = None
+    cta_label: str | None = "Experimentar Premium"
+    cta_action: str | None = "open_checkout"
+    cta_url: str | None = None
+    audience: str | None = "all"
+    frequency: str | None = "once"
+    priority: int | None = 100
+    active: bool = True
+    starts_at: str | None = None
+    ends_at: str | None = None
+
+
+class CampaignUpdateRequest(BaseModel):
+    title: str | None = None
+    message: str | None = None
+    image_url: str | None = None
+    cta_label: str | None = None
+    cta_action: str | None = None
+    cta_url: str | None = None
+    audience: str | None = None
+    frequency: str | None = None
+    priority: int | None = None
+    active: bool | None = None
+    starts_at: str | None = None
+    ends_at: str | None = None
+
+
+def _validate_campaign_fields(campaign: dict):
+    if campaign.get("audience") not in ("all", "free_only", "paid_only"):
+        raise HTTPException(status_code=400, detail="audience inválida")
+    if campaign.get("frequency") not in ("once", "per_session", "daily"):
+        raise HTTPException(status_code=400, detail="frequency inválida")
+    if campaign.get("cta_action") not in ("open_checkout", "open_account", "external_url"):
+        raise HTTPException(status_code=400, detail="cta_action inválida")
+    if campaign.get("cta_action") == "external_url" and not campaign.get("cta_url"):
+        raise HTTPException(status_code=400, detail="cta_url é obrigatório para external_url")
 
 
 @router.get("/business/summary")
@@ -184,6 +233,79 @@ def remove_admin(phone_number: str, current_user: dict = Depends(require_admin))
         )
     demote_admin(phone_number)
     return {"message": f"Usuário {phone_number} rebaixado para user com sucesso"}
+
+
+# ============================================================================
+# IN-APP CAMPAIGNS
+# ============================================================================
+
+
+@router.get("/campaigns")
+def list_campaigns(current_user: dict = Depends(require_admin)):
+    with get_db() as session:
+        rows = session.query(InAppCampaign).order_by(
+            InAppCampaign.priority.asc(),
+            InAppCampaign.updated_at.desc(),
+        ).all()
+        return [row.to_dict() for row in rows]
+
+
+@router.post("/campaigns")
+def create_campaign(req: CampaignCreateRequest, current_user: dict = Depends(require_admin)):
+    payload = req.dict()
+    _validate_campaign_fields(payload)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    with get_db() as session:
+        row = InAppCampaign(
+            title=req.title,
+            message=req.message,
+            image_url=req.image_url,
+            cta_label=req.cta_label,
+            cta_action=req.cta_action,
+            cta_url=req.cta_url,
+            audience=req.audience,
+            frequency=req.frequency,
+            priority=req.priority,
+            active=req.active,
+            starts_at=req.starts_at,
+            ends_at=req.ends_at,
+            created_at=now_iso,
+            updated_at=now_iso,
+        )
+        session.add(row)
+        session.flush()
+        return row.to_dict()
+
+
+@router.put("/campaigns/{campaign_id}")
+def update_campaign(campaign_id: int, req: CampaignUpdateRequest, current_user: dict = Depends(require_admin)):
+    updates = {k: v for k, v in req.dict(exclude_unset=True).items() if v is not None}
+
+    with get_db() as session:
+        row = session.query(InAppCampaign).filter(InAppCampaign.id == campaign_id).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Campanha não encontrada")
+
+        preview = {**row.to_dict(), **updates}
+        _validate_campaign_fields(preview)
+
+        for key, value in updates.items():
+            setattr(row, key, value)
+
+        row.updated_at = datetime.now(timezone.utc).isoformat()
+        session.flush()
+        return row.to_dict()
+
+
+@router.delete("/campaigns/{campaign_id}")
+def delete_campaign(campaign_id: int, current_user: dict = Depends(require_admin)):
+    with get_db() as session:
+        row = session.query(InAppCampaign).filter(InAppCampaign.id == campaign_id).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Campanha não encontrada")
+        session.delete(row)
+    return {"message": "Campanha removida com sucesso"}
 
 
 # ============================================================================

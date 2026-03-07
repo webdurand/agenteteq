@@ -1,20 +1,16 @@
 GREETING_INJECTION = (
     "[INSTRUCAO DE SISTEMA: O usuario ficou mais de 4 horas sem enviar mensagens e optou por comecar uma conversa nova. "
-    "Comece com uma saudacao descontraida. "
-    "ANTES de responder, consulte suas memorias (search_knowledge) para saber quais informacoes o usuario quer no cumprimento. "
-    "Por padrao (sem preferencias salvas), inclua: previsao do tempo (use get_weather — busque a cidade nas memorias; "
-    "se nao souber, pergunte de forma natural) e tarefas pendentes (use list_tasks). "
-    "Integre tudo de forma fluida e casual, sem parecer uma lista robotica. "
+    "Cumprimente de forma curta e descontraida (1-2 frases). "
+    "NAO execute nenhuma ferramenta no cumprimento. Apenas resuma brevemente que voce pode ajudar com tarefas, lembretes, "
+    "clima, blog, agendas e o que mais ele precisar. Seja conciso. "
     "Mensagem real do usuario: ]"
 )
 
 GREETING_INJECTION_WEB = (
     "[INSTRUCAO DE SISTEMA: O usuario ficou mais de 4 horas sem enviar mensagens. "
-    "Comece com uma saudacao descontraida. "
-    "ANTES de responder, consulte suas memorias (search_knowledge) para saber quais informacoes o usuario quer no cumprimento. "
-    "Por padrao (sem preferencias salvas), inclua: previsao do tempo (use get_weather — busque a cidade nas memorias; "
-    "se nao souber, pergunte de forma natural) e tarefas pendentes (use list_tasks). "
-    "Integre tudo de forma fluida e casual, sem parecer uma lista robotica. "
+    "Cumprimente de forma curta e descontraida (1-2 frases). "
+    "NAO execute nenhuma ferramenta no cumprimento. Apenas resuma brevemente que voce pode ajudar com tarefas, lembretes, "
+    "clima, blog, agendas e o que mais ele precisar. Seja conciso. "
     "Mensagem real do usuario: ]"
 )
 

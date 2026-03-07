@@ -300,6 +300,48 @@ class UsageEvent(Base):
     created_at = Column(String, default=lambda: _utcnow().isoformat())
 
 
+# ──────────────────────────── In-app Campaigns ────────────────────────────
+
+
+class InAppCampaign(Base):
+    __tablename__ = "in_app_campaigns"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String, nullable=False)
+    message = Column(Text, nullable=False)
+    image_url = Column(String)
+    cta_label = Column(String)
+    cta_action = Column(String, default="open_checkout")
+    cta_url = Column(String)
+    audience = Column(String, default="all")  # all | free_only | paid_only
+    frequency = Column(String, default="once")  # once | per_session | daily
+    priority = Column(Integer, default=100)
+    active = Column(Boolean, default=True)
+    starts_at = Column(String)
+    ends_at = Column(String)
+    created_at = Column(String, default=lambda: _utcnow().isoformat())
+    updated_at = Column(String, default=lambda: _utcnow().isoformat())
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "title": self.title,
+            "message": self.message,
+            "image_url": self.image_url,
+            "cta_label": self.cta_label,
+            "cta_action": self.cta_action,
+            "cta_url": self.cta_url,
+            "audience": self.audience,
+            "frequency": self.frequency,
+            "priority": self.priority,
+            "active": bool(self.active),
+            "starts_at": self.starts_at,
+            "ends_at": self.ends_at,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
 # ──────────────────────────── System Config ────────────────────────────
 
 
