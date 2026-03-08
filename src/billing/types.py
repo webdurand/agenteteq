@@ -4,6 +4,7 @@ from typing import Optional
 from datetime import datetime
 
 class SubscriptionStatus(str, Enum):
+    FREE = "free"
     TRIALING = "trialing"
     ACTIVE = "active"
     PAST_DUE = "past_due"

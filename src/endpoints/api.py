@@ -7,7 +7,6 @@ from sqlalchemy import func
 
 from src.auth.deps import get_current_user
 from src.billing.service import is_subscription_active
-from src.config.system_config import get_config_for_plan
 from src.config.feature_gates import get_all_usage_summary
 from src.db.models import BackgroundTask, InAppCampaign
 from src.db.session import get_db

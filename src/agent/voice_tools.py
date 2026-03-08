@@ -298,7 +298,7 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
                     return {
                         "result": limit_info["message"],
                         "limit_reached": True,
-                        "plan_type": limit_info.get("plan_type", "trial"),
+                        "plan_type": limit_info.get("plan_type", "free"),
                     }
                 return {"result": tool_result}
 
@@ -317,7 +317,7 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
                     return {
                         "result": limit_info["message"],
                         "limit_reached": True,
-                        "plan_type": limit_info.get("plan_type", "trial"),
+                        "plan_type": limit_info.get("plan_type", "free"),
                     }
                 return {"result": tool_result}
                 

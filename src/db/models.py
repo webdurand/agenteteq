@@ -40,7 +40,7 @@ class User(Base):
     whatsapp_verified = Column(Boolean, default=False)
     google_id = Column(String)
     auth_provider = Column(String, default="local")
-    plan_type = Column(String, default="trial")
+    plan_type = Column(String, default="free")
     trial_started_at = Column(DateTime(timezone=True))
     trial_ends_at = Column(DateTime(timezone=True))
     timezone = Column(String, default="America/Sao_Paulo")
@@ -232,6 +232,7 @@ class BillingPlan(Base):
     name = Column(String, nullable=False)
     description = Column(Text)
     features_json = Column(Text, default="[]")
+    limits_json = Column(Text, default="{}")
     is_active = Column(Boolean, default=True)
     trial_days = Column(Integer, default=7)
     stripe_product_id = Column(String)
@@ -249,6 +250,7 @@ class BillingPlan(Base):
             "name": self.name,
             "description": self.description,
             "features_json": self.features_json,
+            "limits_json": self.limits_json or "{}",
             "is_active": bool(self.is_active),
             "trial_days": self.trial_days,
             "stripe_product_id": self.stripe_product_id,

@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import datetime, timezone
 from typing import Optional
@@ -6,26 +7,74 @@ from src.db.session import get_db
 from src.db.models import BillingPlan, Subscription, BillingEvent
 
 
+FREE_LIMITS = {
+    "max_tasks_per_user": 2,
+    "max_tasks_per_user_daily": 5,
+    "voice_live_enabled": False,
+    "voice_live_max_minutes_daily": 0,
+    "tts_enabled": False,
+    "max_searches_daily": 10,
+    "max_deep_research_daily": 1,
+}
+
+PAID_LIMITS = {
+    "max_tasks_per_user": 5,
+    "max_tasks_per_user_daily": 50,
+    "voice_live_enabled": True,
+    "voice_live_max_minutes_daily": 20,
+    "tts_enabled": True,
+    "max_searches_daily": 50,
+    "max_deep_research_daily": 3,
+}
+
+
 def init_billing_db():
     pass
 
 
 def ensure_default_plan():
+    """Backward compat alias."""
+    ensure_default_plans()
+
+
+def ensure_default_plans():
+    # --- Free plan (first-class, non-deletable) ---
+    free = get_plan("free", initialize=False)
+    if not free:
+        create_plan(
+            code="free",
+            name="Free",
+            description="Plano gratuito com limites básicos.",
+            amount_cents=0,
+            trial_days=0,
+            features_json='["Chat texto","Tarefas","Lembretes"]',
+            limits_json=json.dumps(FREE_LIMITS),
+        )
+    elif not free.get("limits_json") or free["limits_json"] == "{}":
+        update_plan("free", limits_json=json.dumps(FREE_LIMITS))
+
+    # --- Pro mensal ---
     price_id = os.getenv("STRIPE_PRICE_ID_DEFAULT", "")
-    existing = get_plan("pro_mensal", initialize=False)
-    if existing:
-        if not existing.get("stripe_price_id") and price_id:
-            update_plan("pro_mensal", stripe_price_id=price_id)
-        return
-    create_plan(
-        code="pro_mensal",
-        name="Plano Pro Mensal",
-        description="Acesso completo ao Teq com tudo liberado e 7 dias gratis.",
-        amount_cents=4990,
-        trial_days=7,
-        stripe_price_id=price_id,
-        features_json='["Acesso completo","WhatsApp","Tarefas","Lembretes","Chat por voz"]',
-    )
+    pro = get_plan("pro_mensal", initialize=False)
+    if not pro:
+        create_plan(
+            code="pro_mensal",
+            name="Plano Pro Mensal",
+            description="Acesso completo ao Teq com tudo liberado e 7 dias gratis.",
+            amount_cents=4990,
+            trial_days=7,
+            stripe_price_id=price_id,
+            features_json='["Acesso completo","WhatsApp","Tarefas","Lembretes","Chat por voz"]',
+            limits_json=json.dumps(PAID_LIMITS),
+        )
+    else:
+        updates = {}
+        if not pro.get("stripe_price_id") and price_id:
+            updates["stripe_price_id"] = price_id
+        if not pro.get("limits_json") or pro["limits_json"] == "{}":
+            updates["limits_json"] = json.dumps(PAID_LIMITS)
+        if updates:
+            update_plan("pro_mensal", **updates)
 
 
 def is_event_processed(event_id: str) -> bool:
@@ -144,6 +193,7 @@ def create_plan(
     currency: str = "brl",
     interval: str = "month",
     features_json: str = "[]",
+    limits_json: str = "{}",
     is_active: bool = True,
 ):
     with get_db() as session:
@@ -155,6 +205,7 @@ def create_plan(
             name=name,
             description=description,
             features_json=features_json,
+            limits_json=limits_json,
             is_active=is_active,
             trial_days=trial_days,
             stripe_product_id=stripe_product_id,
@@ -170,7 +221,7 @@ def create_plan(
 
 def update_plan(code: str, **fields):
     allowed = {
-        "name", "description", "features_json", "is_active", "trial_days",
+        "name", "description", "features_json", "limits_json", "is_active", "trial_days",
         "stripe_product_id", "stripe_price_id", "amount_cents", "currency", "interval",
     }
     updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
@@ -188,6 +239,8 @@ def update_plan(code: str, **fields):
 
 
 def delete_plan(code: str) -> bool:
+    if code == "free":
+        return False
     with get_db() as session:
         plan = session.query(BillingPlan).filter_by(code=code).first()
         if plan:

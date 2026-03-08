@@ -82,7 +82,6 @@ def create_user_full(
     role: str = "user",
 ):
     now = datetime.now(timezone.utc)
-    trial_ends = now + timedelta(days=7)
 
     try:
         with get_db() as session:
@@ -98,9 +97,8 @@ def create_user_full(
                     google_id=google_id,
                     auth_provider=auth_provider,
                     onboarding_step="completed",
-                    plan_type="trial",
+                    plan_type="free",
                     trial_started_at=now,
-                    trial_ends_at=trial_ends,
                     whatsapp_verified=False,
                     role=role,
                 ))
@@ -238,29 +236,14 @@ def is_new_session(user: dict, threshold_hours: int = 4) -> bool:
 
 def is_plan_active(user: dict) -> bool:
     """
-    Verifica se o usuario tem plano ativo (não é trial ou o trial ainda não acabou).
+    Verifica se o usuario tem plano ativo.
+    Free é sempre ativo (com limites). Premium/trial Stripe também.
     """
     if user.get("role") == "admin":
         return True
 
-    if user.get("plan_type") == "trial":
-        trial_ends = user.get("trial_ends_at")
-        if not trial_ends:
-            return False
-
-        try:
-            if isinstance(trial_ends, str):
-                trial_dt = datetime.fromisoformat(trial_ends)
-            else:
-                trial_dt = trial_ends
-
-            if trial_dt.tzinfo is None:
-                trial_dt = trial_dt.replace(tzinfo=timezone.utc)
-
-            if datetime.now(timezone.utc) < trial_dt:
-                return True
-        except Exception:
-            pass
+    if user.get("plan_type") in ("free", "trial"):
+        return True
 
     from src.billing.service import is_subscription_active
     return is_subscription_active(user["phone_number"])

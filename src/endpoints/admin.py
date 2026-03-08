@@ -142,21 +142,8 @@ def list_users(user: dict = Depends(require_admin)):
 
             if stripe_status:
                 eff_status = "pro_trial" if stripe_status == "trialing" else stripe_status
-            elif trial_ends_at:
-                if isinstance(trial_ends_at, str):
-                    try:
-                        trial_dt = datetime.fromisoformat(trial_ends_at)
-                        if trial_dt.tzinfo is None:
-                            trial_dt = trial_dt.replace(tzinfo=timezone.utc)
-                    except Exception:
-                        trial_dt = None
-                else:
-                    trial_dt = trial_ends_at
-                    if trial_dt and trial_dt.tzinfo is None:
-                        trial_dt = trial_dt.replace(tzinfo=timezone.utc)
-                eff_status = "trialing" if trial_dt and now_utc < trial_dt else "expired"
             else:
-                eff_status = "none"
+                eff_status = "free"
 
             users.append({
                 "phone_number": row[0],

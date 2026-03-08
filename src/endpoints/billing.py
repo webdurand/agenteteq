@@ -21,6 +21,7 @@ from src.integrations.stripe import (
     construct_webhook_event,
     create_setup_intent,
     set_default_payment_method,
+    update_subscription_price,
 )
 from src.models.subscriptions import upsert_subscription
 
@@ -28,6 +29,9 @@ router = APIRouter(prefix="/billing", tags=["billing"])
 
 class SubscribeRequest(BaseModel):
     price_id: Optional[str] = None
+
+class UpgradeRequest(BaseModel):
+    plan_code: str
     
 @router.post("/subscribe")
 def subscribe(req: SubscribeRequest, user: dict = Depends(get_current_user)):
@@ -102,6 +106,55 @@ def subscribe(req: SubscribeRequest, user: dict = Depends(get_current_user)):
         }
     except Exception as e:
         logger.exception("Erro ao criar assinatura")
+        raise HTTPException(status_code=500, detail="Erro interno do servidor")
+
+
+@router.post("/upgrade")
+def upgrade_plan(req: UpgradeRequest, user: dict = Depends(get_current_user)):
+    """Switch active subscription to a different plan (upgrade/downgrade)."""
+    from src.models.subscriptions import get_active_subscription, get_plan as get_plan_model
+
+    sub = get_active_subscription(user["phone_number"])
+    if not sub or not sub.get("provider_subscription_id"):
+        raise HTTPException(status_code=400, detail="Nenhuma assinatura ativa para fazer upgrade")
+
+    target_plan = get_plan_model(req.plan_code)
+    if not target_plan:
+        raise HTTPException(status_code=404, detail="Plano não encontrado")
+    if not target_plan.get("stripe_price_id"):
+        raise HTTPException(status_code=400, detail="Plano sem Price ID configurado no Stripe")
+    if target_plan["code"] == "free":
+        raise HTTPException(status_code=400, detail="Para cancelar, use o endpoint de cancelamento")
+
+    try:
+        updated_sub = update_subscription_price(
+            sub["provider_subscription_id"],
+            target_plan["stripe_price_id"],
+        )
+
+        from datetime import datetime, timezone
+        def ts_to_iso(ts):
+            return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else None
+
+        upsert_subscription({
+            "user_id": user["phone_number"],
+            "plan_code": target_plan["code"],
+            "provider": "stripe",
+            "provider_customer_id": sub.get("provider_customer_id", ""),
+            "provider_subscription_id": updated_sub["id"],
+            "status": updated_sub["status"],
+            "current_period_start": ts_to_iso(updated_sub.get("current_period_start")),
+            "current_period_end": ts_to_iso(updated_sub.get("current_period_end")),
+            "cancel_at_period_end": updated_sub.get("cancel_at_period_end", False),
+        })
+
+        return {
+            "status": "upgraded",
+            "plan_code": target_plan["code"],
+            "plan_name": target_plan["name"],
+        }
+    except Exception as e:
+        logger.exception("Erro ao fazer upgrade de plano")
         raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
 

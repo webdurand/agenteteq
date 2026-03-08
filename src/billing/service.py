@@ -97,30 +97,12 @@ def is_subscription_active(user_phone: str) -> bool:
 def get_billing_context(user_phone: str) -> BillingContext:
     sub = get_active_subscription(user_phone)
     if not sub:
-        user = get_user(user_phone)
-        if user and user.get("plan_type") == "trial" and user.get("trial_ends_at"):
-            try:
-                trial_end = datetime.fromisoformat(user["trial_ends_at"]) if isinstance(user["trial_ends_at"], str) else user["trial_ends_at"]
-                if trial_end.tzinfo is None:
-                    trial_end = trial_end.replace(tzinfo=timezone.utc)
-                if datetime.now(timezone.utc) < trial_end:
-                    return BillingContext(
-                        status=SubscriptionStatus.TRIALING,
-                        trial_end=trial_end,
-                        current_period_end=trial_end,
-                        cancel_at_period_end=False,
-                        plan_code="pro_mensal",
-                        has_active_subscription=True,
-                        has_stripe_subscription=False,
-                    )
-            except Exception:
-                pass
         return BillingContext(
-            status=SubscriptionStatus.INCOMPLETE,
+            status=SubscriptionStatus.FREE,
             trial_end=None,
             current_period_end=None,
             cancel_at_period_end=False,
-            plan_code=None,
+            plan_code="free",
             has_active_subscription=False,
             has_stripe_subscription=False
         )
@@ -172,7 +154,7 @@ def get_billing_overview(user: dict) -> dict:
         "interval": plan["interval"] if plan else "month",
         "features_json": plan["features_json"] if plan else "[]",
         "payment_methods": payment_methods,
-        "has_active_subscription": ctx.has_active_subscription or user.get("plan_type") == "trial",
+        "has_active_subscription": ctx.has_active_subscription or user.get("plan_type") in ("free", "trial"),
         "has_stripe_subscription": has_stripe_subscription,
     }
 

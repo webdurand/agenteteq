@@ -235,7 +235,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     if (
         not limit_info
         and save_to_chat
-        and usage_status.get("effective_plan") == "trial"
+        and usage_status.get("effective_plan") == "free"
         and usage_status.get("is_limited")
         and _looks_like_image_request(user_text, bool(agent_images))
     ):
@@ -243,7 +243,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
         # chamar tool, ainda assim disparamos o evento limit_reached para renderizar card Premium.
         limit_info = {
             "message": usage_status.get("limit_message") or "Seu limite diário de gerações foi atingido.",
-            "plan_type": "trial",
+            "plan_type": "free",
         }
 
     if limit_info:

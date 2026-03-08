@@ -103,6 +103,17 @@ def set_default_payment_method(customer_id: str, subscription_id: str, payment_m
     )
     stripe.Subscription.modify(subscription_id, default_payment_method=payment_method_id)
 
+def update_subscription_price(subscription_id: str, new_price_id: str) -> stripe.Subscription:
+    """Upgrade/downgrade: swap the single item to a new price with proration."""
+    sub = stripe.Subscription.retrieve(subscription_id)
+    item_id = sub["items"]["data"][0]["id"]
+    return stripe.Subscription.modify(
+        subscription_id,
+        items=[{"id": item_id, "price": new_price_id}],
+        proration_behavior="create_prorations",
+    )
+
+
 def construct_webhook_event(payload: bytes, sig_header: str) -> stripe.Event:
     webhook_secret = get_webhook_secret()
     return stripe.Webhook.construct_event(

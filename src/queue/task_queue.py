@@ -8,9 +8,8 @@ from sqlalchemy import func, text
 
 from src.db.session import get_db, _is_sqlite
 from src.db.models import BackgroundTask
-from src.config.system_config import get_config, get_config_for_plan
-from src.memory.identity import get_user
-from src.billing.service import is_subscription_active
+from src.config.system_config import get_config
+from src.config.feature_gates import get_plan_limit, is_admin_unlimited, get_user_plan_type
 
 _limit_flags: Dict[str, dict] = {}
 _limit_lock = threading.Lock()
@@ -26,38 +25,17 @@ def pop_limit_flag(user_id: str) -> Optional[dict]:
         return _limit_flags.pop(user_id, None)
 
 
-def _is_admin_bypass() -> bool:
-    return get_config("admin_bypass_limits", "true").lower() in ("true", "1", "yes")
-
-
-def _get_plan_type(user_id: str) -> str:
-    user = get_user(user_id)
-    if not user:
-        return "trial"
-    if user.get("role") == "admin":
-        return "admin"
-    if is_subscription_active(user_id):
-        return "paid"
-    return "trial"
-
-
-def _effective_plan_type(plan_type: str) -> str:
-    if plan_type == "admin" and not _is_admin_bypass():
-        return "trial"
-    return plan_type
-
-
 def get_usage_status(user_id: str) -> dict:
     """
     Snapshot estruturado do estado atual de limites do usuário.
     """
-    plan_type = _get_plan_type(user_id)
-    effective = _effective_plan_type(plan_type)
+    plan_type = get_user_plan_type(user_id)
+    _is_admin = is_admin_unlimited(user_id)
 
     status = {
         "plan_type": plan_type,
-        "effective_plan": effective,
-        "is_admin_bypass": effective == "admin",
+        "effective_plan": "admin" if _is_admin else plan_type,
+        "is_admin_bypass": _is_admin,
         "max_daily": None,
         "daily_used": None,
         "daily_remaining": None,
@@ -66,7 +44,7 @@ def get_usage_status(user_id: str) -> dict:
         "context": "",
     }
 
-    if effective == "admin":
+    if _is_admin:
         status["context"] = (
             "[STATUS LIMITES: Usuario admin com bypass ativo. "
             "Limites diarios NAO se aplicam agora. "
@@ -74,7 +52,7 @@ def get_usage_status(user_id: str) -> dict:
         )
         return status
 
-    max_daily = int(get_config_for_plan("max_tasks_per_user_daily", effective, "5"))
+    max_daily = get_plan_limit(user_id, "max_tasks_per_user_daily", 5)
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
 
     with get_db() as session:
@@ -90,7 +68,7 @@ def get_usage_status(user_id: str) -> dict:
     status["is_limited"] = remaining == 0
 
     if status["is_limited"]:
-        if effective == "trial":
+        if plan_type in ("trial", "free"):
             status["limit_message"] = (
                 f"Poxa, seu limite de {max_daily} gerações de hoje acabou no plano gratuito. "
                 "Mas você pode virar Premium agora e repor seu limite!"
@@ -99,13 +77,13 @@ def get_usage_status(user_id: str) -> dict:
             status["limit_message"] = f"Limite diário de {max_daily} gerações atingido. Tente novamente amanhã!"
 
         status["context"] = (
-            f"[STATUS LIMITES: Plano efetivo {effective}. "
+            f"[STATUS LIMITES: Plano efetivo {plan_type}. "
             f"Limite diario de {max_daily} geracoes atingido. 0 restantes.]"
         )
         return status
 
     status["context"] = (
-        f"[STATUS LIMITES: Plano efetivo {effective}. "
+        f"[STATUS LIMITES: Plano efetivo {plan_type}. "
         f"{remaining}/{max_daily} geracoes restantes nas ultimas 24h.]"
     )
     return status
@@ -126,13 +104,11 @@ def check_daily_limit(user_id: str) -> Optional[str]:
     Retorna mensagem de erro se atingiu, None se pode prosseguir.
     Seta um flag thread-safe que _process_text pode ler para enviar resposta determinística.
     """
-    plan_type = _get_plan_type(user_id)
-    effective = _effective_plan_type(plan_type)
-
-    if effective == "admin":
+    if is_admin_unlimited(user_id):
         return None
 
-    max_daily = int(get_config_for_plan("max_tasks_per_user_daily", effective, "5"))
+    plan_type = get_user_plan_type(user_id)
+    max_daily = get_plan_limit(user_id, "max_tasks_per_user_daily", 5)
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
 
     with get_db() as session:
@@ -142,7 +118,7 @@ def check_daily_limit(user_id: str) -> Optional[str]:
         ).scalar()
 
     if daily >= max_daily:
-        if effective == "trial":
+        if plan_type in ("trial", "free"):
             message = (
                 f"Poxa, seu limite de {max_daily} gerações de hoje acabou no plano gratuito. "
                 "Mas você pode virar Premium agora e repor seu limite!"
@@ -150,22 +126,22 @@ def check_daily_limit(user_id: str) -> Optional[str]:
         else:
             message = f"Limite diário de {max_daily} gerações atingido. Tente novamente amanhã!"
 
-        set_limit_flag(user_id, {"message": message, "plan_type": effective})
+        set_limit_flag(user_id, {"message": message, "plan_type": plan_type})
         return message
 
     return None
 
 
 def enqueue_task(user_id: str, task_type: str, channel: str, payload: Dict[str, Any]) -> dict:
-    plan_type = _get_plan_type(user_id)
-    effective = _effective_plan_type(plan_type)
+    _is_admin = is_admin_unlimited(user_id)
+    plan_type = get_user_plan_type(user_id)
 
     with get_db() as session:
         now_iso = datetime.now(timezone.utc).isoformat()
 
-        if effective != "admin":
-            max_concurrent = int(get_config_for_plan("max_tasks_per_user", effective, "2"))
-            max_daily = int(get_config_for_plan("max_tasks_per_user_daily", effective, "5"))
+        if not _is_admin:
+            max_concurrent = get_plan_limit(user_id, "max_tasks_per_user", 2)
+            max_daily = get_plan_limit(user_id, "max_tasks_per_user_daily", 5)
 
             concurrent = session.query(func.count(BackgroundTask.id)).filter(
                 BackgroundTask.user_id == user_id,
@@ -184,14 +160,14 @@ def enqueue_task(user_id: str, task_type: str, channel: str, payload: Dict[str, 
             if daily >= max_daily:
                 # Mantem comportamento deterministico no websocket: mesmo que o agente
                 # parafraseie o retorno da tool, o frontend recebe o evento limit_reached.
-                if effective == "trial":
+                if plan_type in ("trial", "free"):
                     message = (
                         f"Poxa, seu limite de {max_daily} gerações de hoje acabou no plano gratuito. "
                         "Mas você pode virar Premium agora e repor seu limite!"
                     )
                 else:
                     message = f"Limite diário de {max_daily} gerações atingido. Tente novamente amanhã!"
-                set_limit_flag(user_id, {"message": message, "plan_type": effective})
+                set_limit_flag(user_id, {"message": message, "plan_type": plan_type})
                 return {"status": "daily_limit", "daily_limit": max_daily}
 
         cancelled = session.query(BackgroundTask).filter(

@@ -1,41 +1,90 @@
 """
 Feature gates e limites diários genéricos por plano.
 
-Permite habilitar/desabilitar features e impor limites numéricos diários
-usando as configs de system_config (editáveis pelo admin).
+Limites são lidos de BillingPlan.limits_json (editável pelo admin no tab Planos).
 """
+import json
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import func
 
-from src.billing.service import is_subscription_active
-from src.config.system_config import get_config, get_config_for_plan
+from src.config.system_config import get_config
 from src.db.models import BackgroundTask, UsageEvent
 from src.db.session import get_db
 from src.memory.identity import get_user
+from src.models.subscriptions import FREE_LIMITS
 
 
 # ---------------------------------------------------------------------------
-# Plan type helpers (mesma lógica de task_queue._get_plan_type)
+# Plan resolution
 # ---------------------------------------------------------------------------
 
-def get_user_plan_type(user_id: str) -> str:
+def get_user_plan(user_id: str) -> dict:
+    """
+    Retorna o BillingPlan dict efetivo do usuário.
+    - Admin com bypass → {"code": "admin", "limits_json": "{}", ...}
+    - Subscription ativa → plano da subscription
+    - Sem subscription → plano "free"
+    """
     user = get_user(user_id)
     if not user:
-        return "trial"
+        return _get_free_plan()
+
     if user.get("role") == "admin":
-        return "admin"
-    if is_subscription_active(user_id):
-        return "paid"
-    return "trial"
-
-
-def _effective_plan(plan_type: str) -> str:
-    if plan_type == "admin":
         bypass = get_config("admin_bypass_limits", "true").lower() in ("true", "1", "yes")
-        return "admin" if bypass else "trial"
-    return plan_type
+        if bypass:
+            return {"code": "admin", "name": "Admin", "limits_json": "{}", "_is_admin": True}
+
+    from src.billing.service import is_subscription_active
+    from src.models.subscriptions import get_active_subscription, get_plan
+
+    if is_subscription_active(user_id):
+        sub = get_active_subscription(user_id)
+        if sub and sub.get("plan_code"):
+            plan = get_plan(sub["plan_code"], initialize=False)
+            if plan:
+                return plan
+
+    return _get_free_plan()
+
+
+def _get_free_plan() -> dict:
+    from src.models.subscriptions import get_plan
+    plan = get_plan("free", initialize=False)
+    if plan:
+        return plan
+    # Fallback if "free" plan not yet in DB
+    return {
+        "code": "free",
+        "name": "Free",
+        "limits_json": json.dumps(FREE_LIMITS),
+    }
+
+
+def get_user_plan_type(user_id: str) -> str:
+    """Backward compat: returns 'admin', 'paid', or 'trial'/'free'."""
+    plan = get_user_plan(user_id)
+    if plan.get("_is_admin"):
+        return "admin"
+    code = plan.get("code", "free")
+    if code == "free":
+        return "trial"
+    return "paid"
+
+
+def _get_limit(plan: dict, key: str, default: Any = 0) -> Any:
+    """Read a limit value from plan's limits_json."""
+    if plan.get("_is_admin"):
+        # Admin bypass: booleans → True, numbers → very large
+        if "enabled" in key:
+            return True
+        return 999999
+    try:
+        limits = json.loads(plan.get("limits_json") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        limits = {}
+    return limits.get(key, default)
 
 
 # ---------------------------------------------------------------------------
@@ -44,12 +93,13 @@ def _effective_plan(plan_type: str) -> str:
 
 def is_feature_enabled(user_id: str, feature_key: str) -> bool:
     """Checa se uma feature on/off está habilitada para o plano do usuário."""
-    plan_type = get_user_plan_type(user_id)
-    effective = _effective_plan(plan_type)
-    if effective == "admin":
-        return True
-    val = get_config_for_plan(feature_key, effective, "true")
-    return val.lower() in ("true", "1", "yes")
+    plan = get_user_plan(user_id)
+    val = _get_limit(plan, feature_key, False)
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.lower() in ("true", "1", "yes")
+    return bool(val)
 
 
 # ---------------------------------------------------------------------------
@@ -106,20 +156,13 @@ def check_daily_feature_limit(
 ) -> Optional[str]:
     """
     Retorna mensagem de erro se o limite diário foi atingido, None se pode prosseguir.
-
-    feature_key mapeia para a config `{feature_key}:{plan_type}`.
-    Ex: "max_searches_daily" -> "max_searches_daily:paid" = "50"
+    feature_key é a chave em limits_json, ex: "max_searches_daily".
     """
-    plan_type = get_user_plan_type(user_id)
-    effective = _effective_plan(plan_type)
-    if effective == "admin":
+    plan = get_user_plan(user_id)
+    if plan.get("_is_admin"):
         return None
 
-    limit_str = get_config_for_plan(feature_key, effective, "0")
-    try:
-        limit = int(limit_str)
-    except ValueError:
-        return None
+    limit = int(_get_limit(plan, feature_key, 0))
 
     if limit <= 0:
         return f"Essa funcionalidade não está disponível no seu plano atual."
@@ -135,16 +178,11 @@ def check_daily_feature_limit(
 
 def check_voice_live_minutes(user_id: str) -> Optional[str]:
     """Checa se o usuário ainda tem minutos de voz live disponíveis hoje."""
-    plan_type = get_user_plan_type(user_id)
-    effective = _effective_plan(plan_type)
-    if effective == "admin":
+    plan = get_user_plan(user_id)
+    if plan.get("_is_admin"):
         return None
 
-    limit_str = get_config_for_plan("voice_live_max_minutes_daily", effective, "0")
-    try:
-        limit = int(limit_str)
-    except ValueError:
-        return None
+    limit = int(_get_limit(plan, "voice_live_max_minutes_daily", 0))
 
     if limit <= 0:
         return "O modo voz real-time não está disponível no seu plano atual."
@@ -171,10 +209,25 @@ def log_feature_usage(user_id: str, feature_key: str, channel: str = "web"):
 
 
 # ---------------------------------------------------------------------------
+# Limit helpers for task_queue (concurrent + daily)
+# ---------------------------------------------------------------------------
+
+def get_plan_limit(user_id: str, key: str, default: int = 0) -> int:
+    """Get a numeric limit from the user's plan. Used by task_queue."""
+    plan = get_user_plan(user_id)
+    return int(_get_limit(plan, key, default))
+
+
+def is_admin_unlimited(user_id: str) -> bool:
+    """Check if user is admin with bypass."""
+    plan = get_user_plan(user_id)
+    return bool(plan.get("_is_admin"))
+
+
+# ---------------------------------------------------------------------------
 # Usage summary (para o endpoint /api/usage/limits)
 # ---------------------------------------------------------------------------
 
-# Mapa de features limitadas: config_key -> (label, counting_method)
 _COUNTABLE_FEATURES = {
     "max_tasks_per_user_daily": {
         "key": "images",
@@ -217,7 +270,8 @@ def get_all_usage_summary(user_id: str) -> dict:
     Retorna o resumo completo de uso de todas as features limitadas.
     Formato:
     {
-      "plan_name": "free" | "premium",
+      "plan_name": "Free" | "Plano Pro Mensal",
+      "plan_code": "free" | "pro_mensal",
       "resets_at": "...",
       "features": {
         "images": { "enabled": True, "limit": 5, "used": 3, "remaining": 2, "label": "..." },
@@ -226,10 +280,10 @@ def get_all_usage_summary(user_id: str) -> dict:
       }
     }
     """
-    plan_type = get_user_plan_type(user_id)
-    effective = _effective_plan(plan_type)
-    is_admin = effective == "admin"
-    plan_name = "premium" if effective in ("paid", "admin") else "free"
+    plan = get_user_plan(user_id)
+    is_admin = bool(plan.get("_is_admin"))
+    plan_name = plan.get("name", "Free")
+    plan_code = plan.get("code", "free")
 
     now = datetime.now(timezone.utc)
     resets_at = (now + timedelta(hours=24)).isoformat()
@@ -245,11 +299,7 @@ def get_all_usage_summary(user_id: str) -> dict:
             features[fkey] = {"enabled": True, "limit": -1, "used": 0, "remaining": -1, "label": label, "unlimited": True}
             continue
 
-        limit_str = get_config_for_plan(config_key, effective, "0")
-        try:
-            limit = int(limit_str)
-        except ValueError:
-            limit = 0
+        limit = int(_get_limit(plan, config_key, 0))
 
         if meta["counter"] == "background_tasks":
             used = _count_background_tasks(user_id)
@@ -274,8 +324,8 @@ def get_all_usage_summary(user_id: str) -> dict:
             features[fkey] = {"enabled": True, "label": label}
             continue
 
-        val = get_config_for_plan(config_key, effective, "false")
-        enabled = val.lower() in ("true", "1", "yes")
+        val = _get_limit(plan, config_key, False)
+        enabled = val if isinstance(val, bool) else str(val).lower() in ("true", "1", "yes")
         features[fkey] = {"enabled": enabled, "label": label}
 
     # Minute-based features
@@ -287,11 +337,7 @@ def get_all_usage_summary(user_id: str) -> dict:
             features[fkey] = {"enabled": True, "limit": -1, "used": 0, "remaining": -1, "label": label, "unlimited": True}
             continue
 
-        limit_str = get_config_for_plan(config_key, effective, "0")
-        try:
-            limit = int(limit_str)
-        except ValueError:
-            limit = 0
+        limit = int(_get_limit(plan, config_key, 0))
 
         used_min = round(_sum_voice_minutes(user_id), 1)
         remaining = max(0, round(limit - used_min, 1))
@@ -306,6 +352,7 @@ def get_all_usage_summary(user_id: str) -> dict:
 
     return {
         "plan_name": plan_name,
+        "plan_code": plan_code,
         "resets_at": resets_at,
         "features": features,
     }

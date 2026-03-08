@@ -25,6 +25,7 @@ class PlanCreateReq(BaseModel):
     stripe_product_id: str = ""
     stripe_price_id: str = ""
     features_json: str = "[]"
+    limits_json: str = "{}"
 
 
 class PlanUpdateReq(BaseModel):
@@ -35,6 +36,7 @@ class PlanUpdateReq(BaseModel):
     stripe_product_id: str | None = None
     stripe_price_id: str | None = None
     features_json: str | None = None
+    limits_json: str | None = None
     is_active: bool | None = None
 
 class RefundReq(BaseModel):
@@ -80,6 +82,7 @@ def create_plan_endpoint(req: PlanCreateReq, user: dict = Depends(require_admin)
         stripe_product_id=req.stripe_product_id,
         stripe_price_id=req.stripe_price_id,
         features_json=req.features_json,
+        limits_json=req.limits_json,
     )
 
 
@@ -111,12 +114,15 @@ def update_plan_endpoint(code: str, req: PlanUpdateReq, user: dict = Depends(req
         stripe_product_id=req.stripe_product_id,
         stripe_price_id=req.stripe_price_id,
         features_json=req.features_json,
+        limits_json=req.limits_json,
         is_active=req.is_active,
     )
 
 
 @router.delete("/plans/{code}")
 def delete_plan_endpoint(code: str, user: dict = Depends(require_admin)):
+    if code == "free":
+        raise HTTPException(status_code=403, detail="O plano Free nao pode ser removido")
     existing = get_plan(code)
     if not existing:
         raise HTTPException(status_code=404, detail="Plano nao encontrado")

@@ -173,7 +173,7 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
                         await ws_manager.send_personal_message(phone_number, {
                             "type": "limit_reached",
                             "message": result_text,
-                            "plan_type": result.get("plan_type", "trial"),
+                            "plan_type": result.get("plan_type", "free"),
                         })
                     else:
                         await ws_manager.send_personal_message(phone_number, {
