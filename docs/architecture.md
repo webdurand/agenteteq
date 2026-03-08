@@ -372,11 +372,32 @@ O Dashboard combina CRUD direto via REST e atualizações real-time via WebSocke
 | Arquivo | Responsabilidade |
 |---|---|
 | `components/Dashboard.tsx` | Layout principal com Orb, Sidebar (Tarefas/Lembretes) e ChatPanel. |
-| `hooks/useWebSocket.ts` | Conexão compartilhada e barramento de eventos no frontend. |
-| `hooks/useVoiceLive.ts` | Captura de microfone (AudioWorklet) + stream de áudio real-time no `/ws/voice-live` + playback. |
-| `hooks/useChat.ts` | Canal de chat texto (`/ws/voice`) + histórico + eventos de UI (carrossel/edição/action log). |
+| `components/ChatPanel.tsx` | Painel de chat com renderização de mensagens, imagens, carrosséis e action logs. |
+| `components/Sidebar.tsx` | Barra lateral com navegação entre Tarefas, Lembretes e Imagens. |
 | `components/TasksPanel.tsx` | Lista interativa de tarefas integrando REST + WS. |
+| `components/RemindersPanel.tsx` | Lista interativa de lembretes com atualização real-time. |
+| `components/ImagesPanel.tsx` | Galeria de carrosséis gerados com re-fetch via eventos WS. |
+| `components/ImageGalleryModal.tsx` | Modal de visualização de imagens em tela cheia. |
+| `components/Orb.tsx` | Orb em estilo Siri-glow com diferenciação visual de entrada (user), saída (AI) e processamento de tools. |
 | `components/BlogPreviewModal.tsx` | Recebe evento `blog_preview` e mostra o rascunho do post antes da publicação. |
+| `components/LandingPage.tsx` | Página de destino pública (marketing). |
+| `components/AuthLayout.tsx` | Layout de autenticação (login/registro). |
+| `components/LoginForm.tsx` / `RegisterForm.tsx` | Formulários de login e cadastro. |
+| `components/ConfirmPhone.tsx` / `VerifyCode.tsx` | Fluxo de verificação OTP. |
+| `components/AccountSettingsModal.tsx` | Modal de configurações de conta (perfil, integrações, preferências). |
+| `components/IntegrationsTab.tsx` | Aba de integrações Google (Gmail/Calendar) dentro das configurações. |
+| `components/CheckoutModal.tsx` / `CheckoutForm.tsx` | Modal de checkout two-step com Stripe Elements. |
+| `components/SubscriptionPage.tsx` | Página de gerenciamento de assinatura. |
+| `components/SubscriptionBanner.tsx` / `SubscriptionStatus.tsx` | Banners e status de assinatura no dashboard. |
+| `components/UpdatePaymentModal.tsx` | Modal para atualizar método de pagamento. |
+| `components/PremiumLimitsCard.tsx` | Card de limites de uso com barra de consumo. |
+| `components/ProductOnboardingModal.tsx` | Onboarding full-screen de produto (4 etapas). |
+| `components/CampaignPopupModal.tsx` | Popup estratégico configurável via admin. |
+| `components/AdminDashboard.tsx` | Painel administrativo com tabs de negócio, sistema, saúde e planos. |
+| `components/MetricsCharts.tsx` | Gráficos Recharts para métricas do admin. |
+| `components/GlassCard.tsx` | Componente visual glassmorphism reutilizável. |
+| `components/TermsConsentModal.tsx` | Modal bloqueante de aceite de termos. |
+| `components/LegalPage.tsx` | Página de termos/privacidade (acessível sem auth). |
 
 ### Identificação
 
