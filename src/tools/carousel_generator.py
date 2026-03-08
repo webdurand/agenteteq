@@ -134,7 +134,7 @@ async def _process_carousel_background(
                 await asyncio.to_thread(
                     update_message_by_prefix, user_id,
                     "__CAROUSEL_GENERATING__",
-                    "❌ Erro ao gerar o carrossel. Tente novamente.",
+                    f"__CAROUSEL_FAILED__{carousel_id}",
                 )
             except Exception:
                 pass
