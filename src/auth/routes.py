@@ -125,6 +125,18 @@ async def login(request: Request, req: LoginRequest):
     if not user.get("password_hash") or not verify_password(req.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Credenciais invalidas")
         
+    # Conta de teste: pula 2FA e retorna token direto (para verificacao Google OAuth)
+    import os
+    _test_email = os.getenv("TEST_ACCOUNT_EMAIL")
+    if _test_email and req.email.lower() == _test_email.lower() and user.get("whatsapp_verified"):
+        token = create_token(user["phone_number"], user["username"], user["email"], user.get("role", "user"))
+        return {
+            "message": "Login bem sucedido (test account)",
+            "token": token,
+            "phone": user["phone_number"],
+            "purpose": "none"
+        }
+
     if not user.get("whatsapp_verified"):
         # Se nao tiver verificado ainda, envia codigo para "register" de novo? 
         # O ideal seria "login_2fa" tbm, vamos usar "register" pra nao bagunçar o onboarding
