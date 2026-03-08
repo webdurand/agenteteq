@@ -12,6 +12,7 @@ def create_agent_with_tools(
     user_id: str = None,
     channel: str = "whatsapp",
     extra_instructions: list[str] | None = None,
+    include_scheduler: bool = True,
 ):
     phone = user_id or session_id
     search_tools = [
@@ -55,4 +56,5 @@ def create_agent_with_tools(
         extra_tools=search_tools,
         channel=channel,
         extra_instructions=all_instructions if all_instructions else None,
+        include_scheduler=include_scheduler,
     )

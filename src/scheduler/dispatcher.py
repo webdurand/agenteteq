@@ -74,6 +74,7 @@ def dispatch_proactive_message(reminder_id: int):
                 user_id=user_phone,
                 channel=agent_channel,
                 extra_instructions=reminder_instructions,
+                include_scheduler=False,
             )
             response = agent.run(task_instructions, knowledge_filters={"user_id": user_phone})
             

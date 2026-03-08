@@ -30,7 +30,7 @@ def get_model():
         from agno.models.openai import OpenAIChat
         return OpenAIChat(id="gpt-4o-mini")
 
-def get_assistant(session_id: str, extra_tools: list = None, channel: str = "whatsapp", extra_instructions: list = None) -> Agent:
+def get_assistant(session_id: str, extra_tools: list = None, channel: str = "whatsapp", extra_instructions: list = None, include_scheduler: bool = True) -> Agent:
     """
     Retorna a instancia do agente configurada para uma sessao especifica (ex: numero do WhatsApp).
     
@@ -82,8 +82,11 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         from src.tools.blog_publisher import create_blog_tools
         publish_post_tools = create_blog_tools(session_id, channel=channel)
         from src.tools.weather import get_weather
-        from src.tools.scheduler_tool import create_scheduler_tools
-        schedule_message, list_schedules, cancel_schedule = create_scheduler_tools(session_id, channel=channel)
+        scheduler_tools = []
+        if include_scheduler:
+            from src.tools.scheduler_tool import create_scheduler_tools
+            schedule_message, list_schedules, cancel_schedule = create_scheduler_tools(session_id, channel=channel)
+            scheduler_tools = [schedule_message, list_schedules, cancel_schedule]
         from src.tools.carousel_generator import create_carousel_tools
         generate_carousel, list_carousels = create_carousel_tools(session_id, channel=channel)
         from src.tools.image_editor import create_image_editor_tools
@@ -93,7 +96,7 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
             add_memory_tool, delete_memory_tool, list_memories_tool,
             add_task_tool, list_tasks_tool, complete_task_tool, reopen_task_tool, delete_task_tool,
             get_weather,
-            schedule_message, list_schedules, cancel_schedule,
+            *scheduler_tools,
             generate_carousel, list_carousels,
             edit_image,
             get_greeting_context,
