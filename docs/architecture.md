@@ -603,3 +603,32 @@ Implementada via PostgreSQL usando a diretiva `FOR UPDATE SKIP LOCKED`.
 
 ### Admin Dashboard (Sistema e Fila)
 Uma interface exclusiva no painel administrativo permite visualizar o status da fila em tempo real, editar limites (`system_config`), gerenciar falhas, e extrair métricas detalhadas filtradas por período (total consumido, uso por plano, top usuários).
+
+## Termos de Serviço e Política de Privacidade
+
+O sistema possui controle de consentimento versionado, exigido pelo Google OAuth e pela LGPD.
+
+### Páginas Legais
+
+As páginas ficam no `agenteteq-front` (Vite + React), acessíveis sem autenticação:
+- `/privacy` e `/terms` → `agenteteq-front/src/components/LegalPage.tsx`
+- Roteamento por `window.location.pathname` no `App.tsx`, antes dos fluxos de auth.
+
+### Versionamento de Termos
+
+- A versão atual dos termos é definida em `src/auth/terms.py` → `CURRENT_TERMS_VERSION`.
+- O modelo `User` possui `terms_accepted_version` e `terms_accepted_at`.
+- O endpoint `POST /auth/accept-terms` grava a versão e timestamp no banco.
+- O endpoint `GET /auth/me` retorna `terms_accepted_version` para o frontend.
+- O frontend (`App.tsx`) compara com `CURRENT_TERMS_VERSION` e exibe um modal bloqueante (`TermsConsentModal`) se a versão for diferente ou nula.
+- No registro (`RegisterForm.tsx`), um checkbox obrigatório exige que o usuário aceite antes de criar a conta.
+
+### Como atualizar os termos
+
+1. Edite as páginas em `diarioteq/app/privacy/page.tsx` e/ou `diarioteq/app/terms/page.tsx`.
+2. Atualize a data de "Última atualização" nas páginas.
+3. Incremente `CURRENT_TERMS_VERSION` em `src/auth/terms.py` (ex: `"1.0"` → `"1.1"`).
+4. Atualize `CURRENT_TERMS_VERSION` em `agenteteq-front/src/App.tsx` para o mesmo valor.
+5. No próximo login, todos os usuários verão o modal pedindo para aceitar os novos termos.
+
+**IMPORTANTE**: Qualquer mudança no sistema que afete coleta de dados, integrações com terceiros, ou processamento de informações pessoais **deve** ser refletida nas páginas legais e gerar incremento de versão.

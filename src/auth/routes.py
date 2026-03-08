@@ -279,6 +279,30 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         "current_period_end": ctx.current_period_end.isoformat() if ctx.current_period_end else None,
         "cancel_at_period_end": ctx.cancel_at_period_end,
         "plan_code": ctx.plan_code,
-        "has_stripe_subscription": ctx.has_stripe_subscription
+        "has_stripe_subscription": ctx.has_stripe_subscription,
+        "terms_accepted_version": current_user.get("terms_accepted_version"),
     }
     return safe_user
+
+
+@router.post("/accept-terms")
+async def accept_terms(current_user: dict = Depends(get_current_user)):
+    from src.auth.terms import CURRENT_TERMS_VERSION
+    from src.db.session import get_db
+    from src.db.models import User
+    from datetime import datetime, timezone
+
+    try:
+        with get_db() as session:
+            user = session.query(User).filter_by(phone_number=current_user["phone_number"]).first()
+            if not user:
+                raise HTTPException(status_code=404, detail="Usuário não encontrado.")
+            user.terms_accepted_version = CURRENT_TERMS_VERSION
+            user.terms_accepted_at = datetime.now(timezone.utc)
+            session.commit()
+        return {"accepted_version": CURRENT_TERMS_VERSION}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[AUTH] Erro ao aceitar termos: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao registrar aceite dos termos.")

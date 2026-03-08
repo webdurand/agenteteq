@@ -46,6 +46,8 @@ class User(Base):
     timezone = Column(String, default="America/Sao_Paulo")
     role = Column(String, default="user")
     stripe_customer_id = Column(String)
+    terms_accepted_version = Column(String)
+    terms_accepted_at = Column(DateTime(timezone=True))
 
     chat_messages = relationship("ChatMessage", back_populates="user")
     tasks = relationship("Task", back_populates="user")
@@ -70,6 +72,7 @@ class User(Base):
             "timezone": self.timezone or "America/Sao_Paulo",
             "role": self.role or "user",
             "stripe_customer_id": self.stripe_customer_id,
+            "terms_accepted_version": self.terms_accepted_version,
         }
 
 
