@@ -60,6 +60,12 @@ def dispatch_proactive_message(reminder_id: int):
                 "EXECUCAO DE LEMBRETE AGENDADO: Voce esta executando um lembrete que o usuario agendou anteriormente.",
                 "NAO peca mais informacoes, NAO tente agendar nada novo, NAO faca perguntas.",
                 "Execute as instrucoes diretamente e envie o resultado pronto.",
+                "REGRA CRITICA: Se as instrucoes envolverem noticias, pesquisa, informacoes atualizadas "
+                "ou qualquer dado que mude com o tempo, voce DEVE obrigatoriamente usar web_search "
+                "(com topic='news' para noticias) ou deep_research. NUNCA responda usando apenas "
+                "seu conhecimento interno para dados que mudam.",
+                "Para noticias: faca MULTIPLAS buscas com queries especificas e variadas. "
+                "Inclua SEMPRE: titulo real da noticia, fonte, data e link.",
             ]
 
             agent_channel = "web" if channel in {"web_voice", "web_text"} else "whatsapp"

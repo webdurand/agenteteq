@@ -49,6 +49,7 @@ class User(Base):
 
     chat_messages = relationship("ChatMessage", back_populates="user")
     tasks = relationship("Task", back_populates="user")
+    integrations = relationship("UserIntegration", back_populates="user", cascade="all, delete-orphan")
 
     def to_dict(self) -> dict:
         return {
@@ -86,6 +87,38 @@ class ChatMessage(Base):
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     user = relationship("User", back_populates="chat_messages")
+
+
+# ──────────────────────────── Integrations ────────────────────────────
+
+
+class UserIntegration(Base):
+    __tablename__ = "user_integrations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, ForeignKey("users.phone_number"), nullable=False)
+    provider = Column(String, nullable=False)  # ex: "google", "slack", "notion"
+    account_id = Column(String)  # ID unico no provedor (ex: sub do Google)
+    account_email = Column(String)  # Email ou nome para exibicao
+    access_token = Column(Text)
+    refresh_token = Column(Text)
+    scopes = Column(Text)  # Lista de scopes separados por virgula
+    expires_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+    user = relationship("User", back_populates="integrations")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "provider": self.provider,
+            "account_id": self.account_id,
+            "account_email": self.account_email,
+            "scopes": self.scopes.split(",") if self.scopes else [],
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            # Nao retornamos tokens para o frontend
+        }
 
 
 # ──────────────────────────── Tasks ────────────────────────────

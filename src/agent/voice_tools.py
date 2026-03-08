@@ -140,12 +140,14 @@ VOICE_TOOLS_DECLARATIONS = [
     },
     {
         "name": "web_search",
-        "description": "Pesquisa na internet e retorna resultados atualizados.",
+        "description": "Pesquisa na internet sobre qualquer assunto. Use topic='news' para noticias recentes dos ultimos N dias.",
         "parameters": {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Consulta de busca"},
-                "max_results": {"type": "integer", "description": "Numero maximo de resultados (padrao 5)"}
+                "max_results": {"type": "integer", "description": "Numero maximo de resultados (padrao 5)"},
+                "topic": {"type": "string", "description": "Tipo de busca: 'general' (padrao) ou 'news' para noticias recentes"},
+                "days": {"type": "integer", "description": "Para topic='news', numero de dias a considerar (padrao 3)"}
             },
             "required": ["query"]
         }
@@ -277,7 +279,9 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
                 from src.tools.web_search import web_search_raw
                 query = args.get("query", "")
                 max_results = int(args.get("max_results", 5) or 5)
-                return {"result": web_search_raw(query, max_results=max_results)}
+                topic = args.get("topic", "general")
+                days = int(args.get("days", 3) or 3)
+                return {"result": web_search_raw(query, max_results=max_results, topic=topic, days=days)}
 
             elif function_name == "publish_post":
                 from src.tools.blog_publisher import create_blog_tools

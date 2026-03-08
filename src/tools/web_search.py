@@ -81,15 +81,55 @@ def get_scraper_toolkit():
 # Usadas internamente pelo deep_research e sub-agentes do Team.
 # ---------------------------------------------------------------------------
 
-def web_search_raw(query: str, max_results: int = 5) -> str:
+def _tavily_search(query: str, topic: str = "general", max_results: int = 5, days: int | None = None) -> str:
+    """
+    Busca via Tavily SDK direto (bypass do wrapper Agno).
+    Suporta topic='general' ou 'news', search_depth='advanced', e days para news.
+    Retorna resultados formatados com título, snippet, fonte e URL.
+    """
+    from tavily import TavilyClient
+
+    client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
+    kwargs = {
+        "query": query,
+        "topic": topic,
+        "max_results": max_results,
+        "search_depth": "advanced",
+        "include_answer": True,
+    }
+    if topic == "news" and days:
+        kwargs["days"] = days
+
+    response = client.search(**kwargs)
+
+    parts: list[str] = []
+    answer = response.get("answer")
+    if answer:
+        parts.append(f"Resumo: {answer}\n")
+
+    for r in response.get("results", []):
+        title = r.get("title", "Sem título")
+        snippet = r.get("content", "")
+        url = r.get("url", "")
+        published = r.get("published_date", "")
+        source = urlparse(url).netloc if url else ""
+        date_str = f" ({published})" if published else ""
+        parts.append(f"**{title}** — {source}{date_str}\n{snippet}\n{url}")
+
+    return "\n\n".join(parts) if parts else "Nenhum resultado encontrado."
+
+
+def web_search_raw(query: str, max_results: int = 5, topic: str = "general", days: int = 3) -> str:
     """Busca web via provider configurado (sem notificação ao usuário)."""
     try:
         provider = os.getenv("SEARCH_PROVIDER", "duckduckgo").lower()
-        toolkit = get_search_toolkit()
-        
         if provider == "tavily":
-            return toolkit.web_search_using_tavily(query=query, max_results=max_results)
+            return _tavily_search(
+                query, topic=topic, max_results=max_results,
+                days=days if topic == "news" else None,
+            )
         else:
+            toolkit = get_search_toolkit()
             return toolkit.duckduckgo_search(query=query, max_results=max_results)
     except Exception as e:
         return f"Erro na busca: {e}"
@@ -117,15 +157,16 @@ def create_web_search_tool(notifier: StatusNotifier):
     independente de quantas tools a usem.
     """
 
-    def web_search(query: str, max_results: int = 5) -> str:
+    def web_search(query: str, max_results: int = 5, topic: str = "general", days: int = 3) -> str:
         """
-        Pesquisa rápida na internet sobre um assunto.
-        Use para buscar informações atualizadas, notícias, fatos ou
-        qualquer coisa que precise de dados recentes da web.
+        Pesquisa na internet sobre qualquer assunto.
+        Use topic='general' (padrao) para buscas gerais.
+        Use topic='news' para noticias recentes dos ultimos N dias (ajuste 'days', padrao 3).
+        Retorna resultados com titulo, snippet, fonte e link.
         """
         if notifier:
             notifier.notify("Beleza, vou dar uma olhada e já te respondo!")
-        return web_search_raw(query, max_results)
+        return web_search_raw(query, max_results, topic=topic, days=days)
 
     return web_search
 

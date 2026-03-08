@@ -30,6 +30,7 @@ from src.endpoints.admin import router as admin_router
 from src.endpoints.admin_billing import router as admin_billing_router
 from src.endpoints.billing import router as billing_router, webhook_router
 from src.endpoints.carousel import router as carousel_router
+from src.endpoints.integrations import router as integrations_router
 from src.scheduler.engine import start_scheduler, shutdown_scheduler
 from src.events import set_main_loop
 from src.db.init import ensure_tables
@@ -78,6 +79,7 @@ app.include_router(admin_billing_router)
 app.include_router(billing_router)
 app.include_router(webhook_router)
 app.include_router(carousel_router)
+app.include_router(integrations_router)
 
 
 @app.get("/")
