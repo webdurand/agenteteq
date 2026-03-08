@@ -506,7 +506,7 @@ def _fill_analytics_pg(session, analytics: dict, days: int) -> None:
     mrr = session.execute(text(
         "SELECT COALESCE(SUM(amount_cents), 0) "
         "FROM subscriptions s JOIN billing_plans p ON s.plan_code = p.code "
-        "WHERE s.status IN ('active', 'trialing')"
+        "WHERE s.status = 'active'"
     )).scalar()
     analytics["financial"]["mrr_cents"] = int(mrr or 0)
 
@@ -628,7 +628,7 @@ def _fill_analytics_sqlite(session, analytics: dict, days: int) -> None:
     mrr = session.execute(text(
         "SELECT COALESCE(SUM(amount_cents), 0) "
         "FROM subscriptions s JOIN billing_plans p ON s.plan_code = p.code "
-        "WHERE s.status IN ('active', 'trialing')"
+        "WHERE s.status = 'active'"
     )).scalar()
     analytics["financial"]["mrr_cents"] = int(mrr or 0)
 

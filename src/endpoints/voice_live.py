@@ -12,6 +12,7 @@ from src.integrations.gemini_live import GeminiLiveClient
 from src.agent.voice_tools import VOICE_TOOLS_DECLARATIONS, execute_voice_tool
 from src.memory.analytics import log_event
 from src.models.chat_messages import save_message
+from src.config.feature_gates import is_feature_enabled, check_voice_live_minutes
 
 router = APIRouter()
 LIVE_IDLE_TIMEOUT_SECONDS = int(os.getenv("VOICE_LIVE_IDLE_TIMEOUT_SECONDS", "90"))
@@ -67,7 +68,20 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
         await websocket.send_json({"type": "error", "message": "Plano ou trial expirado."})
         await websocket.close(code=1008)
         return
-        
+
+    if not is_feature_enabled(phone_number, "voice_live_enabled"):
+        await websocket.send_json({"type": "feature_blocked", "feature": "voice_live", "message": "O modo voz real-time nao esta disponivel no seu plano atual. Assine o plano Pro para usar."})
+        await websocket.close(code=1000)
+        return
+
+    minutes_msg = check_voice_live_minutes(phone_number)
+    if minutes_msg:
+        await websocket.send_json({"type": "feature_blocked", "feature": "voice_live_minutes", "message": minutes_msg})
+        await websocket.close(code=1000)
+        return
+
+    session_start_monotonic = time.monotonic()
+
     ws_manager.connect(websocket, phone_number, channel="voice_live")
     print(f"[VOICE LIVE] Cliente conectado: {phone_number}")
 
@@ -252,3 +266,13 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
         receive_task.cancel()
         await client.close()
         ws_manager.disconnect(phone_number, websocket=websocket)
+        duration_ms = int((time.monotonic() - session_start_monotonic) * 1000)
+        log_event(
+            user_id=phone_number,
+            channel="web_live",
+            event_type="voice_live_session",
+            tool_name="voice_live",
+            status="success",
+            latency_ms=duration_ms,
+        )
+        print(f"[VOICE LIVE] Sessao encerrada: {phone_number} durou {duration_ms // 1000}s")

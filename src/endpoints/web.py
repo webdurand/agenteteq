@@ -12,6 +12,7 @@ def split_into_sentences(text: str) -> list[str]:
 from src.agent.factory import create_agent_with_tools
 from src.agent.response_utils import extract_final_response
 from src.integrations.tts import get_tts
+from src.config.feature_gates import is_feature_enabled
 from src.memory.identity import get_user, update_user_name, update_last_seen, is_new_session, is_plan_active
 from src.memory.extractor import extract_and_save_facts
 from src.tools.memory_manager import add_memory
@@ -269,7 +270,8 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     audio_b64 = ""
     mime_type = "none"
 
-    if mode != "text":
+    tts_enabled = is_feature_enabled(phone_number, "tts_enabled")
+    if mode != "text" and tts_enabled:
         await websocket.send_json({"type": "status", "text": "Gerando áudio..."})
         try:
             audio_out, mime_type = await tts.synthesize(final_text)
@@ -278,6 +280,8 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
         except Exception as e:
             print(f"[WEB WS] TTS falhou, enviando só texto: {e}")
             mime_type = "browser"
+    elif mode != "text" and not tts_enabled:
+        mime_type = "browser"
 
     await asyncio.sleep(0)
 
@@ -567,16 +571,20 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                 update_last_seen(phone_number)
 
                 print(f"[WEB WS] Resposta do agente ({len(response_content)} chars): {response_content[:80]}...")
-                await websocket.send_json({"type": "status", "text": "Gerando áudio..."})
 
                 audio_b64 = ""
                 mime_type = "audio/wav"
-                try:
-                    audio_out, mime_type = await tts.synthesize(response_content)
-                    print(f"[WEB WS] TTS gerado: {len(audio_out)} bytes | mime={mime_type}")
-                    audio_b64 = base64.b64encode(audio_out).decode() if audio_out else ""
-                except Exception as e:
-                    print(f"[WEB WS] TTS falhou, enviando só texto: {e}")
+                tts_ok = is_feature_enabled(phone_number, "tts_enabled")
+                if tts_ok:
+                    await websocket.send_json({"type": "status", "text": "Gerando áudio..."})
+                    try:
+                        audio_out, mime_type = await tts.synthesize(response_content)
+                        print(f"[WEB WS] TTS gerado: {len(audio_out)} bytes | mime={mime_type}")
+                        audio_b64 = base64.b64encode(audio_out).decode() if audio_out else ""
+                    except Exception as e:
+                        print(f"[WEB WS] TTS falhou, enviando só texto: {e}")
+                        mime_type = "browser"
+                else:
                     mime_type = "browser"
 
                 follow_up = _needs_follow_up(response_content)

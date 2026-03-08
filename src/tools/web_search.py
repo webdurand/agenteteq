@@ -3,6 +3,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from src.integrations.status_notifier import StatusNotifier
+from src.config.feature_gates import check_daily_feature_limit, log_feature_usage
 
 _BLOCKED_DOMAINS = ("instagram.com", "facebook.com", "linkedin.com", "tiktok.com", "x.com", "twitter.com")
 
@@ -149,7 +150,7 @@ def fetch_page_raw(url: str) -> str:
 # O flag _already_notified evita spam quando o agente faz múltiplas buscas.
 # ---------------------------------------------------------------------------
 
-def create_web_search_tool(notifier: StatusNotifier):
+def create_web_search_tool(notifier: StatusNotifier, user_id: str = None):
     """
     Cria a tool web_search com StatusNotifier injetado.
     A deduplicação de mensagens é gerenciada pelo próprio StatusNotifier,
@@ -164,9 +165,16 @@ def create_web_search_tool(notifier: StatusNotifier):
         Use topic='news' para noticias recentes dos ultimos N dias (ajuste 'days', padrao 3).
         Retorna resultados com titulo, snippet, fonte e link.
         """
+        if user_id:
+            limit_msg = check_daily_feature_limit(user_id, "max_searches_daily")
+            if limit_msg:
+                return limit_msg
         if notifier:
             notifier.notify("Beleza, vou dar uma olhada e já te respondo!")
-        return web_search_raw(query, max_results, topic=topic, days=days)
+        result = web_search_raw(query, max_results, topic=topic, days=days)
+        if user_id:
+            log_feature_usage(user_id, "max_searches_daily")
+        return result
 
     return web_search
 

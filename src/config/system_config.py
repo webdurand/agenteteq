@@ -20,6 +20,16 @@ DEFAULT_CONFIG = {
     "max_tasks_per_user_daily:trial": "5",
     "max_tasks_per_user_daily:paid": "50",
     "admin_bypass_limits": "true",
+    "voice_live_enabled:trial": "false",
+    "voice_live_enabled:paid": "true",
+    "voice_live_max_minutes_daily:trial": "0",
+    "voice_live_max_minutes_daily:paid": "20",
+    "tts_enabled:trial": "false",
+    "tts_enabled:paid": "true",
+    "max_searches_daily:trial": "10",
+    "max_searches_daily:paid": "50",
+    "max_deep_research_daily:trial": "1",
+    "max_deep_research_daily:paid": "3",
 }
 
 

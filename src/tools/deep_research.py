@@ -12,6 +12,7 @@ from src.tools.web_search import (
     get_search_toolkit,
     get_scraper_toolkit,
 )
+from src.config.feature_gates import check_daily_feature_limit, log_feature_usage
 
 
 def _get_light_model():
@@ -154,6 +155,9 @@ def create_deep_research_tool(notifier: StatusNotifier, user_id: str) -> Callabl
         Para buscas simples e rápidas, prefira a tool web_search.
         """
         print(f"[DEEP_RESEARCH] Iniciando pesquisa sobre: {topic}")
+        limit_msg = check_daily_feature_limit(user_id, "max_deep_research_daily")
+        if limit_msg:
+            return limit_msg
         if notifier:
             notifier.notify("Beleza, vou dar uma olhada e já te respondo!")
 
@@ -173,6 +177,7 @@ def create_deep_research_tool(notifier: StatusNotifier, user_id: str) -> Callabl
             final_content = initial_results
 
         _save_research_to_memory(topic, final_content, user_id)
+        log_feature_usage(user_id, "max_deep_research_daily")
 
         print(f"[DEEP_RESEARCH] Pesquisa concluída.")
         return final_content

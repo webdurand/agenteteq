@@ -8,6 +8,7 @@ from sqlalchemy import func
 from src.auth.deps import get_current_user
 from src.billing.service import is_subscription_active
 from src.config.system_config import get_config_for_plan
+from src.config.feature_gates import get_all_usage_summary
 from src.db.models import BackgroundTask, InAppCampaign
 from src.db.session import get_db
 from src.tools.task_manager import add_task, get_tasks, complete_task, reopen_task, delete_task
@@ -172,40 +173,24 @@ async def api_delete_reminder(reminder_id: int, background_tasks: BackgroundTask
 @router.get("/usage/limits")
 async def api_get_usage_limits(current_user: dict = Depends(get_current_user)):
     user_id = current_user["phone_number"]
-    is_premium = is_subscription_active(user_id)
-    plan_type = "paid" if is_premium else "trial"
-    plan_name = "premium" if is_premium else "free"
+    return get_all_usage_summary(user_id)
 
-    runs_limit = int(get_config_for_plan("max_tasks_per_user_daily", plan_type, "5"))
-    now = datetime.now(timezone.utc)
-    cutoff = (now - timedelta(hours=24)).isoformat()
 
-    with get_db() as session:
-        runs_used = session.query(func.count(BackgroundTask.id)).filter(
-            BackgroundTask.user_id == user_id,
-            BackgroundTask.created_at >= cutoff,
-        ).scalar() or 0
-
-        earliest_in_window = session.query(func.min(BackgroundTask.created_at)).filter(
-            BackgroundTask.user_id == user_id,
-            BackgroundTask.created_at >= cutoff,
-        ).scalar()
-
-    runs_remaining = max(0, runs_limit - int(runs_used))
-
-    if earliest_in_window:
-        earliest_dt = _parse_iso_dt(str(earliest_in_window))
-        resets_at = (earliest_dt + timedelta(hours=24)) if earliest_dt else (now + timedelta(hours=24))
-    else:
-        resets_at = now + timedelta(hours=24)
-
-    return {
-        "plan_name": plan_name,
-        "runs_limit": runs_limit,
-        "runs_used": int(runs_used),
-        "runs_remaining": runs_remaining,
-        "resets_at": resets_at.isoformat(),
-    }
+# --- Plan Features (for frontend gating) ---
+@router.get("/plan/features")
+async def api_get_plan_features(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["phone_number"]
+    summary = get_all_usage_summary(user_id)
+    features = summary.get("features", {})
+    result: dict = {"plan_name": summary["plan_name"]}
+    for key, info in features.items():
+        if "limit" in info:
+            result[key] = info["enabled"]
+            result[f"{key}_limit"] = info.get("limit", 0)
+            result[f"{key}_remaining"] = info.get("remaining", 0)
+        else:
+            result[key] = info["enabled"]
+    return result
 
 
 # --- Campaign Popup ---

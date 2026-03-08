@@ -13,16 +13,16 @@ def create_agent_with_tools(
     channel: str = "whatsapp",
     extra_instructions: list[str] | None = None,
 ):
+    phone = user_id or session_id
     search_tools = [
-        create_web_search_tool(notifier),
+        create_web_search_tool(notifier, user_id=phone),
         create_fetch_page_tool(notifier),
-        create_deep_research_tool(notifier, user_id or session_id),
+        create_deep_research_tool(notifier, phone),
     ]
     if include_explore:
         search_tools.append(create_explore_site_tool(notifier))
 
     # Injeta Google tools se o usuario tiver integracoes ativas
-    phone = user_id or session_id
     google_instructions = []
     try:
         read_emails, get_calendar_events, create_calendar_event = create_google_tools(phone)
