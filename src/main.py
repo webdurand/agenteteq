@@ -58,9 +58,18 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 _frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+_allowed_origins = [
+    _frontend_origin,
+    "https://teq.ia.br",
+    "https://agenteteq-front.vercel.app",
+    "http://localhost:5173",
+    "http://localhost:3000",
+]
+# Deduplica mantendo ordem
+_allowed_origins = list(dict.fromkeys(_allowed_origins))
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[_frontend_origin, "http://localhost:5173", "http://localhost:3000"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
