@@ -15,7 +15,7 @@ from src.integrations.status_notifier import StatusNotifier
 from src.agent.factory import create_agent_with_tools
 from src.agent.response_utils import extract_final_response, split_whatsapp_messages
 from src.agent.prompts import GREETING_INJECTION, CONTINUATION_INJECTION
-from src.memory.identity import get_user, create_user, update_user_name, update_last_seen, is_new_session
+from src.memory.identity import get_user, create_user, update_user_name, update_last_seen, is_new_session, is_plan_active
 from src.memory.knowledge import get_vector_db
 from src.memory.extractor import extract_and_save_facts
 from src.tools.memory_manager import add_memory
@@ -382,6 +382,16 @@ async def orchestrate_message(event: dict):
             )
             return
 
+        if not is_plan_active(user):
+            print(f"[WHATSAPP] Plano expirado para {from_number}. Bloqueando.")
+            frontend_url = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+            await whatsapp_client.send_text_message(
+                from_number,
+                f"Seu plano expirou! Renove em {frontend_url} para continuar usando o Teq.",
+                reply_to_message_id=message_id
+            )
+            return
+
         aggregated_text = event.get("aggregated_text", "")
 
         pending_choice = _get_pending_choice(from_number)
@@ -502,6 +512,11 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
         return
 
     print(f"[PROCESS] Texto agregado ({len(agent_images)} imgs, {len(agent_audios)} audios): {text_body[:50]}...")
+
+    from src.queue.task_queue import get_usage_context
+    usage_ctx = get_usage_context(from_number)
+    if usage_ctx:
+        text_body = f"{usage_ctx}\n\n{text_body}"
 
     if not injection and text_body:
         try:

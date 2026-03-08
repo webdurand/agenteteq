@@ -27,84 +27,127 @@ from src.models.subscriptions import upsert_subscription
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
-class SubscribeRequest(BaseModel):
-    price_id: Optional[str] = None
+class SetupRequest(BaseModel):
+    plan_code: Optional[str] = None
+
+class ActivateRequest(BaseModel):
+    plan_code: str
+    setup_intent_id: str
 
 class UpgradeRequest(BaseModel):
     plan_code: str
-    
-@router.post("/subscribe")
-def subscribe(req: SubscribeRequest, user: dict = Depends(get_current_user)):
-    customer_id = get_or_create_customer(user)
-    
-    active_plan = None
-    if req.price_id:
-        active_plan = get_plan(req.price_id)
-        if not active_plan:
-            from src.models.subscriptions import get_plan_by_price_id
-            active_plan = get_plan_by_price_id(req.price_id)
-        
-    if not active_plan:
-        active_plan = get_default_active_plan()
-        
-    stripe_price_id = (active_plan["stripe_price_id"] if active_plan else None) or os.getenv("STRIPE_PRICE_ID_DEFAULT")
-    
-    if not stripe_price_id:
+
+
+@router.post("/setup")
+def setup_checkout(req: SetupRequest, user: dict = Depends(get_current_user)):
+    """
+    Step 1: Create Stripe customer + SetupIntent to collect the card.
+    No subscription is created yet — trial only starts after /activate.
+    """
+    # Validate the plan exists and has a stripe_price_id
+    plan = None
+    if req.plan_code:
+        plan = get_plan(req.plan_code)
+    if not plan:
+        plan = get_default_active_plan()
+    if not plan or not plan.get("stripe_price_id"):
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail="Plano inválido: O ID de preço do Stripe (Price ID) não foi configurado. Edite este plano no painel de Admin e adicione o Price ID (ex: price_1Pxyz...)."
         )
-        
+
+    customer_id = get_or_create_customer(user)
     try:
-        trial_days = active_plan["trial_days"] if active_plan else 7
-        subscription = create_subscription(customer_id, stripe_price_id, trial_days=trial_days)
-        
-        # If it has a trial, Stripe returns a pending_setup_intent. 
-        # If no trial, it returns a payment_intent in latest_invoice.
-        client_secret = None
-        if subscription.get("pending_setup_intent"):
-            client_secret = subscription["pending_setup_intent"].get("client_secret")
-        elif subscription.get("latest_invoice") and subscription["latest_invoice"].get("payment_intent"):
-            client_secret = subscription["latest_invoice"]["payment_intent"].get("client_secret")
+        intent = create_setup_intent(customer_id)
+        return {
+            "client_secret": intent.client_secret,
+            "setup_intent_id": intent.id,
+            "customer_id": customer_id,
+            "plan_code": plan["code"],
+        }
+    except Exception:
+        logger.exception("Erro ao criar SetupIntent")
+        raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
-        # Fallback: alguns fluxos do Stripe não retornam client_secret na criação da subscription.
-        # Nesses casos criamos um SetupIntent explícito para o frontend coletar o cartão.
-        if not client_secret:
-            setup_intent = create_setup_intent(customer_id)
-            client_secret = setup_intent.client_secret
 
-        if not client_secret:
-            raise HTTPException(status_code=500, detail="Failed to generate client secret")
+@router.post("/activate")
+def activate_subscription(req: ActivateRequest, user: dict = Depends(get_current_user)):
+    """
+    Step 2: Card was confirmed. Now create the subscription with the saved payment method.
+    Trial starts only here, after the card is validated.
+    """
+    import stripe
+    from datetime import datetime, timezone
 
-        # Salva imediatamente no banco local (não depender só do webhook)
-        from datetime import datetime, timezone
+    plan = get_plan(req.plan_code)
+    if not plan or not plan.get("stripe_price_id"):
+        raise HTTPException(status_code=400, detail="Plano inválido ou sem Price ID")
+
+    customer_id = get_or_create_customer(user)
+
+    # Retrieve the SetupIntent to get the payment_method
+    try:
+        si = stripe.SetupIntent.retrieve(req.setup_intent_id)
+    except Exception:
+        logger.exception("Erro ao recuperar SetupIntent")
+        raise HTTPException(status_code=400, detail="SetupIntent inválido")
+
+    if si.status != "succeeded":
+        raise HTTPException(status_code=400, detail="Cartão ainda não foi confirmado")
+
+    payment_method_id = si.payment_method
+    if not payment_method_id:
+        raise HTTPException(status_code=400, detail="Nenhum método de pagamento encontrado no SetupIntent")
+
+    # Attach payment method to customer and set as default
+    try:
+        stripe.PaymentMethod.attach(payment_method_id, customer=customer_id)
+        stripe.Customer.modify(
+            customer_id,
+            invoice_settings={"default_payment_method": payment_method_id},
+        )
+    except Exception:
+        logger.exception("Erro ao vincular método de pagamento")
+        raise HTTPException(status_code=500, detail="Erro ao salvar cartão")
+
+    # Now create the subscription with the card already saved
+    try:
+        trial_days = plan.get("trial_days", 0)
+        params = {
+            "customer": customer_id,
+            "items": [{"price": plan["stripe_price_id"]}],
+            "default_payment_method": payment_method_id,
+            "expand": ["latest_invoice.payment_intent"],
+        }
+        if trial_days > 0:
+            params["trial_period_days"] = trial_days
+
+        subscription = stripe.Subscription.create(**params)
+
         def ts_to_iso(ts):
             return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else None
 
-        try:
-            upsert_subscription({
-                "user_id": user["phone_number"],
-                "plan_code": active_plan["code"],
-                "provider": "stripe",
-                "provider_customer_id": customer_id,
-                "provider_subscription_id": subscription["id"],
-                "status": subscription["status"],
-                "trial_start": ts_to_iso(subscription.get("trial_start")),
-                "trial_end": ts_to_iso(subscription.get("trial_end")),
-                "current_period_start": ts_to_iso(subscription.get("current_period_start")),
-                "current_period_end": ts_to_iso(subscription.get("current_period_end")),
-                "cancel_at_period_end": subscription.get("cancel_at_period_end", False),
-            })
-        except Exception:
-            pass  # Não bloquear — webhook vai sincronizar depois
+        upsert_subscription({
+            "user_id": user["phone_number"],
+            "plan_code": plan["code"],
+            "provider": "stripe",
+            "provider_customer_id": customer_id,
+            "provider_subscription_id": subscription["id"],
+            "status": subscription["status"],
+            "trial_start": ts_to_iso(subscription.get("trial_start")),
+            "trial_end": ts_to_iso(subscription.get("trial_end")),
+            "current_period_start": ts_to_iso(subscription.get("current_period_start")),
+            "current_period_end": ts_to_iso(subscription.get("current_period_end")),
+            "cancel_at_period_end": subscription.get("cancel_at_period_end", False),
+        })
 
         return {
             "subscription_id": subscription["id"],
-            "client_secret": client_secret,
             "status": subscription["status"],
-            "plan_code": active_plan["code"],
+            "plan_code": plan["code"],
+            "plan_name": plan["name"],
         }
-    except Exception as e:
+    except Exception:
         logger.exception("Erro ao criar assinatura")
         raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
