@@ -420,7 +420,9 @@ VITE_WS_URL=ws://localhost:8000   # em produção: wss://seu-dominio.com
 - **Python & FastAPI**: Fornecem agilidade e facilidade para hospedar webhooks.
 - **Agno**: Framework para construção de agentes stateful.
 - **Agno Team**: Usado para orquestração multi-agent nativa (em vez de implementar ThreadPoolExecutor custom). Suporta execução paralela no modo `broadcast`.
-- **Camada de Dados ORM (`src/db/`)**: Toda a persistência é centralizada em SQLAlchemy ORM. `db/session.py` provê um engine único (PG via `DATABASE_URL` ou SQLite `app.db` em dev) e `db/models.py` contém todos os modelos declarativos. Nenhum módulo precisa saber qual backend está em uso — o ORM abstrai isso. A criação de tabelas é feita uma única vez no startup via `db/init.py` → `Base.metadata.create_all()`.
+- **Camada de Dados ORM (`src/db/`)**: Toda a persistência é centralizada em SQLAlchemy ORM. `db/session.py` provê um engine único (PG via `DATABASE_URL` ou SQLite `app.db` em dev) e `db/models.py` contém todos os modelos declarativos. Nenhum módulo precisa saber qual backend está em uso — o ORM abstrai isso. A criação de tabelas é feita no startup via `db/init.py` → `Base.metadata.create_all()`.
+- **Migrações (Alembic)**: Infraestrutura de migrações configurada em `alembic/`. Migrations existentes: baseline + `otp_codes`. O `ensure_tables()` atual continua funcionando para criação de tabelas; Alembic é usado para alterações de schema que `CREATE TABLE IF NOT EXISTS` não suporta (renomear colunas, alterar tipos, etc.).
+- **Testes Automatizados**: Suite `pytest` em `tests/` com 25 testes cobrindo OTP, autenticação, identidade e criptografia de tokens. Usa SQLite in-memory para isolamento.
 - **Identidade e Onboarding Determinístico**: Reduz custos de LLM e garante uma experiência controlada ao coletar os dados iniciais do usuário.
 - **Módulo de Memória**: Utiliza NeonDB com PgVector e a Knowledge Base do Agno para armazenar memórias do usuário em background e injetar contexto de forma "Agentic" ou "Always-on".
 - **Desacoplamento**: LLM, transcrição, WhatsApp provider, search provider e scraper provider são todos configuráveis via `.env`. Trocar qualquer um exige apenas mudar a variável de ambiente.
@@ -437,7 +439,10 @@ VITE_WS_URL=ws://localhost:8000   # em produção: wss://seu-dominio.com
 - **Error Handling**: Endpoints nunca expõem `str(e)` ao cliente; erros são logados server-side e retornam mensagem genérica.
 - **Upload Validation**: Imagens são validadas por tamanho (10MB) e magic bytes antes do upload ao Cloudinary.
 - **SSRF Protection**: O worker de download valida URLs contra IPs privados e mantém allowlist de hosts confiáveis.
-- **Logging Estruturado**: `logging.basicConfig` configurado no startup com formato timestamped; módulos críticos usam `logger` em vez de `print()`.
+- **Logging Estruturado**: `logging.basicConfig` configurado no startup com formato timestamped; **todos** os módulos usam `logger` (zero `print()` no código de produção).
+- **Sentry**: Integração opcional via `SENTRY_DSN`. Quando configurado, captura exceções e traces automaticamente. Sem a env var, é no-op.
+- **Tokens OAuth Encriptados**: Tokens de integrações (Google, etc.) são encriptados em repouso com Fernet (`TOKEN_ENCRYPTION_KEY`). Sem a chave, tokens ficam em plaintext (retrocompatível).
+- **password_hash Isolado**: O campo `password_hash` foi removido de `User.to_dict()` — nunca é serializado em respostas. Funções dedicadas (`get_password_hash`, `get_password_hash_by_email`) buscam o hash diretamente do ORM quando necessário para verificação.
 
 ## Configuração de Providers
 
@@ -451,6 +456,8 @@ VITE_WS_URL=ws://localhost:8000   # em produção: wss://seu-dominio.com
 | Scraping | `SCRAPER_PROVIDER` | `jina` | `jina`, `newspaper4k`, `crawl4ai` |
 | Memória | `MEMORY_MODE` | `agentic` | `agentic`, `always-on` |
 | Agendamentos | `scheduler.db` | SQLite local | — (persistência automática) |
+| Sentry | `SENTRY_DSN` | — (desativado) | DSN do projeto Sentry |
+| Token Encryption | `TOKEN_ENCRYPTION_KEY` | — (plaintext) | Chave para encriptar tokens OAuth |
 | TTS | `TTS_PROVIDER` | `gemini` | `gemini`, `openai`, `elevenlabs`, `browser` |
 
 ## Autenticação e Registro
@@ -467,7 +474,8 @@ O sistema de autenticação suporta login manual (email+senha) com 2FA via Whats
 
 - `passwords.py`: Hashing e verificação com `bcrypt` puro.
 - `jwt.py`: Criação e validação de tokens usando `PyJWT`.
-- `otp.py`: Geração e verificação de códigos em memória RAM, puro, desacoplado do envio.
+- `otp.py`: Geração e verificação de códigos OTP persistidos em PostgreSQL (tabela `otp_codes`), com expiração, limite de 3 tentativas e cleanup periódico via scheduler.
+- `crypto.py`: Encriptação/decriptação de tokens OAuth em repouso usando Fernet (AES). Retrocompatível com tokens plaintext legados.
 - `google.py`: Isola as chamadas ao SDK do Google para validação do token.
 - `deps.py`: Dependências FastAPI para extrair JWT e validar plano ativo.
 - `routes.py`: Endpoints REST, que orquestram a verificação de senha/token e o envio de mensagens chamando o `whatsapp_client`.

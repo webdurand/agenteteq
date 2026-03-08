@@ -13,13 +13,14 @@ from src.tools.web_search import (
     get_scraper_toolkit,
 )
 from src.config.feature_gates import check_daily_feature_limit, log_feature_usage
+import logging
 
+logger = logging.getLogger(__name__)
 
 def _get_light_model():
     """Modelo leve e rápido para o agente decisor interno."""
     from agno.models.google import Gemini
     return Gemini(id="gemini-2.5-flash")
-
 
 def _decide_if_needs_deep_research(topic: str, initial_results: str) -> tuple[bool, list[str]]:
     """
@@ -68,7 +69,6 @@ SUFICIENTE
 
     return needs_deep, subtopics
 
-
 def _run_deep_team(topic: str, subtopics: list[str]) -> str:
     """
     Cria um Team Agno no modo broadcast com um agente por sub-tópico.
@@ -112,7 +112,6 @@ def _run_deep_team(topic: str, subtopics: list[str]) -> str:
         name="Deep Research Team",
     )
 
-
 def _save_research_to_memory(topic: str, summary: str, user_id: str) -> None:
     """Salva um trecho da pesquisa na memória do usuário para referência futura."""
     try:
@@ -125,8 +124,7 @@ def _save_research_to_memory(topic: str, summary: str, user_id: str) -> None:
                 user_id=user_id,
             )
     except Exception as e:
-        print(f"[DEEP_RESEARCH] Erro ao salvar pesquisa na memória: {e}")
-
+        logger.error("Erro ao salvar pesquisa na memória: %s", e)
 
 # ---------------------------------------------------------------------------
 # Factory pública
@@ -154,7 +152,7 @@ def create_deep_research_tool(notifier: StatusNotifier, user_id: str) -> Callabl
         
         Para buscas simples e rápidas, prefira a tool web_search.
         """
-        print(f"[DEEP_RESEARCH] Iniciando pesquisa sobre: {topic}")
+        logger.info("Iniciando pesquisa sobre: %s", topic)
         limit_msg = check_daily_feature_limit(user_id, "max_deep_research_daily")
         if limit_msg:
             return limit_msg
@@ -163,23 +161,23 @@ def create_deep_research_tool(notifier: StatusNotifier, user_id: str) -> Callabl
 
         # Busca inicial para avaliar o escopo
         initial_results = web_search_raw(topic, max_results=5)
-        print(f"[DEEP_RESEARCH] Resultados iniciais obtidos. Analisando necessidade de aprofundamento...")
+        logger.info("Resultados iniciais obtidos. Analisando necessidade de aprofundamento...")
 
         needs_deep, subtopics = _decide_if_needs_deep_research(topic, initial_results)
 
         if needs_deep and subtopics:
-            print(f"[DEEP_RESEARCH] Aprofundamento necessário. Sub-tópicos: {subtopics}")
+            logger.info("Aprofundamento necessário. Sub-tópicos: %s", subtopics)
             if notifier:
                 notifier.notify("Vou detalhar mais pra te dar uma resposta mais precisa!")
             final_content = _run_deep_team(topic, subtopics)
         else:
-            print(f"[DEEP_RESEARCH] Resultados iniciais suficientes.")
+            logger.info("Resultados iniciais suficientes.")
             final_content = initial_results
 
         _save_research_to_memory(topic, final_content, user_id)
         log_feature_usage(user_id, "max_deep_research_daily")
 
-        print(f"[DEEP_RESEARCH] Pesquisa concluída.")
+        logger.info("Pesquisa concluída.")
         return final_content
 
     return deep_research

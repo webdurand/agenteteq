@@ -3,6 +3,9 @@ from agno.models.google import Gemini
 
 from src.memory.knowledge import get_vector_db
 from src.tools.memory_manager import add_memory
+import logging
+
+logger = logging.getLogger(__name__)
 
 def extract_and_save_facts(user_id: str, message: str, response: str) -> None:
     """
@@ -44,5 +47,5 @@ Assistente: {response}
         
     fatos = [f.strip() for f in content.split(";") if f.strip()]
     for fato in fatos:
-        print(f"[MEMORY] Fato extraído em background: {fato}")
+        logger.info("Fato extraído em background: %s", fato)
         add_memory(fato, user_id)

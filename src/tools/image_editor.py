@@ -9,12 +9,14 @@ from src.events import emit_event_sync
 import cloudinary
 import cloudinary.uploader
 
-from src.integrations.image_storage import upload_user_image, _ensure_cloudinary_config
+from src.integrations.image_storage import upload_user_image, _ensure_cloudinary_config, convert_to_webp
 from src.db.session import get_db
 from src.db.models import ImageSession
+import logging
+
+logger = logging.getLogger(__name__)
 
 _ensure_cloudinary_config()
-
 
 def _upsert_image_session(session_id: str, image_type: str, url: str, index: int = 0):
     with get_db() as session:
@@ -32,7 +34,6 @@ def _upsert_image_session(session_id: str, image_type: str, url: str, index: int
                 image_url=url,
             ))
 
-
 def _get_image_sessions(session_id: str) -> list:
     with get_db() as session:
         rows = session.query(ImageSession).filter_by(
@@ -40,18 +41,15 @@ def _get_image_sessions(session_id: str) -> list:
         ).order_by(ImageSession.image_index).all()
         return [{"image_type": r.image_type, "image_url": r.image_url} for r in rows]
 
-
 def store_session_images(session_id: str, images: list[bytes]):
     """Armazena imagens enviadas pelo usuário (originais) fazendo upload pro Cloudinary."""
     for i, img_bytes in enumerate(images):
         url = upload_user_image(session_id, img_bytes)
         _upsert_image_session(session_id, "original", url, i)
 
-
 def store_generated_image(session_id: str, image_url: str):
     """Armazena a URL da última imagem gerada/editada."""
     _upsert_image_session(session_id, "generated", image_url, 0)
-
 
 def get_session_images(session_id: str) -> dict:
     rows = _get_image_sessions(session_id)
@@ -60,11 +58,9 @@ def get_session_images(session_id: str) -> dict:
         "last_generated": next((r["image_url"] for r in rows if r["image_type"] == "generated"), None)
     }
 
-
 def clear_session_images(session_id: str):
     with get_db() as session:
         session.query(ImageSession).filter_by(session_id=session_id).delete()
-
 
 def _try_recover_last_image(user_id: str) -> str | None:
     """
@@ -87,14 +83,13 @@ def _try_recover_last_image(user_id: str) -> str | None:
                 urls = re.findall(r'https?://[^\s]+\.(?:jpg|jpeg|png|webp)', text)
             if urls:
                 url = urls[-1]
-                print(f"[IMAGE_EDITOR] Recuperando última imagem do histórico: {url}")
+                logger.info("Recuperando última imagem do histórico: %s", url)
                 return url
 
     except Exception as e:
-        print(f"[IMAGE_EDITOR] Falha ao recuperar imagem do histórico: {e}")
+        logger.error("Falha ao recuperar imagem do histórico: %s", e)
 
     return None
-
 
 async def _process_edit_background(
     user_id: str,
@@ -112,12 +107,23 @@ async def _process_edit_background(
             "prompt": edit_prompt[:100],
         })
 
+        # Persiste placeholder no DB para sobreviver a refresh (canais web)
+        if channel in ("web", "web_voice", "web_text"):
+            try:
+                import json as _json
+                from src.models.chat_messages import save_message
+                placeholder = "__IMAGE_EDITING__" + _json.dumps({"prompt": edit_prompt[:100]})
+                await asyncio.to_thread(save_message, user_id, user_id, "agent", placeholder)
+            except Exception as e:
+                logger.error("Erro ao persistir placeholder de edição: %s", e)
+
         result_bytes = await provider.edit(edit_prompt, reference_bytes, aspect_ratio=aspect_ratio)
 
         loop = asyncio.get_event_loop()
 
         def _upload():
-            file_obj = io.BytesIO(result_bytes)
+            webp_bytes = convert_to_webp(result_bytes)
+            file_obj = io.BytesIO(webp_bytes)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             return cloudinary.uploader.upload(
                 file_obj,
@@ -129,7 +135,7 @@ async def _process_edit_background(
         upload_result = await loop.run_in_executor(None, _upload)
         image_url = upload_result.get("secure_url")
         store_generated_image(user_id, image_url)
-        print(f"[IMAGE_EDITOR] Imagem editada: {image_url}")
+        logger.info("Imagem editada: %s", image_url)
 
         from src.events_broadcast import emit_action_log
         await emit_action_log(user_id, "Imagem editada", edit_prompt[:100], channel)
@@ -141,19 +147,27 @@ async def _process_edit_background(
                 "prompt": edit_prompt[:100],
             })
 
+            # Atualiza o placeholder __IMAGE_EDITING__ com o resultado
             try:
-                from src.models.chat_messages import save_message
+                from src.models.chat_messages import update_message_by_prefix
                 formatted = f"Pronto! Aqui está a imagem editada:\n{image_url}"
-                await asyncio.to_thread(save_message, user_id, user_id, "agent", formatted)
+                updated = await asyncio.to_thread(
+                    update_message_by_prefix, user_id,
+                    "__IMAGE_EDITING__",
+                    formatted,
+                )
+                if not updated:
+                    from src.models.chat_messages import save_message
+                    await asyncio.to_thread(save_message, user_id, user_id, "agent", formatted)
             except Exception as e:
-                print(f"[IMAGE_EDITOR] Erro ao persistir mensagem: {e}")
+                logger.error("Erro ao persistir mensagem: %s", e)
 
         elif channel in ("whatsapp_text", "whatsapp"):
             try:
                 from src.integrations.whatsapp import whatsapp_client
                 await whatsapp_client.send_image(user_id, image_url, caption="Aqui está a imagem editada!")
             except Exception as e:
-                print(f"[IMAGE_EDITOR] Erro ao enviar imagem via WhatsApp: {e}")
+                logger.error("Erro ao enviar imagem via WhatsApp: %s", e)
 
         try:
             from src.models.carousel import create_carousel, update_carousel_status
@@ -163,26 +177,32 @@ async def _process_edit_background(
             update_carousel_status(cid, "done", slide)
             emit_event_sync(user_id, "carousel_generated")
         except Exception as e:
-            print(f"[IMAGE_EDITOR] Erro ao salvar na galeria: {e}")
+            logger.error("Erro ao salvar na galeria: %s", e)
 
         from src.integrations.image_storage import describe_and_store_images
         await describe_and_store_images(user_id, [result_bytes], pre_uploaded_urls=[image_url])
 
     except Exception as e:
         import traceback
-        print(f"[IMAGE_EDITOR] Erro na edição: {e}\n{traceback.format_exc()}")
+        logger.error("Erro na edição: %s\n%s", e, traceback.format_exc())
 
-        try:
-            from src.endpoints.web import ws_manager
-            await ws_manager.send_personal_message(user_id, {
-                "type": "image_edit_ready",
-                "image_url": None,
-                "error": str(e),
-                "prompt": edit_prompt[:100],
-            })
-        except Exception:
-            pass
-
+        if channel in ("web", "web_voice", "web_text"):
+            try:
+                from src.endpoints.web import ws_manager
+                await ws_manager.send_personal_message(user_id, {
+                    "type": "image_edit_ready",
+                    "image_url": None,
+                    "error": str(e),
+                    "prompt": edit_prompt[:100],
+                })
+                from src.models.chat_messages import update_message_by_prefix
+                await asyncio.to_thread(
+                    update_message_by_prefix, user_id,
+                    "__IMAGE_EDITING__",
+                    "❌ Erro ao editar a imagem. Tente novamente.",
+                )
+            except Exception:
+                pass
 
 def create_image_editor_tools(user_id: str, channel: str = "web"):
     from src.tools.image_generation.base import resolve_aspect_ratio
@@ -261,11 +281,11 @@ def create_image_editor_tools(user_id: str, channel: str = "web"):
         source_label = "original" if reference_url == (originals[0] if originals else None) else "última gerada"
         aspect_ratio = resolve_aspect_ratio(format)
 
-        print(f"[IMAGE_EDITOR] edit_image_tool | user={user_id} | channel={channel} | source={source} ({source_label}) | format={format} ({aspect_ratio}) | prompt='{edit_instructions[:80]}'")
+        logger.info("edit_image_tool | user=%s | channel=%s | source=%s (%s) | format=%s (%s) | prompt='%s'", user_id, channel, source, source_label, format, aspect_ratio, edit_instructions[:80])
 
         import httpx
         from src.queue.task_queue import enqueue_task
-        
+
         result = enqueue_task(user_id, "image_edit", channel, {
             "edit_instructions": edit_instructions,
             "reference_url": reference_url,

@@ -12,7 +12,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+import logging
 
+logger = logging.getLogger(__name__)
 
 def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
     """
@@ -43,9 +45,12 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
         Args:
             task_instructions: O que o seu 'eu do futuro' deve fazer quando o job disparar.
                                Deve ser UM PROMPT COMPLETO e EXTREMAMENTE ESPECIFICO — diga quais tools chamar.
+                               Voce pode usar QUALQUER tool disponivel, incluindo generate_carousel para gerar imagens.
+                               A imagem gerada sera entregue automaticamente pelo canal escolhido (web, WhatsApp ou ambos).
                                Ex: "Buscar na internet com web_search se a novidade X saiu hoje e avisar o usuario."
                                Ex: "Execute list_tasks, veja as pendentes e mande um resumo para o usuario."
                                Ex: "Pesquisar com deep_research sobre Y e enviar um relatorio."
+                               Ex: "Gere uma imagem aleatoria com generate_carousel (1 slide, formato 1080x1080, prompt criativo, use_reference_image=False)."
             trigger_type: Tipo de gatilho — "date" (unico), "cron" (recorrente), "interval" (por intervalo).
             minutes_from_now: PREFERIDO para disparo unico relativo. Numero de minutos a partir de agora.
                               Ex: 1 para "daqui 1 minuto", 60 para "daqui 1 hora".
@@ -66,7 +71,7 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
         Returns:
             Confirmacao com o ID do job criado ou mensagem de erro.
         """
-        print(f"[SCHEDULER] schedule_message | user={user_phone} | trigger={trigger_type} | minutes_from_now={minutes_from_now} | run_date={run_date} | cron={cron_expression} | interval={interval_minutes}")
+        logger.info("schedule_message | user=%s | trigger=%s | minutes_from_now=%s | run_date=%s | cron=%s | interval=%s", user_phone, trigger_type, minutes_from_now, run_date, cron_expression, interval_minutes)
         try:
             import zoneinfo
             from src.scheduler.engine import get_scheduler
@@ -130,13 +135,13 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
             if trigger_type == "date":
                 if minutes_from_now is not None:
                     run_dt = datetime.now(timezone.utc) + timedelta(minutes=minutes_from_now)
-                    print(f"[SCHEDULER] Agendando para daqui {minutes_from_now} minuto(s): {run_dt.isoformat()}")
+                    logger.info("Agendando para daqui %s minuto(s): %s", minutes_from_now, run_dt.isoformat())
                 elif run_date:
                     run_dt = datetime.fromisoformat(run_date)
                     if run_dt.tzinfo is None:
                         # Assumir que esta no timezone do usuario
                         run_dt = run_dt.replace(tzinfo=user_tz)
-                    print(f"[SCHEDULER] Agendando para data especifica: {run_dt.isoformat()}")
+                    logger.info("Agendando para data especifica: %s", run_dt.isoformat())
                 else:
                     return "Para agendar um disparo unico, informe minutes_from_now (ex: 5) ou run_date (ISO 8601)."
 
@@ -148,7 +153,7 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
                     misfire_grace_time=300,
                 )
                 friendly_time = run_dt.strftime("%d/%m/%Y as %H:%M %Z")
-                print(f"[SCHEDULER] Job 'date' criado | RemID: {reminder_id} | JobID: {job.id} | disparo: {friendly_time}")
+                logger.info("Job 'date' criado | RemID: %s | JobID: %s | disparo: %s", reminder_id, job.id, friendly_time)
                 msg = f"Agendado! Vou disparar em {friendly_time}. ID do lembrete: {reminder_id}"
 
             elif trigger_type == "cron":
@@ -170,7 +175,7 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
                     kwargs={"reminder_id": reminder_id},
                     misfire_grace_time=300,
                 )
-                print(f"[SCHEDULER] Job 'cron' criado | RemID: {reminder_id} | JobID: {job.id} | cron: {cron_expression} {user_tz_str}")
+                logger.info("Job 'cron' criado | RemID: %s | JobID: %s | cron: %s %s", reminder_id, job.id, cron_expression, user_tz_str)
                 msg = f"Agendamento recorrente criado! Cron: '{cron_expression}' ({user_tz_str}). ID do lembrete: {reminder_id}"
 
             elif trigger_type == "interval":
@@ -183,7 +188,7 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
                     kwargs={"reminder_id": reminder_id},
                     misfire_grace_time=300,
                 )
-                print(f"[SCHEDULER] Job 'interval' criado | RemID: {reminder_id} | JobID: {job.id} | a cada {interval_minutes} min")
+                logger.info("Job 'interval' criado | RemID: %s | JobID: %s | a cada %s min", reminder_id, job.id, interval_minutes)
                 msg = f"Agendamento por intervalo criado! A cada {interval_minutes} minuto(s). ID do lembrete: {reminder_id}"
 
             else:
@@ -201,7 +206,7 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
             return msg
 
         except Exception as e:
-            print(f"[SCHEDULER] Erro ao criar agendamento: {e}")
+            logger.error("Erro ao criar agendamento: %s", e)
             import traceback
             traceback.print_exc()
             return f"Erro ao criar agendamento: {e}"
@@ -213,7 +218,7 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
         Returns:
             Lista formatada dos agendamentos ou mensagem informando que nao ha nenhum.
         """
-        print(f"[SCHEDULER] list_schedules | user={user_phone}")
+        logger.info("list_schedules | user=%s", user_phone)
         try:
             from src.models.reminders import list_user_reminders
             from src.scheduler.engine import get_scheduler
@@ -224,7 +229,7 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
             user_jobs = list_user_reminders(user_phone, status="active").get("reminders", [])
 
             if not user_jobs:
-                print(f"[SCHEDULER] Nenhum agendamento ativo para {user_phone}")
+                logger.info("Nenhum agendamento ativo para %s", user_phone)
                 return "Voce nao tem nenhum agendamento ativo no momento."
 
             # Buscar timezone do usuario para mostrar tempos corretamente
@@ -248,11 +253,11 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
                 
                 lines.append(f"• ID: {reminder_id} | Proximo disparo: {next_run_str} | Instrucao: {instructions}...")
 
-            print(f"[SCHEDULER] {len(user_jobs)} agendamento(s) retornados para {user_phone}")
+            logger.info("%s agendamento(s) retornados para %s", len(user_jobs), user_phone)
             return "\n".join(lines)
 
         except Exception as e:
-            print(f"[SCHEDULER] Erro ao listar agendamentos: {e}")
+            logger.error("Erro ao listar agendamentos: %s", e)
             import traceback
             traceback.print_exc()
             return f"Erro ao listar agendamentos: {e}"
@@ -267,7 +272,7 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
         Returns:
             Confirmacao do cancelamento ou mensagem de erro.
         """
-        print(f"[SCHEDULER] cancel_schedule | reminder_id={job_id}")
+        logger.info("cancel_schedule | reminder_id=%s", job_id)
         try:
             from src.scheduler.engine import get_scheduler
             from src.models.reminders import get_reminder, cancel_reminder
@@ -283,10 +288,10 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
             if aps_job_id:
                 try:
                     scheduler.remove_job(aps_job_id)
-                    print(f"[SCHEDULER] Job do APScheduler {aps_job_id} removido com sucesso.")
+                    logger.info("Job do APScheduler %s removido com sucesso.", aps_job_id)
                 except Exception as e:
                     # Pode ser que o job ja nao exista no APScheduler, mas tudo bem
-                    print(f"[SCHEDULER] Aviso ao remover job do APScheduler: {e}")
+                    logger.warning("Aviso ao remover job do APScheduler: %s", e)
             
             cancel_reminder(reminder_id)
             from src.events import emit_event_sync
@@ -296,8 +301,9 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
         except ValueError:
             return f"O ID do agendamento deve ser um numero valido (voce informou '{job_id}')."
         except Exception as e:
-            print(f"[SCHEDULER] Erro ao cancelar job {job_id}: {e}")
+            logger.error("Erro ao cancelar job %s: %s", job_id, e)
             import traceback
+
             traceback.print_exc()
             return f"Erro ao cancelar agendamento {job_id}: {e}"
 

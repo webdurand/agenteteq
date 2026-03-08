@@ -7,10 +7,12 @@ from src.models.carousel import create_carousel, update_carousel_status
 from src.tools.image_generation import get_image_provider
 from src.events import emit_event_sync
 import cloudinary.uploader
-from src.integrations.image_storage import _ensure_cloudinary_config
+from src.integrations.image_storage import _ensure_cloudinary_config, convert_to_webp
+import logging
+
+logger = logging.getLogger(__name__)
 
 _ensure_cloudinary_config()
-
 
 async def _process_carousel_background(
     carousel_id: str,
@@ -36,6 +38,20 @@ async def _process_carousel_background(
             "num_slides": len(slides),
         })
 
+        # Persiste placeholder no DB para sobreviver a refresh (canais web)
+        if channel in ("web", "web_voice", "web_text"):
+            try:
+                import json as _json
+                from src.models.chat_messages import save_message
+                placeholder = "__CAROUSEL_GENERATING__" + _json.dumps({
+                    "carousel_id": carousel_id,
+                    "num_slides": len(slides),
+                    "slides_done": 0,
+                })
+                await asyncio.to_thread(save_message, user_id, user_id, "agent", placeholder)
+            except Exception as e:
+                logger.error("Erro ao persistir placeholder de carrossel: %s", e)
+
         provider = get_image_provider()
         
         max_concurrent = int(get_config("max_concurrent_images", "3"))
@@ -55,7 +71,8 @@ async def _process_carousel_background(
                 loop = asyncio.get_event_loop()
     
                 def _upload():
-                    file_obj = io.BytesIO(image_bytes)
+                    webp_bytes = convert_to_webp(image_bytes)
+                    file_obj = io.BytesIO(webp_bytes)
                     return cloudinary.uploader.upload(
                         file_obj,
                         folder="carousels",
@@ -65,7 +82,7 @@ async def _process_carousel_background(
     
                 upload_result = await loop.run_in_executor(None, _upload)
                 slide["image_url"] = upload_result.get("secure_url")
-                print(f"[CAROUSEL] Slide {index + 1} gerado: {slide['image_url']}")
+                logger.info("Slide %s gerado: %s", index + 1, slide['image_url'])
 
                 await ws_manager.send_personal_message(user_id, {
                     "type": "slide_done",
@@ -83,14 +100,14 @@ async def _process_carousel_background(
         updated_slides = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                print(f"[CAROUSEL] Slide {i + 1} falhou: {result}")
+                logger.info("Slide %s falhou: %s", i + 1, result)
                 slides[i]["image_url"] = None
                 updated_slides.append(slides[i])
             else:
                 updated_slides.append(result)
 
         update_carousel_status(carousel_id, "done", list(updated_slides))
-        print(f"[CAROUSEL] Carrossel {carousel_id} finalizado com sucesso.")
+        logger.info("Carrossel %s finalizado com sucesso.", carousel_id)
 
         emit_event_sync(user_id, "carousel_generated")
 
@@ -99,15 +116,30 @@ async def _process_carousel_background(
         await emit_action_log(user_id, "Carrossel gerado", f"{title} ({len(updated_slides)} slides)", channel)
 
         # Envia de volta pelo canal de origem
-        await _notify_user(user_id, channel, list(updated_slides))
+        await _notify_user(user_id, channel, carousel_id, list(updated_slides))
     except Exception as e:
         import traceback
-        print(f"[CAROUSEL] Erro na geração em background: {e}\n{traceback.format_exc()}")
+        logger.error("Erro na geração em background: %s\n%s", e, traceback.format_exc())
         update_carousel_status(carousel_id, "failed", slides)
         emit_event_sync(user_id, "carousel_generated")
 
+        # Notifica falha no chat web
+        if channel in ("web", "web_voice", "web_text"):
+            try:
+                await ws_manager.send_personal_message(user_id, {
+                    "type": "carousel_failed",
+                    "carousel_id": carousel_id,
+                })
+                from src.models.chat_messages import update_message_by_prefix
+                await asyncio.to_thread(
+                    update_message_by_prefix, user_id,
+                    "__CAROUSEL_GENERATING__",
+                    "❌ Erro ao gerar o carrossel. Tente novamente.",
+                )
+            except Exception:
+                pass
 
-async def _notify_user(user_id: str, channel: str, slides: List[Dict[str, Any]]):
+async def _notify_user(user_id: str, channel: str, carousel_id: str, slides: List[Dict[str, Any]]):
     """Envia o resultado pelo canal correto após a geração."""
 
     done_slides = [s for s in slides if s.get("image_url")]
@@ -121,23 +153,36 @@ async def _notify_user(user_id: str, channel: str, slides: List[Dict[str, Any]])
         from src.endpoints.web import ws_manager
         await ws_manager.send_personal_message(user_id, {
             "type": "carousel_ready",
+            "carousel_id": carousel_id,
             "slides": done_slides,
         })
 
-        # Persiste o carrossel no histórico de chat igual ao que o frontend renderiza
+        # Atualiza o placeholder __CAROUSEL_GENERATING__ com o resultado estruturado
         try:
-            from src.models.chat_messages import save_message
-            lines = []
-            for i, s in enumerate(done_slides):
-                num = s.get("slide_number") or (i + 1)
-                style = f" — {s['style']}" if s.get("style") else ""
-                url = s.get("image_url", "")
-                lines.append(f"**Slide {num}{style}**\n{url}")
-            formatted = f"🎨 Carrossel pronto! Confira os {len(done_slides)} slides:\n\n" + "\n\n".join(lines)
-            await asyncio.to_thread(save_message, user_id, user_id, "agent", formatted)
+            import json as _json
+            from src.models.chat_messages import update_message_by_prefix
+            ready_payload = _json.dumps({
+                "carousel_id": carousel_id,
+                "slides": [
+                    {
+                        "slide_number": s.get("slide_number") or (i + 1),
+                        "style": s.get("style", ""),
+                        "image_url": s.get("image_url", ""),
+                    }
+                    for i, s in enumerate(done_slides)
+                ],
+            })
+            updated = await asyncio.to_thread(
+                update_message_by_prefix, user_id,
+                "__CAROUSEL_GENERATING__",
+                f"__CAROUSEL_READY__{ready_payload}",
+            )
+            if not updated:
+                # Fallback: insere nova row se placeholder não existia
+                from src.models.chat_messages import save_message
+                await asyncio.to_thread(save_message, user_id, user_id, "agent", f"__CAROUSEL_READY__{ready_payload}")
         except Exception as e:
-            print(f"[CAROUSEL] Erro ao persistir mensagem de carrossel: {e}")
-
+            logger.error("Erro ao persistir mensagem de carrossel: %s", e)
 
 async def _notify_whatsapp(user_id: str, slides: List[Dict[str, Any]]):
     """Envia as imagens geradas como mídia no WhatsApp do usuário."""
@@ -162,13 +207,12 @@ async def _notify_whatsapp(user_id: str, slides: List[Dict[str, Any]]):
             try:
                 await whatsapp_client.send_image(user_id, url, caption=caption)
             except Exception as img_err:
-                print(f"[CAROUSEL] Erro ao enviar slide {num} via WhatsApp: {img_err}")
+                logger.error("Erro ao enviar slide %s via WhatsApp: %s", num, img_err)
                 await whatsapp_client.send_text_message(user_id, f"Slide {num}: {url}")
 
-        print(f"[CAROUSEL] {total} slides enviados via WhatsApp para {user_id}")
+        logger.info("%s slides enviados via WhatsApp para %s", total, user_id)
     except Exception as e:
-        print(f"[CAROUSEL] Erro ao enviar resultado via WhatsApp: {e}")
-
+        logger.error("Erro ao enviar resultado via WhatsApp: %s", e)
 
 def create_carousel_tools(user_id: str, channel: str = "web"):
     """
@@ -236,11 +280,11 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
                     ref_url = recovered
 
         ref_label = "com referência" if ref_url else "sem referência"
-        print(f"[CAROUSEL] generate_carousel_tool | user={user_id} | channel={channel} | format={format_label} ({aspect_ratio}) | {ref_label} | title='{title}' | slides={len(slides)}")
+        logger.info("generate_carousel_tool | user=%s | channel=%s | format=%s (%s) | %s | title='%s' | slides=%s", user_id, channel, format_label, aspect_ratio, ref_label, title, len(slides))
 
         try:
             carousel_id = create_carousel(user_id, title, slides)
-            print(f"[CAROUSEL] Registro criado no banco: {carousel_id}")
+            logger.info("Registro criado no banco: %s", carousel_id)
 
             from src.queue.task_queue import enqueue_task
             result = enqueue_task(user_id, "carousel", channel, {
@@ -267,7 +311,7 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
             return "Erro desconhecido ao colocar na fila."
         except Exception as e:
             import traceback
-            print(f"[CAROUSEL] Erro ao iniciar geração: {e}\n{traceback.format_exc()}")
+            logger.error("Erro ao iniciar geração: %s\n%s", e, traceback.format_exc())
             return f"Erro ao iniciar a geração do carrossel: {e}"
 
     def list_carousels_tool() -> str:
@@ -278,6 +322,7 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
             Resumo dos carrosséis com seus status.
         """
         from src.models.carousel import list_user_carousels
+
         carousels = list_user_carousels(user_id).get("carousels", [])
         if not carousels:
             return "Nenhum carrossel encontrado."

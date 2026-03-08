@@ -3,6 +3,9 @@ import io
 import asyncio
 from typing import List, Tuple
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Garante que a config do Cloudinary exista
 _cloudinary_configured = False
@@ -22,6 +25,24 @@ def _validate_image(image_bytes: bytes):
         if image_bytes[:len(magic)] == magic:
             return fmt
     raise ValueError("Invalid image format: not a recognized image type")
+
+def convert_to_webp(image_bytes: bytes, quality: int = 85) -> bytes:
+    """
+    Converte imagem (PNG/JPEG) para WebP com qualidade configurável.
+    Reduz ~60-80% o tamanho sem diferença visual perceptível.
+    Retorna os bytes originais se a conversão falhar.
+    """
+    try:
+        from PIL import Image as PILImage
+        img = PILImage.open(io.BytesIO(image_bytes))
+        buf = io.BytesIO()
+        img.save(buf, format="WEBP", quality=quality)
+        webp_bytes = buf.getvalue()
+        logger.info("WebP: %s → %s bytes (%s% menor)", len(image_bytes), len(webp_bytes), 100 - len(webp_bytes) * 100 // len(image_bytes))
+        return webp_bytes
+    except Exception as e:
+        logger.error("Falha na conversão WebP, usando original: %s", e)
+        return image_bytes
 
 def _ensure_cloudinary_config():
     global _cloudinary_configured
@@ -44,6 +65,7 @@ def upload_user_image(user_id: str, image_bytes: bytes, extension: str = "png") 
     _ensure_cloudinary_config()
     import cloudinary.uploader
     
+    image_bytes = convert_to_webp(image_bytes)
     file_obj = io.BytesIO(image_bytes)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     
@@ -66,7 +88,7 @@ def index_user_image(user_id: str, cloudinary_url: str, description: str):
     
     vector_db = get_vector_db()
     if not vector_db:
-        print("[IMAGE_STORAGE] Base de conhecimento indisponível para indexar imagem.")
+        logger.info("Base de conhecimento indisponível para indexar imagem.")
         return
         
     doc = Document(
@@ -82,13 +104,13 @@ def index_user_image(user_id: str, cloudinary_url: str, description: str):
     try:
         content_hash = str(hash(f"{user_id}:{cloudinary_url}"))
         vector_db.insert(content_hash=content_hash, documents=[doc])
-        print(f"[IMAGE_STORAGE] Imagem indexada para {user_id}: {cloudinary_url}")
+        logger.info("Imagem indexada para %s: %s", user_id, cloudinary_url)
     except Exception as e:
         err = str(e).lower()
         if "unique" in err or "duplicate" in err:
-            print(f"[IMAGE_STORAGE] Imagem já indexada (duplicada): {cloudinary_url}")
+            logger.info("Imagem já indexada (duplicada): %s", cloudinary_url)
         else:
-            print(f"[IMAGE_STORAGE] Erro ao indexar imagem: {e}")
+            logger.error("Erro ao indexar imagem: %s", e)
 
 async def describe_and_store_images(user_id: str, image_data: List[bytes], agent=None, pre_uploaded_urls: List[str] = None):
     """
@@ -128,7 +150,7 @@ async def describe_and_store_images(user_id: str, image_data: List[bytes], agent
         for i, img_bytes in enumerate(image_data):
             url = urls[i]
             if isinstance(url, Exception):
-                print(f"[IMAGE_STORAGE] Falha no upload da imagem {i}: {url}")
+                logger.error("Falha no upload da imagem %s: %s", i, url)
                 continue
                 
             try:
@@ -148,10 +170,11 @@ async def describe_and_store_images(user_id: str, image_data: List[bytes], agent
                 await asyncio.to_thread(index_user_image, user_id, url, description)
                 
             except Exception as desc_err:
-                print(f"[IMAGE_STORAGE] Erro ao descrever imagem {url}: {desc_err}")
+                logger.error("Erro ao descrever imagem %s: %s", url, desc_err)
                 # Indexa sem descrição avançada como fallback
                 await asyncio.to_thread(index_user_image, user_id, url, "Imagem sem descrição detalhada (falha no processamento visual).")
                 
     except Exception as e:
         import traceback
-        print(f"[IMAGE_STORAGE] Erro no pipeline de armazenamento: {e}\n{traceback.format_exc()}")
+
+        logger.error("Erro no pipeline de armazenamento: %s\n%s", e, traceback.format_exc())

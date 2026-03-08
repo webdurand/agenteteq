@@ -1,3 +1,8 @@
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 def get_weather(city: str) -> str:
     """
     Retorna a previsao do tempo atual para a cidade informada usando busca na web.
@@ -11,7 +16,7 @@ def get_weather(city: str) -> str:
     from src.tools.web_search import web_search_raw
 
     query = f"previsão do tempo {city} agora temperatura hoje"
-    print(f"[WEATHER] Buscando via web: {query}")
+    logger.info("Buscando via web: %s", query)
     result = web_search_raw(query)
-    print(f"[WEATHER] Resultado obtido ({len(result)} chars)")
+    logger.info("Resultado obtido (%s chars)", len(result))
     return result

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import traceback
 import ipaddress
 from urllib.parse import urlparse
@@ -6,6 +7,8 @@ from urllib.parse import urlparse
 import httpx
 from src.queue.task_queue import claim_next_task, complete_task, fail_task, count_processing_tasks, is_task_cancelled
 from src.config.system_config import get_config
+
+logger = logging.getLogger(__name__)
 
 _ALLOWED_HOSTS = {"res.cloudinary.com", "oaidalleapiprodscus.blob.core.windows.net"}
 
@@ -41,7 +44,7 @@ async def process_task_queue():
         return
 
     if is_task_cancelled(task["id"]):
-        print(f"[WORKER] Task {task['id']} foi cancelada, pulando")
+        logger.info("Task %s foi cancelada, pulando", task['id'])
         return
 
     try:
@@ -81,7 +84,7 @@ async def process_task_queue():
             complete_task(task["id"], {"status": "success", "type": "image_edit"})
             
     except Exception as e:
-        print(f"[WORKER] Erro ao processar task {task['id']}: {e}\n{traceback.format_exc()}")
+        logger.error("Erro ao processar task %s: %s", task['id'], e, exc_info=True)
         fail_task(task["id"], str(e))
 
 def _run_worker_sync():

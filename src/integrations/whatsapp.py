@@ -1,6 +1,9 @@
+import logging
 import os
 import httpx
 from typing import Optional, Protocol
+
+logger = logging.getLogger(__name__)
 
 class WhatsAppProvider(Protocol):
     async def send_text_message(self, to_number: str, text: str, reply_to_message_id: Optional[str] = None) -> dict:
@@ -88,7 +91,7 @@ class MetaWhatsAppClient:
                 response.raise_for_status()
                 return response.json()
         except Exception as e:
-            print(f"Erro ao enviar typing indicator (Meta): {e}")
+            logger.error("Erro ao enviar typing indicator (Meta): %s", e)
             return None
 
     async def get_media_url(self, media_id: str) -> Optional[str]:
@@ -187,7 +190,7 @@ class EvolutionWhatsAppClient:
                 response.raise_for_status()
                 return response.json()
         except Exception as e:
-            print(f"Erro ao enviar typing indicator (Evolution): {e}")
+            logger.error("Erro ao enviar typing indicator (Evolution): %s", e)
             return None
 
     async def get_media_url(self, media_base64: str) -> Optional[str]:
@@ -206,7 +209,7 @@ class EvolutionWhatsAppClient:
                     data = response.json()
                     return data.get("base64")
             except Exception as e:
-                print(f"Erro ao buscar base64 via API (Evolution): {e}")
+                logger.error("Erro ao buscar base64 via API (Evolution): %s", e)
                 return ""
                 
         return media_base64
@@ -222,7 +225,7 @@ class EvolutionWhatsAppClient:
                 media_base64 = media_base64.split(",", 1)[1]
             return base64.b64decode(media_base64)
         except Exception as e:
-            print(f"Erro ao decodificar mídia (Evolution): {e}")
+            logger.error("Erro ao decodificar mídia (Evolution): %s", e)
             return b""
 
 

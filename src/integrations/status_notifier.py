@@ -1,6 +1,9 @@
 import os
 import httpx
 from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class StatusNotifier:
@@ -35,7 +38,7 @@ class StatusNotifier:
             else:
                 self._send_meta(message)
         except Exception as e:
-            print(f"[NOTIFIER] Falha ao enviar status '{message[:40]}...': {e}")
+            logger.error("Falha ao enviar status '%s...': %s", message[:40], e)
 
     def _send_meta(self, message: str) -> None:
         api_token = os.getenv("WHATSAPP_API_TOKEN")

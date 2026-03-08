@@ -62,7 +62,6 @@ class User(Base):
             "username": self.username,
             "email": self.email,
             "birth_date": self.birth_date,
-            "password_hash": self.password_hash,
             "whatsapp_verified": bool(self.whatsapp_verified),
             "google_id": self.google_id,
             "auth_provider": self.auth_provider,
@@ -90,6 +89,19 @@ class ChatMessage(Base):
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     user = relationship("User", back_populates="chat_messages")
+
+
+# ──────────────────────────── OTP Codes ────────────────────────────
+
+
+class OtpCode(Base):
+    __tablename__ = "otp_codes"
+
+    phone_number = Column(String, primary_key=True)
+    code = Column(String(6), nullable=False)
+    purpose = Column(String, nullable=False)
+    attempts = Column(Integer, default=0)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
 
 
 # ──────────────────────────── Integrations ────────────────────────────

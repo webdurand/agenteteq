@@ -2,6 +2,9 @@ from datetime import datetime, timezone
 
 from src.db.session import get_db
 from src.db.models import UsageEvent
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def log_event(
@@ -25,7 +28,7 @@ def log_event(
         with get_db() as session:
             session.add(event)
     except Exception as e:
-        print(f"[ANALYTICS] Erro ao gravar evento {event_type} para {user_id}: {e}")
+        logger.error("Erro ao gravar evento %s para %s: %s", event_type, user_id, e)
 
 
 def log_agent_tools(user_id: str, channel: str, agent):
@@ -53,4 +56,4 @@ def log_agent_tools(user_id: str, channel: str, agent):
                         status="success",
                     )
     except Exception as e:
-        print(f"[ANALYTICS] Erro ao buscar tools: {e}")
+        logger.error("Erro ao buscar tools: %s", e)

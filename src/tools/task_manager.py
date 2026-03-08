@@ -3,11 +3,12 @@ from typing import Optional
 
 from src.db.session import get_db
 from src.db.models import Task
+import logging
 
+logger = logging.getLogger(__name__)
 
 def _init_db():
     pass
-
 
 def add_task(
     user_id: str,
@@ -33,7 +34,7 @@ def add_task(
     Returns:
         Mensagem de confirmação com o ID da tarefa criada.
     """
-    print(f"[TASKS] add_task | user={user_id} | titulo='{title}' | prazo='{due_date}' | local='{location}'")
+    logger.info("add_task | user=%s | titulo='%s' | prazo='%s' | local='%s'", user_id, title, due_date, location)
     created_at = datetime.now().isoformat()
     try:
         with get_db() as db:
@@ -51,16 +52,15 @@ def add_task(
             db.flush()
             task_id = task.id
 
-        print(f"[TASKS] Tarefa #{task_id} adicionada com sucesso: '{title}'")
+        logger.info("Tarefa #%s adicionada com sucesso: '%s'", task_id, title)
         from src.events import emit_event_sync
         emit_event_sync(user_id, "task_updated")
         from src.events_broadcast import emit_action_log_sync
         emit_action_log_sync(user_id, "Tarefa criada", title, channel)
         return f"Tarefa #{task_id} adicionada com sucesso: '{title}'."
     except Exception as e:
-        print(f"[TASKS] Erro ao adicionar tarefa: {e}")
+        logger.error("Erro ao adicionar tarefa: %s", e)
         return f"Erro ao adicionar tarefa: {e}"
-
 
 def list_tasks(user_id: str, status: str = "pending") -> str:
     """
@@ -74,7 +74,7 @@ def list_tasks(user_id: str, status: str = "pending") -> str:
     Returns:
         Lista formatada das tarefas ou mensagem informando que não há tarefas.
     """
-    print(f"[TASKS] list_tasks | user={user_id} | status={status}")
+    logger.info("list_tasks | user=%s | status=%s", user_id, status)
     try:
         with get_db() as db:
             q = db.query(Task).filter(Task.user_id == user_id)
@@ -103,9 +103,8 @@ def list_tasks(user_id: str, status: str = "pending") -> str:
 
         return "\n\n".join(lines)
     except Exception as e:
-        print(f"[TASKS] Erro ao listar tarefas: {e}")
+        logger.error("Erro ao listar tarefas: %s", e)
         return f"Erro ao listar tarefas: {e}"
-
 
 def get_tasks(user_id: str, status: str = "pending", limit: int = 0, offset: int = 0) -> dict:
     """
@@ -131,9 +130,8 @@ def get_tasks(user_id: str, status: str = "pending", limit: int = 0, offset: int
 
         return {"tasks": tasks, "has_more": has_more}
     except Exception as e:
-        print(f"[TASKS] Erro ao obter tarefas: {e}")
+        logger.error("Erro ao obter tarefas: %s", e)
         return {"tasks": [], "has_more": False}
-
 
 def complete_task(user_id: str, task_id: int, channel: str = "unknown") -> str:
     """
@@ -147,7 +145,7 @@ def complete_task(user_id: str, task_id: int, channel: str = "unknown") -> str:
     Returns:
         Confirmação ou mensagem de erro.
     """
-    print(f"[TASKS] complete_task | user={user_id} | task_id={task_id}")
+    logger.info("complete_task | user=%s | task_id=%s", user_id, task_id)
     try:
         with get_db() as db:
             task = db.query(Task).filter(Task.id == task_id, Task.user_id == user_id).first()
@@ -161,9 +159,8 @@ def complete_task(user_id: str, task_id: int, channel: str = "unknown") -> str:
         emit_action_log_sync(user_id, "Tarefa concluida", f"#{task_id}", channel)
         return f"Tarefa #{task_id} marcada como concluída!"
     except Exception as e:
-        print(f"[TASKS] Erro ao concluir tarefa: {e}")
+        logger.error("Erro ao concluir tarefa: %s", e)
         return f"Erro ao concluir tarefa: {e}"
-
 
 def reopen_task(user_id: str, task_id: int) -> str:
     """
@@ -176,7 +173,7 @@ def reopen_task(user_id: str, task_id: int) -> str:
     Returns:
         Confirmação ou mensagem de erro.
     """
-    print(f"[TASKS] reopen_task | user={user_id} | task_id={task_id}")
+    logger.info("reopen_task | user=%s | task_id=%s", user_id, task_id)
     try:
         with get_db() as db:
             task = db.query(Task).filter(Task.id == task_id, Task.user_id == user_id).first()
@@ -188,9 +185,8 @@ def reopen_task(user_id: str, task_id: int) -> str:
         emit_event_sync(user_id, "task_updated")
         return f"Tarefa #{task_id} marcada como pendente!"
     except Exception as e:
-        print(f"[TASKS] Erro ao reabrir tarefa: {e}")
+        logger.error("Erro ao reabrir tarefa: %s", e)
         return f"Erro ao reabrir tarefa: {e}"
-
 
 def delete_task(user_id: str, task_id: int) -> str:
     """
@@ -203,7 +199,7 @@ def delete_task(user_id: str, task_id: int) -> str:
     Returns:
         Confirmação ou mensagem de erro.
     """
-    print(f"[TASKS] delete_task | user={user_id} | task_id={task_id}")
+    logger.info("delete_task | user=%s | task_id=%s", user_id, task_id)
     try:
         with get_db() as db:
             task = db.query(Task).filter(Task.id == task_id, Task.user_id == user_id).first()
@@ -212,12 +208,12 @@ def delete_task(user_id: str, task_id: int) -> str:
             db.delete(task)
 
         from src.events import emit_event_sync
+
         emit_event_sync(user_id, "task_updated")
         return f"Tarefa #{task_id} removida com sucesso."
     except Exception as e:
-        print(f"[TASKS] Erro ao remover tarefa: {e}")
+        logger.error("Erro ao remover tarefa: %s", e)
         return f"Erro ao remover tarefa: {e}"
-
 
 def create_task_tools(user_id: str, channel: str = "unknown"):
     """

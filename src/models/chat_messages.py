@@ -3,6 +3,9 @@ from typing import Optional, Dict, Any
 
 from src.db.session import get_db
 from src.db.models import ChatMessage
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def save_message(user_id: str, session_id: str, role: str, text: str) -> None:
@@ -17,7 +20,26 @@ def save_message(user_id: str, session_id: str, role: str, text: str) -> None:
             )
             db.add(msg)
     except Exception as e:
-        print(f"[CHAT_MESSAGES] Erro ao salvar mensagem para {user_id}: {e}")
+        logger.error("Erro ao salvar mensagem para %s: %s", user_id, e)
+
+
+def update_message_by_prefix(user_id: str, prefix: str, new_text: str) -> bool:
+    """Find the most recent message for user whose text starts with prefix and update it."""
+    try:
+        with get_db() as db:
+            row = (
+                db.query(ChatMessage)
+                .filter(ChatMessage.user_id == user_id, ChatMessage.text.like(f"{prefix}%"))
+                .order_by(ChatMessage.id.desc())
+                .first()
+            )
+            if row:
+                row.text = new_text
+                return True
+            return False
+    except Exception as e:
+        logger.error("Erro ao atualizar mensagem por prefixo para %s: %s", user_id, e)
+        return False
 
 
 def get_messages(user_id: str, limit: int = 20, before_id: Optional[int] = None) -> Dict[str, Any]:
@@ -49,6 +71,6 @@ def get_messages(user_id: str, limit: int = 20, before_id: Optional[int] = None)
         messages.reverse()
 
     except Exception as e:
-        print(f"[CHAT_MESSAGES] Erro ao buscar mensagens para {user_id}: {e}")
+        logger.error("Erro ao buscar mensagens para %s: %s", user_id, e)
 
     return {"messages": messages, "has_more": has_more}

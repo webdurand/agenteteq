@@ -7,6 +7,9 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 from src.memory.integrations import get_user_integrations
+import logging
+
+logger = logging.getLogger(__name__)
 
 def _get_google_credentials(user_phone: str, provider: str) -> Optional[Credentials]:
     """Recupera as credenciais do Google para o usuario dado um provider especifico."""
@@ -71,7 +74,7 @@ def create_google_tools(user_phone: str):
 
             return "\n".join(output)
         except Exception as e:
-            print(f"[GMAIL] Erro ao ler e-mails para {user_phone}: {e}")
+            logger.error("Erro ao ler e-mails para %s: %s", user_phone, e)
             return f"Erro ao acessar Gmail: {str(e)}"
 
 
@@ -120,7 +123,7 @@ def create_google_tools(user_phone: str):
 
             return "\n".join(output)
         except Exception as e:
-            print(f"[CALENDAR] Erro ao buscar eventos para {user_phone}: {e}")
+            logger.error("Erro ao buscar eventos para %s: %s", user_phone, e)
             return f"Erro ao acessar Google Calendar: {str(e)}"
 
 
@@ -167,7 +170,7 @@ def create_google_tools(user_phone: str):
             event = service.events().insert(calendarId='primary', body=event).execute()
             return f"Evento criado com sucesso! Link: {event.get('htmlLink')}"
         except Exception as e:
-            print(f"[CALENDAR] Erro ao criar evento para {user_phone}: {e}")
+            logger.error("Erro ao criar evento para %s: %s", user_phone, e)
             return f"Erro ao criar evento no Google Calendar: {str(e)}"
 
     return read_emails, get_calendar_events, create_calendar_event

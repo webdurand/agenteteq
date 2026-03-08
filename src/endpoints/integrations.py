@@ -9,6 +9,9 @@ from google.auth.transport.requests import Request
 
 from src.auth.deps import get_current_user
 from src.memory.integrations import get_user_integrations, delete_integration, upsert_integration
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 
@@ -100,6 +103,7 @@ async def connect_integration(req: ConnectIntegrationRequest, user: dict = Depen
         credentials = flow.credentials
 
         from googleapiclient.discovery import build
+
         service = build("oauth2", "v2", credentials=credentials)
         user_info = service.userinfo().get().execute()
 
@@ -120,7 +124,7 @@ async def connect_integration(req: ConnectIntegrationRequest, user: dict = Depen
         return integration
 
     except Exception as e:
-        print(f"[INTEGRATIONS] Erro ao trocar code no Google OAuth para {req.provider}: {e}")
+        logger.error("Erro ao trocar code no Google OAuth para %s: %s", req.provider, e)
         raise HTTPException(status_code=400, detail=f"Erro ao validar código com Google: {str(e)}")
 
 @router.delete("/{integration_id}", status_code=status.HTTP_204_NO_CONTENT)

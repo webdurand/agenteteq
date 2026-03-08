@@ -3,6 +3,9 @@ from typing import Optional
 from agno.knowledge.knowledge import Knowledge
 from agno.vectordb.pgvector import PgVector, SearchType
 from agno.knowledge.embedder.google import GeminiEmbedder
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Cache para a base de conhecimento
 _knowledge_base = None
@@ -10,7 +13,7 @@ _knowledge_base = None
 def get_vector_db() -> Optional[PgVector]:
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
-        print("[Aviso] DATABASE_URL não configurado. Memória não funcionará.")
+        logger.warning("DATABASE_URL não configurado. Memória não funcionará.")
         return None
 
     if db_url.startswith("postgresql://"):

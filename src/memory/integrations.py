@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Optional, List
 from datetime import datetime
@@ -5,6 +6,9 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from src.db.session import get_db
 from src.db.models import UserIntegration, User
+from src.auth.crypto import encrypt, decrypt
+
+logger = logging.getLogger(__name__)
 
 def get_user_integrations(phone_number: str, provider: Optional[str] = None, include_tokens: bool = False) -> List[dict]:
     """Retorna todas as integracoes de um usuario. Se provider for passado, filtra por ele.
@@ -21,12 +25,12 @@ def get_user_integrations(phone_number: str, provider: Optional[str] = None, inc
             for i in integrations:
                 d = i.to_dict()
                 if include_tokens:
-                    d["access_token"] = i.access_token
-                    d["refresh_token"] = i.refresh_token
+                    d["access_token"] = decrypt(i.access_token)
+                    d["refresh_token"] = decrypt(i.refresh_token)
                 results.append(d)
             return results
     except Exception as e:
-        print(f"[INTEGRATIONS] Erro ao buscar integracoes do usuario {phone_number}: {e}")
+        logger.error("Erro ao buscar integracoes do usuario %s: %s", phone_number, e)
         return []
 
 def get_integration_by_id(integration_id: int, phone_number: str) -> Optional[dict]:
@@ -41,12 +45,12 @@ def get_integration_by_id(integration_id: int, phone_number: str) -> Optional[di
             # Precisamos retornar os tokens para o backend usar nas tools
             if integration:
                 data = integration.to_dict()
-                data["access_token"] = integration.access_token
-                data["refresh_token"] = integration.refresh_token
+                data["access_token"] = decrypt(integration.access_token)
+                data["refresh_token"] = decrypt(integration.refresh_token)
                 return data
             return None
     except Exception as e:
-        print(f"[INTEGRATIONS] Erro ao buscar integracao {integration_id}: {e}")
+        logger.error("Erro ao buscar integracao %s: %s", integration_id, e)
         return None
 
 def upsert_integration(
@@ -70,10 +74,10 @@ def upsert_integration(
             
             if integration:
                 integration.account_email = account_email
-                integration.access_token = access_token
+                integration.access_token = encrypt(access_token)
                 # Só atualiza refresh_token se ele vier no request (Google as vezes nao manda se ja tem)
                 if refresh_token:
-                    integration.refresh_token = refresh_token
+                    integration.refresh_token = encrypt(refresh_token)
                 integration.scopes = scopes
                 if expires_at:
                     integration.expires_at = expires_at
@@ -83,8 +87,8 @@ def upsert_integration(
                     provider=provider,
                     account_id=account_id,
                     account_email=account_email,
-                    access_token=access_token,
-                    refresh_token=refresh_token,
+                    access_token=encrypt(access_token),
+                    refresh_token=encrypt(refresh_token),
                     scopes=scopes,
                     expires_at=expires_at
                 )
@@ -93,7 +97,7 @@ def upsert_integration(
             session.commit()
             return integration.to_dict()
     except Exception as e:
-        print(f"[INTEGRATIONS] Erro ao salvar integracao {provider} para {phone_number}: {e}")
+        logger.error("Erro ao salvar integracao %s para %s: %s", provider, phone_number, e)
         raise e
 
 def delete_integration(integration_id: int, phone_number: str) -> bool:
@@ -111,5 +115,5 @@ def delete_integration(integration_id: int, phone_number: str) -> bool:
                 return True
             return False
     except Exception as e:
-        print(f"[INTEGRATIONS] Erro ao deletar integracao {integration_id}: {e}")
+        logger.error("Erro ao deletar integracao %s: %s", integration_id, e)
         return False

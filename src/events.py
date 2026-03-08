@@ -1,5 +1,8 @@
 import asyncio
+import logging
 from src.endpoints.web import ws_manager
+
+logger = logging.getLogger(__name__)
 
 _main_loop = None
 
@@ -18,7 +21,7 @@ async def emit_event(user_id: str, event_type: str, data: dict = None):
         from src.events_broadcast import broadcast_event
         await broadcast_event(user_id, event_type, data)
     except Exception as e:
-        print(f"[EVENTS] Erro no broadcast: {e}")
+        logger.error("Erro no broadcast: %s", e)
         # Fallback local
         await ws_manager.send_personal_message(user_id, {
             "type": event_type,
@@ -36,5 +39,5 @@ def emit_event_sync(user_id: str, event_type: str, data: dict = None):
                 _main_loop
             )
         except Exception as e:
-            print(f"[EVENTS] Erro ao emitir evento síncrono: {e}")
+            logger.error("Erro ao emitir evento sincrono: %s", e)
 

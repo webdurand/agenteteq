@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 import threading
 from datetime import datetime, timedelta, timezone
@@ -8,6 +9,8 @@ from sqlalchemy import func, text
 
 from src.db.session import get_db, _is_sqlite
 from src.db.models import BackgroundTask
+
+logger = logging.getLogger(__name__)
 from src.config.system_config import get_config
 from src.config.feature_gates import get_plan_limit, is_admin_unlimited, get_user_plan_type
 
@@ -177,7 +180,7 @@ def enqueue_task(user_id: str, task_type: str, channel: str, payload: Dict[str, 
         ).update({"status": "cancelled", "updated_at": now_iso}, synchronize_session=False)
 
         if cancelled:
-            print(f"[QUEUE] Canceladas {cancelled} tasks pendentes ({task_type}) do usuario {user_id}")
+            logger.info("Canceladas %s tasks pendentes (%s) do usuario %s", cancelled, task_type, user_id)
 
         task = BackgroundTask(
             id=str(uuid.uuid4()),

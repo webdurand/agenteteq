@@ -14,6 +14,9 @@ from src.tools.task_manager import add_task, get_tasks, complete_task, reopen_ta
 from src.tools.scheduler_tool import create_scheduler_tools
 from src.models.reminders import list_user_reminders
 from src.events import emit_event
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["api"])
 
@@ -38,7 +41,6 @@ class ReminderCreate(BaseModel):
     interval_minutes: Optional[int] = None
     title: Optional[str] = ""
     notification_channel: Optional[str] = "whatsapp_text"
-
 
 def _parse_iso_dt(value: str | None) -> Optional[datetime]:
     if not value:
@@ -96,7 +98,6 @@ async def api_delete_task(task_id: int, background_tasks: BackgroundTasks, curre
     background_tasks.add_task(emit_event, user_id, "task_updated")
     return {"message": result}
 
-
 # --- Reminders ---
 @router.get("/reminders")
 async def api_get_reminders(
@@ -137,7 +138,7 @@ async def api_get_reminders(
                     next_dt = job.next_run_time.astimezone(user_tz)
                     r["next_run_str"] = next_dt.isoformat()
     except Exception as e:
-        print(f"[API] Erro ao enriquecer reminders com next_run: {e}")
+        logger.error("Erro ao enriquecer reminders com next_run: %s", e)
 
     return {"reminders": reminders, "has_more": has_more}
 
@@ -167,13 +168,11 @@ async def api_delete_reminder(reminder_id: int, background_tasks: BackgroundTask
     background_tasks.add_task(emit_event, user_id, "reminder_updated")
     return {"message": result}
 
-
 # --- Usage Limits ---
 @router.get("/usage/limits")
 async def api_get_usage_limits(current_user: dict = Depends(get_current_user)):
     user_id = current_user["phone_number"]
     return get_all_usage_summary(user_id)
-
 
 # --- Plan Features (for frontend gating) ---
 @router.get("/plan/features")
@@ -190,7 +189,6 @@ async def api_get_plan_features(current_user: dict = Depends(get_current_user)):
         else:
             result[key] = info["enabled"]
     return result
-
 
 # --- Campaign Popup ---
 @router.get("/campaigns/active")
@@ -224,7 +222,6 @@ async def api_get_active_campaign(current_user: dict = Depends(get_current_user)
 
     return {"campaign": None}
 
-
 # --- Chat History ---
 @router.get("/chat/history")
 async def api_get_chat_history(
@@ -233,6 +230,7 @@ async def api_get_chat_history(
     current_user: dict = Depends(get_current_user)
 ):
     from src.models.chat_messages import get_messages
+
     user_id = current_user["phone_number"]
     return get_messages(user_id=user_id, limit=limit, before_id=before_id)
 

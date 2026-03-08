@@ -1,5 +1,8 @@
+import logging
 import os
 from agno.agent import Agent
+
+logger = logging.getLogger(__name__)
 from agno.db.postgres import PostgresDb
 from agno.db.sqlite import SqliteDb
 from src.memory.knowledge import get_knowledge_base
@@ -102,7 +105,7 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
             get_greeting_context,
         ]
     except ImportError as e:
-        print(f"[ASSISTANT] Aviso: algumas tools nao carregaram ({e}). Usando conjunto basico.")
+        logger.warning("Aviso: algumas tools nao carregaram (%s). Usando conjunto basico.", e)
         tools = [add_memory_tool, delete_memory_tool, list_memories_tool, add_task_tool, list_tasks_tool, complete_task_tool, reopen_task_tool, delete_task_tool, get_greeting_context]
     
     if extra_tools:
@@ -118,8 +121,8 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
     else:
         sqlite_url = os.getenv("AGNO_DB_URL", "sqlite:///sessions.db")
         if sqlite_url.startswith("libsql://") or sqlite_url.startswith("https://"):
-            print("Aviso: Conexoes libsql remotas apresentam instabilidades com o ORM do Agno.")
-            print("         Fazendo fallback para banco SQLite local em 'sessions.db' para garantir o funcionamento.")
+            logger.warning("Aviso: Conexoes libsql remotas apresentam instabilidades com o ORM do Agno.")
+            logger.info("         Fazendo fallback para banco SQLite local em 'sessions.db' para garantir o funcionamento.")
             sqlite_url = "sqlite:///sessions.db"
         elif not sqlite_url.startswith("sqlite"):
             sqlite_url = f"sqlite:///{sqlite_url}"
@@ -149,7 +152,11 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         "CAPACIDADES COMPLETAS DO TEQ: "
         "1) MEMORIA: Voce aprende sobre o usuario ao longo do tempo. Salve preferencias, rotina, projetos e informacoes relevantes com add_memory. Use suas memorias para personalizar cada interacao. "
         "2) TAREFAS: Gerencia uma lista de tarefas completa — criar (add_task), listar (list_tasks), concluir (complete_task), reabrir (reopen_task) e excluir (delete_task). Quando o usuario mencionar algo que precisa fazer, faca perguntas contextuais antes de criar a tarefa. "
-        "3) LEMBRETES E AGENDAMENTOS: Programa avisos para o futuro com schedule_message — pode ser unico (daqui X minutos), recorrente (cron) ou por intervalo. Antes de agendar, confirme o canal de aviso (web, WhatsApp ou ambos) quando o usuario nao informar. Liste com list_schedules e cancele com cancel_schedule. "
+        "3) LEMBRETES E AGENDAMENTOS: Programa avisos para o futuro com schedule_message — pode ser unico (daqui X minutos), recorrente (cron) ou por intervalo. "
+        "Agendamentos podem executar QUALQUER tool disponivel, incluindo generate_carousel para gerar imagens. "
+        "A imagem gerada sera entregue automaticamente pelo canal escolhido (web, WhatsApp ou ambos). "
+        "Antes de agendar, SEMPRE confirme o canal de entrega (web, WhatsApp ou ambos) quando o usuario nao informar. "
+        "Liste com list_schedules e cancele com cancel_schedule. "
         "4) PESQUISA WEB: "
         "- web_search(query): busca geral na internet. Para noticias recentes, passe topic='news' e days=1 a 7. "
         "- deep_research(topic): investigacao aprofundada com multiplas fontes e sintese. "

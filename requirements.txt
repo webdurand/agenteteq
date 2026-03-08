@@ -3,6 +3,7 @@ aiohappyeyeballs==2.6.1
 aiohttp==3.13.3
 aiosignal==1.4.0
 alabaster==1.0.0
+alembic==1.15.1
 annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.12.1
@@ -98,6 +99,8 @@ requests==2.32.5
 requests-file==3.0.1
 requests-oauthlib==2.0.0
 rich==14.3.3
+pytest==8.3.5
+pytest-asyncio==0.25.3
 rich-toolkit==0.19.7
 rignore==0.7.6
 roman-numerals==4.1.0

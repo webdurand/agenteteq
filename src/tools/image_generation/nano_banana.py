@@ -4,6 +4,9 @@ from concurrent.futures import ThreadPoolExecutor
 from google import genai
 from google.genai.types import GenerateContentConfig, ImageConfig, Modality, Part
 from .base import ImageProvider
+import logging
+
+logger = logging.getLogger(__name__)
 
 _image_executor = None
 
@@ -11,6 +14,7 @@ def _get_executor():
     global _image_executor
     if _image_executor is None:
         from src.config.system_config import get_config
+
         max_workers = int(get_config("max_image_workers", "4"))
         _image_executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="gemini_img")
     return _image_executor
@@ -27,16 +31,15 @@ def _extract_image_from_response(response) -> bytes:
 
     for part in content.parts:
         if part.inline_data is not None:
-            print(f"[NANO_BANANA] Imagem recebida | mime={part.inline_data.mime_type} | bytes={len(part.inline_data.data)}")
+            logger.info("Imagem recebida | mime=%s | bytes=%s", part.inline_data.mime_type, len(part.inline_data.data))
             return part.inline_data.data
 
     raise Exception("Resposta recebida mas sem inline_data de imagem.")
 
-
 class NanoBananaProvider(ImageProvider):
     """
-    Implementação do ImageProvider usando o modelo Gemini 'gemini-3-pro-image-preview'
-    (Nano Banana Pro). Usa generate_content() com Modality.IMAGE.
+    Implementação do ImageProvider usando modelos Gemini de geração de imagem
+    (Nano Banana). Usa generate_content() com Modality.IMAGE.
     """
 
     def __init__(self):
@@ -44,16 +47,16 @@ class NanoBananaProvider(ImageProvider):
         if not self.api_key:
             raise ValueError("GOOGLE_API_KEY ou GEMINI_API_KEY não está configurada.")
         self.client = genai.Client(api_key=self.api_key)
-        self.model_name = "gemini-3-pro-image-preview"
+        self.model_name = os.getenv("IMAGE_MODEL", "gemini-3.1-flash-image-preview")
 
     async def generate(self, prompt: str, aspect_ratio: str = "1:1") -> bytes:
         loop = asyncio.get_event_loop()
 
         def _generate():
-            print(f"[NANO_BANANA] Gerando imagem | modelo={self.model_name} | aspect_ratio={aspect_ratio} | prompt={prompt[:80]}...")
+            logger.info("Gerando imagem | modelo=%s | aspect_ratio=%s | prompt=%s...", self.model_name, aspect_ratio, prompt[:80])
             config = GenerateContentConfig(
                 response_modalities=[Modality.TEXT, Modality.IMAGE],
-                image_config=ImageConfig(aspect_ratio=aspect_ratio),
+                image_config=ImageConfig(aspect_ratio=aspect_ratio, image_size="1K"),
             )
             response = self.client.models.generate_content(
                 model=self.model_name,
@@ -64,7 +67,7 @@ class NanoBananaProvider(ImageProvider):
             try:
                 return _extract_image_from_response(response)
             except Exception:
-                print(f"[NANO_BANANA] Tentando prompt fallback...")
+                logger.info("Tentando prompt fallback...")
                 fallback_prompt = f"Professional editorial photo for tech blog, clean modern design, {prompt[:120]}"
                 response = self.client.models.generate_content(
                     model=self.model_name,
@@ -79,10 +82,10 @@ class NanoBananaProvider(ImageProvider):
         loop = asyncio.get_event_loop()
 
         def _edit():
-            print(f"[NANO_BANANA] Editando imagem | modelo={self.model_name} | aspect_ratio={aspect_ratio} | prompt={prompt[:80]}...")
+            logger.info("Editando imagem | modelo=%s | aspect_ratio=%s | prompt=%s...", self.model_name, aspect_ratio, prompt[:80])
             config = GenerateContentConfig(
                 response_modalities=[Modality.TEXT, Modality.IMAGE],
-                image_config=ImageConfig(aspect_ratio=aspect_ratio),
+                image_config=ImageConfig(aspect_ratio=aspect_ratio, image_size="1K"),
             )
 
             image_part = Part.from_bytes(data=reference_image, mime_type="image/png")

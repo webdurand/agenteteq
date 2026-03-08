@@ -1,8 +1,12 @@
+import logging
+
 from src.agent.assistant import get_assistant
 from src.tools.web_search import create_web_search_tool, create_fetch_page_tool, create_explore_site_tool
 from src.tools.deep_research import create_deep_research_tool
 from src.tools.google_tools import create_google_tools
 from src.memory.integrations import get_user_integrations
+
+logger = logging.getLogger(__name__)
 
 
 def create_agent_with_tools(
@@ -47,7 +51,7 @@ def create_agent_with_tools(
                 "Quando o usuario pedir algo sobre agenda, reunioes ou compromissos, use essas tools automaticamente."
             )
     except Exception as e:
-        print(f"[FACTORY] Erro ao carregar Google tools para {phone}: {e}")
+        logger.error("Erro ao carregar Google tools para %s: %s", phone, e)
 
     all_instructions = (extra_instructions or []) + google_instructions
 

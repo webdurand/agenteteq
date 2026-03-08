@@ -13,6 +13,9 @@ from src.agent.voice_tools import VOICE_TOOLS_DECLARATIONS, execute_voice_tool
 from src.memory.analytics import log_event
 from src.models.chat_messages import save_message
 from src.config.feature_gates import is_feature_enabled, check_voice_live_minutes
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 LIVE_IDLE_TIMEOUT_SECONDS = int(os.getenv("VOICE_LIVE_IDLE_TIMEOUT_SECONDS", "90"))
@@ -83,7 +86,7 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
     session_start_monotonic = time.monotonic()
 
     ws_manager.connect(websocket, phone_number, channel="voice_live")
-    print(f"[VOICE LIVE] Cliente conectado: {phone_number}")
+    logger.info("[VOICE LIVE] Cliente conectado: %s", phone_number)
 
     # Monta instrucoes base parecidas com assistant.py
     base_instructions = [
@@ -125,7 +128,7 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
                         memories = "\n".join([f"- {row[0]}" for row in results])
                         instruction_text += f"\n\n[Contexto da Memoria do Usuario:\n{memories}]"
         except Exception as e:
-            print(f"[VOICE LIVE] Erro ao carregar memorias: {e}")
+            logger.error("[VOICE LIVE] Erro ao carregar memorias: %s", e)
 
     client = GeminiLiveClient(
         system_instruction=instruction_text,
@@ -137,7 +140,7 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
         await client.connect()
         await websocket.send_json({"type": "status", "text": "Pode falar..."})
     except Exception as e:
-        print(f"[VOICE LIVE] Erro ao conectar no Gemini Live: {e}")
+        logger.error("[VOICE LIVE] Erro ao conectar no Gemini Live: %s", e)
         await websocket.send_json({"type": "error", "message": "Erro ao conectar motor de voz."})
         ws_manager.disconnect(phone_number, websocket=websocket)
         return
@@ -154,14 +157,14 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
             pass
 
     async def on_tool_call(call_id: str, function_name: str, args: dict):
-        print(f"[VOICE LIVE] Tool call: {function_name} com args {args}")
+        logger.info("[VOICE LIVE] Tool call: %s com args %s", function_name, args)
         label = TOOL_FRIENDLY_NAMES.get(function_name, f"Executando {function_name}")
         try:
             await websocket.send_json({"type": "status", "text": f"{label}..."})
             await websocket.send_json({"type": "tool_call_start", "name": function_name, "label": label})
             
             result = await execute_voice_tool(phone_number, function_name, args)
-            print(f"[VOICE LIVE] Tool result: {result}")
+            logger.info("[VOICE LIVE] Tool result: %s", result)
 
             # Mantem o chat web e o historico sincronizados com o resultado de tools
             # disparadas no modo voz em tempo real.
@@ -194,7 +197,7 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
                 await ws_manager.send_personal_message(phone_number, {"type": "reminder_updated"})
                 
         except Exception as e:
-            print(f"[VOICE LIVE] Erro executando tool: {e}")
+            logger.error("[VOICE LIVE] Erro executando tool: %s", e)
             await client.send_tool_response(call_id, function_name, {"error": str(e)})
         finally:
             try:
@@ -256,11 +259,12 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
                     continue
                 
     except WebSocketDisconnect:
-        print(f"[VOICE LIVE] Cliente desconectado: {phone_number}")
+        logger.info("[VOICE LIVE] Cliente desconectado: %s", phone_number)
     except Exception as e:
         import traceback
+
         traceback.print_exc()
-        print(f"[VOICE LIVE] Erro na conexao com cliente: {e}")
+        logger.error("[VOICE LIVE] Erro na conexao com cliente: %s", e)
     finally:
         receive_task.cancel()
         await client.close()
@@ -274,4 +278,4 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
             status="success",
             latency_ms=duration_ms,
         )
-        print(f"[VOICE LIVE] Sessao encerrada: {phone_number} durou {duration_ms // 1000}s")
+        logger.info("[VOICE LIVE] Sessao encerrada: %s durou %ss", phone_number, duration_ms // 1000)

@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 import hashlib
@@ -7,6 +8,8 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Request, HTTPException, Query
+
+logger = logging.getLogger(__name__)
 from sqlalchemy.exc import IntegrityError
 
 from src.integrations.whatsapp import whatsapp_client
@@ -79,7 +82,7 @@ def flush_ready_buffers():
                 else:
                     asyncio.create_task(orchestrate_message(aggregated))
         except Exception as e:
-            print(f"[WHATSAPP] Erro ao processar buffer do usuário {user_id}: {e}")
+            logger.error("Erro ao processar buffer do usuário %s: %s", user_id, e)
 
 
 async def buffer_message(from_number: str, event: dict):
@@ -158,7 +161,7 @@ def verify_webhook(
     hub_verify_token: str = Query(None, alias="hub.verify_token"),
 ):
     if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
-        print("[WEBHOOK] Webhook verificado com sucesso!")
+        logger.info("Webhook verificado com sucesso!")
         return int(hub_challenge)
     raise HTTPException(status_code=403, detail="Token de verificação inválido")
 
@@ -171,7 +174,7 @@ async def receive_webhook(request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[ERROR] Falha ao ler JSON do request: {e}")
+        logger.error("Falha ao ler JSON do request: %s", e)
         return {"status": "error"}
 
     try:
@@ -180,16 +183,16 @@ async def receive_webhook(request: Request):
             if not event.get("should_process", False):
                 reason = event.get("skip_reason", "Desconhecido")
                 if reason not in ["Status message", "Enviado por mim", "Protocol message"] and not reason.startswith("Evento não processável"):
-                    print(f"[WEBHOOK] Evento ignorado. Motivo: {reason} | ID: {event.get('id', 'N/A')}")
+                    logger.info("Evento ignorado. Motivo: %s | ID: %s", reason, event.get('id', 'N/A'))
                 continue
 
             dedup_key = event["dedup_key"]
             if deduplicate(dedup_key):
-                print(f"[WEBHOOK] Mensagem duplicada ignorada no Dedup. Chave: {dedup_key}")
+                logger.info("Mensagem duplicada ignorada no Dedup. Chave: %s", dedup_key)
                 continue
 
             from_number = event["from_number"]
-            print(f"[WEBHOOK] Nova mensagem enfileirada no buffer. De: {from_number} | Tipo: {event['type']} | ID: {event['id']}")
+            logger.info("Nova mensagem enfileirada no buffer. De: %s | Tipo: %s | ID: %s", from_number, event['type'], event['id'])
 
             try:
                 asyncio.create_task(whatsapp_client.mark_message_as_read_and_typing(event["id"], from_number, is_audio=(event["type"] == "audio")))
@@ -199,7 +202,7 @@ async def receive_webhook(request: Request):
             await buffer_message(from_number, event)
 
     except Exception as e:
-        print(f"[ERROR] Falha ao processar webhook payload: {e}")
+        logger.error("Falha ao processar webhook payload: %s", e)
 
     return {"status": "success"}
 
@@ -365,15 +368,15 @@ async def orchestrate_message(event: dict):
 
     orchestration_key = f"orch_{message_id}"
     if deduplicate(orchestration_key):
-        print(f"[PROCESS] Orquestracao duplicada ignorada para {message_id} de {from_number}")
+        logger.info("Orquestracao duplicada ignorada para %s de %s", message_id, from_number)
         return
 
     try:
         user = get_user(from_number)
-        print(f"[PROCESS] Iniciando orquestracao do evento agrupado {message_id} de {from_number}")
+        logger.info("Iniciando orquestracao do evento agrupado %s de %s", message_id, from_number)
 
         if not user or not user.get("whatsapp_verified"):
-            print(f"[ONBOARDING] Usuario nao verificado ou inexistente: {from_number}. Solicitando cadastro.")
+            logger.info("Usuario nao verificado ou inexistente: %s. Solicitando cadastro.", from_number)
             frontend_url = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
             await whatsapp_client.send_text_message(
                 from_number,
@@ -383,7 +386,7 @@ async def orchestrate_message(event: dict):
             return
 
         if not is_plan_active(user):
-            print(f"[WHATSAPP] Plano expirado para {from_number}. Bloqueando.")
+            logger.info("Plano expirado para %s. Bloqueando.", from_number)
             frontend_url = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
             await whatsapp_client.send_text_message(
                 from_number,
@@ -405,7 +408,7 @@ async def orchestrate_message(event: dict):
 
             injection = CONTINUATION_INJECTION if is_yes else GREETING_INJECTION
             log_label = "continuacao" if is_yes else "nova sessao (usuario recusou)"
-            print(f"[SESSION] Usuario {from_number} escolheu: {log_label}.")
+            logger.info("Usuario %s escolheu: %s.", from_number, log_label)
 
             agent = create_agent_with_tools(from_number, user_id=from_number)
 
@@ -419,7 +422,7 @@ async def orchestrate_message(event: dict):
             if has_previous_session and aggregated_text.strip():
                 _set_pending_choice(from_number, aggregated_text)
                 update_last_seen(from_number)
-                print(f"[SESSION] Nova sessao detectada para {from_number}. Perguntando ao usuario.")
+                logger.info("Nova sessao detectada para %s. Perguntando ao usuario.", from_number)
                 await whatsapp_client.send_text_message(
                     from_number,
                     "Ei, passou um tempinho desde nossa ultima conversa 👀 Quer continuar de onde a gente parou, ou prefere comecar uma conversa nova?",
@@ -428,7 +431,7 @@ async def orchestrate_message(event: dict):
                 return
             else:
                 label = "usuario retornando (sem texto)" if has_previous_session else "usuario novo"
-                print(f"[SESSION] {label} para {from_number}. Aplicando greeting injection.")
+                logger.info("%s para %s. Aplicando greeting injection.", label, from_number)
                 notifier = StatusNotifier(to_number=from_number, reply_to_message_id=message_id)
                 agent = create_agent_with_tools(from_number, notifier, user_id=from_number)
                 await process_aggregated_message(from_number, message_id, event, agent, injection=GREETING_INJECTION)
@@ -442,7 +445,7 @@ async def orchestrate_message(event: dict):
         update_last_seen(from_number)
 
     except Exception as e:
-        print(f"[ERROR] Falha na orquestracao para {from_number}: {e}")
+        logger.error("Falha na orquestracao para %s: %s", from_number, e)
         import traceback
         print(traceback.format_exc())
         try:
@@ -511,7 +514,7 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
     if not text_body and not agent_audios and not agent_images:
         return
 
-    print(f"[PROCESS] Texto agregado ({len(agent_images)} imgs, {len(agent_audios)} audios): {text_body[:50]}...")
+    logger.info("Texto agregado (%s imgs, %s audios): %s...", len(agent_images), len(agent_audios), text_body[:50])
 
     from src.queue.task_queue import get_usage_context
     usage_ctx = get_usage_context(from_number)
@@ -532,7 +535,7 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
                     log_event(user_id=from_number, channel="whatsapp", event_type="message_sent", status="success", latency_ms=latency)
                 return
         except Exception as e:
-            print(f"[SHORTCUT] Falha no atalho de lembrete rapido: {e}")
+            logger.error("Falha no atalho de lembrete rapido: %s", e)
 
     memory_mode = os.getenv("MEMORY_MODE", "agentic").lower()
     if memory_mode == "always-on" and text_body:
@@ -545,7 +548,7 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
                     context_text = f"\n\n[Contexto da Memoria para considerar:\n{memories}]"
                     text_body += context_text
             except Exception as e:
-                print(f"[ERROR] Falha ao buscar memorias always-on: {e}")
+                logger.error("Falha ao buscar memorias always-on: %s", e)
 
     if injection:
         text_body = injection + "\n\n" + text_body
@@ -565,7 +568,7 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
     asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, text_body, final_text))
 
     if not _is_test_number(from_number):
-        print(f"[OUT] Enviando resposta para {from_number}")
+        logger.info("Enviando resposta para %s", from_number)
         parts = split_whatsapp_messages(final_text)
         for i, part in enumerate(parts):
             reply_id = message_id if i == 0 else None

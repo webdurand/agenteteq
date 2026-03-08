@@ -2,9 +2,12 @@
 Motor de agendamento singleton baseado em APScheduler com persistencia em SQLite.
 Responsavel por manter os jobs ativos entre restarts do servidor.
 """
+import logging
 import os
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+
+logger = logging.getLogger(__name__)
 
 _scheduler: BackgroundScheduler | None = None
 
@@ -44,7 +47,7 @@ def start_scheduler():
     scheduler = get_scheduler()
     if not scheduler.running:
         scheduler.start()
-        print("[SCHEDULER] Iniciado com sucesso.")
+        logger.info("Scheduler iniciado com sucesso.")
         
         scheduler.add_job(
             cleanup_old_messages,
@@ -64,6 +67,15 @@ def start_scheduler():
             misfire_grace_time=10
         )
         
+        from src.auth.otp import cleanup_expired_codes
+        scheduler.add_job(
+            cleanup_expired_codes,
+            trigger="interval",
+            minutes=5,
+            id="cleanup_expired_otp_codes",
+            replace_existing=True
+        )
+        
         from src.endpoints.whatsapp import flush_ready_buffers
         scheduler.add_job(
             flush_ready_buffers,
@@ -79,7 +91,7 @@ def start_scheduler():
 
 def reconcile_reminders():
     """Garante que todos os reminders 'active' no banco tenham um job no APScheduler."""
-    print("[SCHEDULER] Iniciando reconciliacao de reminders...")
+    logger.info("Iniciando reconciliacao de reminders...")
     try:
         from src.models.reminders import list_all_active_reminders, mark_fired, update_apscheduler_job_id, update_status
         from src.scheduler.dispatcher import dispatch_proactive_message
@@ -98,7 +110,7 @@ def reconcile_reminders():
             if job_id and scheduler.get_job(job_id):
                 continue
                 
-            print(f"[SCHEDULER] Reminder {reminder_id} ({trigger_type}) sem job ativo. Recriando...")
+            logger.info("Reminder %s (%s) sem job ativo. Recriando...", reminder_id, trigger_type)
             
             user_tz_str = config.get("timezone", "America/Sao_Paulo")
             user_tz = zoneinfo.ZoneInfo(user_tz_str)
@@ -123,7 +135,7 @@ def reconcile_reminders():
                 
                 if run_dt:
                     if run_dt <= datetime.now(timezone.utc):
-                        print(f"[SCHEDULER] Reminder {reminder_id} 'date' ja passou da hora. Disparando agora...")
+                        logger.info("Reminder %s 'date' ja passou da hora. Disparando agora...", reminder_id)
                         run_dt = datetime.now(timezone.utc) + timedelta(seconds=5)
                         
                     job = scheduler.add_job(
@@ -158,15 +170,15 @@ def reconcile_reminders():
                     )
                     
             if job:
-                print(f"[SCHEDULER] Reminder {reminder_id} reconciliado com novo job_id: {job.id}")
+                logger.info("Reminder %s reconciliado com novo job_id: %s", reminder_id, job.id)
                 update_apscheduler_job_id(reminder_id, job.id)
             else:
-                print(f"[SCHEDULER] Nao foi possivel recriar job para reminder {reminder_id}. Marcando como cancelado.")
+                logger.warning("Nao foi possivel recriar job para reminder %s. Marcando como cancelado.", reminder_id)
                 update_status(reminder_id, "cancelled")
                 
-        print("[SCHEDULER] Reconciliacao finalizada.")
+        logger.info("Reconciliacao finalizada.")
     except Exception as e:
-        print(f"[SCHEDULER] Erro durante reconciliacao: {e}")
+        logger.error("Erro durante reconciliacao: %s", e)
 
 
 def shutdown_scheduler():
@@ -174,4 +186,4 @@ def shutdown_scheduler():
     scheduler = get_scheduler()
     if scheduler.running:
         scheduler.shutdown(wait=False)
-        print("[SCHEDULER] Encerrado.")
+        logger.info("Scheduler encerrado.")

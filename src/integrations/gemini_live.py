@@ -3,6 +3,9 @@ import json
 import base64
 import asyncio
 import websockets
+import logging
+
+logger = logging.getLogger(__name__)
 
 class GeminiLiveClient:
     def __init__(self, model: str = None, voice_name: str = None, system_instruction: str = None, tools: list = None):
@@ -65,15 +68,15 @@ class GeminiLiveClient:
                 try:
                     response_raw = response_raw.decode("utf-8")
                 except UnicodeDecodeError:
-                    print(f"[Gemini Live] Recebeu bytes nao-decodificaveis durante setup ({len(response_raw)} bytes)")
+                    logger.info("[Gemini Live] Recebeu bytes nao-decodificaveis durante setup (%s bytes)", len(response_raw))
                     continue
 
             response = json.loads(response_raw)
             if "setupComplete" in response:
-                print("[Gemini Live] Setup completo")
+                logger.info("[Gemini Live] Setup completo")
                 break
             else:
-                print(f"[Gemini Live] Esperando setup, recebeu: {list(response.keys())}")
+                logger.info("[Gemini Live] Esperando setup, recebeu: %s", list(response.keys()))
                 
     async def send_audio_chunk(self, pcm_bytes: bytes):
         if not self.ws:
@@ -135,7 +138,7 @@ class GeminiLiveClient:
                         server_content = data["serverContent"]
                         
                         if server_content.get("interrupted"):
-                            print(f"[Gemini Live] interrupted (after {audio_chunk_count} audio chunks)")
+                            logger.info("[Gemini Live] interrupted (after %s audio chunks)", audio_chunk_count)
                             audio_chunk_count = 0
                             if on_interrupted:
                                 await on_interrupted()
@@ -157,14 +160,14 @@ class GeminiLiveClient:
                                     call_id = fc.get("id")
                                     name = fc.get("name")
                                     args = fc.get("args", {})
-                                    print(f"[Gemini Live] functionCall (part): {name} args={args}")
+                                    logger.info("[Gemini Live] functionCall (part): %s args=%s", name, args)
                                     await on_tool_call(call_id, name, args)
 
                                 if "text" in part:
-                                    print(f"[Gemini Live] text: {part['text'][:120]}")
+                                    logger.info("[Gemini Live] text: %s", part['text'][:120])
                                     
                         if server_content.get("turnComplete"):
-                            print(f"[Gemini Live] turnComplete (sent {audio_chunk_count} audio chunks)")
+                            logger.info("[Gemini Live] turnComplete (sent %s audio chunks)", audio_chunk_count)
                             audio_chunk_count = 0
                             await on_turn_complete()
                             
@@ -175,14 +178,14 @@ class GeminiLiveClient:
                             call_id = fc.get("id")
                             name = fc.get("name")
                             args = fc.get("args", {})
-                            print(f"[Gemini Live] toolCall (root): {name} args={args}")
+                            logger.info("[Gemini Live] toolCall (root): %s args=%s", name, args)
                             await on_tool_call(call_id, name, args)
                     elif "setupComplete" not in data:
-                        print(f"[Gemini Live] msg: {list(data.keys())}")
+                        logger.info("[Gemini Live] msg: %s", list(data.keys()))
         except websockets.exceptions.ConnectionClosed:
-            print("[Gemini Live] Conexão encerrada")
+            logger.info("[Gemini Live] Conexão encerrada")
         except Exception as e:
-            print(f"[Gemini Live] Erro no loop de recebimento: {e}")
+            logger.error("[Gemini Live] Erro no loop de recebimento: %s", e)
             
     async def close(self):
         if self.ws:

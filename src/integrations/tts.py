@@ -1,14 +1,15 @@
 import os
 import struct
 from abc import ABC, abstractmethod
+import logging
 
+logger = logging.getLogger(__name__)
 
 class BaseTTS(ABC):
     @abstractmethod
     async def synthesize(self, text: str) -> tuple[bytes, str]:
         """Converte texto em áudio. Retorna (audio_bytes, mime_type)."""
         pass
-
 
 class GeminiTTS(BaseTTS):
     """
@@ -52,19 +53,17 @@ class GeminiTTS(BaseTTS):
                 part = response.candidates[0].content.parts[0]
                 mime = part.inline_data.mime_type
                 pcm_data = part.inline_data.data
-                print(f"[TTS GEMINI] mime_type={mime} | raw_bytes={len(pcm_data)} | type={type(pcm_data).__name__}")
+                logger.info("[TTS GEMINI] mime_type=%s | raw_bytes=%s | type=%s", mime, len(pcm_data), type(pcm_data).__name__)
                 return _pcm_to_wav(pcm_data), "audio/wav"
             except ServerError as e:
                 wait = 2 ** attempt
-                print(f"[TTS GEMINI] Erro 5xx (tentativa {attempt + 1}/{max_retries}): {e} — retry em {wait}s")
+                logger.error("[TTS GEMINI] Erro 5xx (tentativa %s/%s): %s — retry em %ss", attempt + 1, max_retries, e, wait)
                 if attempt == max_retries - 1:
                     raise
                 await asyncio.sleep(wait)
 
-
 def get_tts() -> BaseTTS:
     return GeminiTTS()
-
 
 def _pcm_to_wav(
     pcm_data: bytes,

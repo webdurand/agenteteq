@@ -1,7 +1,10 @@
 import json
+import logging
 import os
 import asyncio
 from src.endpoints.web import ws_manager
+
+logger = logging.getLogger(__name__)
 
 _asyncpg_pool = None
 
@@ -38,7 +41,7 @@ async def emit_action_log(user_id: str, action: str, summary: str, channel: str 
         display = f"[{channel}] {action}: {summary}"
         await asyncio.to_thread(save_message, user_id, user_id, "system", display)
     except Exception as e:
-        print(f"[BROADCAST] Erro ao persistir action_log: {e}")
+        logger.error("Erro ao persistir action_log: %s", e)
 
     await broadcast_event(user_id, "action_log", {
         "action": action,
@@ -57,7 +60,7 @@ def emit_action_log_sync(user_id: str, action: str, summary: str, channel: str =
                 _main_loop,
             )
         except Exception as e:
-            print(f"[BROADCAST] Erro ao emitir action_log sincrono: {e}")
+            logger.error("Erro ao emitir action_log sincrono: %s", e)
 
 
 async def listen_ws_events():
@@ -75,4 +78,4 @@ def _on_notification(conn, pid, channel, payload):
             "type": data["type"], **data.get("data", {})
         }))
     except Exception as e:
-        print(f"[BROADCAST] Erro ao processar notificacao: {e}")
+        logger.error("Erro ao processar notificacao: %s", e)

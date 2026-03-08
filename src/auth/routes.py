@@ -1,7 +1,11 @@
+import logging
+
 from fastapi import APIRouter, HTTPException, status, Depends, Request
 from pydantic import BaseModel, EmailStr
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+
+logger = logging.getLogger(__name__)
 from src.auth.passwords import hash_password, verify_password
 from src.auth.jwt import create_token
 from src.auth.otp import generate_code, verify_code
@@ -12,6 +16,7 @@ from src.memory.identity import (
     get_user,
     get_user_by_email,
     get_user_by_username,
+    get_password_hash_by_email,
     set_whatsapp_verified,
     link_google_account,
     is_plan_active,
@@ -68,7 +73,7 @@ async def send_otp_whatsapp(phone: str, purpose: str):
     try:
         await whatsapp_client.send_text_message(to_number=phone, text=text)
     except Exception as e:
-        print(f"[AUTH] Falha ao enviar OTP para {phone}: {e}")
+        logger.error("Falha ao enviar OTP para %s: %s", phone, e)
         raise HTTPException(status_code=502, detail=f"Falha ao enviar codigo via WhatsApp. Verifique o numero.")
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
@@ -122,7 +127,8 @@ async def login(request: Request, req: LoginRequest):
     if not user:
         raise HTTPException(status_code=401, detail="Credenciais invalidas")
         
-    if not user.get("password_hash") or not verify_password(req.password, user["password_hash"]):
+    stored_hash = get_password_hash_by_email(req.email)
+    if not stored_hash or not verify_password(req.password, stored_hash):
         raise HTTPException(status_code=401, detail="Credenciais invalidas")
         
     # Conta de teste: pula 2FA e retorna token direto (para verificacao Google OAuth)
@@ -316,5 +322,5 @@ async def accept_terms(current_user: dict = Depends(get_current_user)):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[AUTH] Erro ao aceitar termos: {e}")
+        logger.error("Erro ao aceitar termos: %s", e)
         raise HTTPException(status_code=500, detail="Erro ao registrar aceite dos termos.")

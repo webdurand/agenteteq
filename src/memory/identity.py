@@ -1,7 +1,10 @@
+import logging
 import os
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from src.db.session import get_db, get_engine
 from src.db.models import (
@@ -36,7 +39,29 @@ def get_user(phone_number: str) -> Optional[dict]:
             user = session.query(User).filter_by(phone_number=phone_number).first()
             return user.to_dict() if user else None
     except Exception as e:
-        print(f"[IDENTITY] Erro ao buscar usuario {phone_number}: {e}")
+        logger.error("Erro ao buscar usuario %s: %s", phone_number, e)
+    return None
+
+
+def get_password_hash(phone_number: str) -> Optional[str]:
+    """Retorna apenas o password_hash do usuario (nunca exposto via to_dict)."""
+    try:
+        with get_db() as session:
+            user = session.query(User).filter_by(phone_number=phone_number).first()
+            return user.password_hash if user else None
+    except Exception as e:
+        logger.error("Erro ao buscar password_hash de %s: %s", phone_number, e)
+    return None
+
+
+def get_password_hash_by_email(email: str) -> Optional[str]:
+    """Retorna apenas o password_hash buscando por email (nunca exposto via to_dict)."""
+    try:
+        with get_db() as session:
+            user = session.query(User).filter_by(email=email).first()
+            return user.password_hash if user else None
+    except Exception as e:
+        logger.error("Erro ao buscar password_hash por email %s: %s", email, e)
     return None
 
 
@@ -46,7 +71,7 @@ def get_user_by_email(email: str) -> Optional[dict]:
             user = session.query(User).filter_by(email=email).first()
             return user.to_dict() if user else None
     except Exception as e:
-        print(f"[IDENTITY] Erro ao buscar usuario por email {email}: {e}")
+        logger.error("Erro ao buscar usuario por email %s: %s", email, e)
     return None
 
 
@@ -56,7 +81,7 @@ def get_user_by_username(username: str) -> Optional[dict]:
             user = session.query(User).filter_by(username=username).first()
             return user.to_dict() if user else None
     except Exception as e:
-        print(f"[IDENTITY] Erro ao buscar usuario por username {username}: {e}")
+        logger.error("Erro ao buscar usuario por username %s: %s", username, e)
     return None
 
 
@@ -67,7 +92,7 @@ def create_user(phone_number: str):
             if not existing:
                 session.add(User(phone_number=phone_number, onboarding_step="asking_name"))
     except Exception as e:
-        print(f"[IDENTITY] Erro ao criar usuario {phone_number}: {e}")
+        logger.error("Erro ao criar usuario %s: %s", phone_number, e)
 
 
 def create_user_full(
@@ -103,7 +128,7 @@ def create_user_full(
                     role=role,
                 ))
     except Exception as e:
-        print(f"[IDENTITY] Erro ao criar usuario completo {phone_number}: {e}")
+        logger.error("Erro ao criar usuario completo %s: %s", phone_number, e)
         raise e
 
 
@@ -114,7 +139,7 @@ def promote_user_to_admin(phone_number: str):
             if user:
                 user.role = "admin"
     except Exception as e:
-        print(f"[IDENTITY] Erro ao promover {phone_number} para admin: {e}")
+        logger.error("Erro ao promover %s para admin: %s", phone_number, e)
 
 
 def demote_admin(phone_number: str):
@@ -124,7 +149,7 @@ def demote_admin(phone_number: str):
             if user:
                 user.role = "user"
     except Exception as e:
-        print(f"[IDENTITY] Erro ao rebaixar {phone_number} para user: {e}")
+        logger.error("Erro ao rebaixar %s para user: %s", phone_number, e)
 
 
 def set_whatsapp_verified(phone_number: str):
@@ -135,7 +160,7 @@ def set_whatsapp_verified(phone_number: str):
                 user.whatsapp_verified = True
                 user.onboarding_step = "completed"
     except Exception as e:
-        print(f"[IDENTITY] Erro ao marcar whatsapp_verified para {phone_number}: {e}")
+        logger.error("Erro ao marcar whatsapp_verified para %s: %s", phone_number, e)
 
 
 def link_google_account(email: str, google_id: str):
@@ -146,7 +171,7 @@ def link_google_account(email: str, google_id: str):
                 user.google_id = google_id
                 user.auth_provider = "google"
     except Exception as e:
-        print(f"[IDENTITY] Erro ao vincular google_id para email {email}: {e}")
+        logger.error("Erro ao vincular google_id para email %s: %s", email, e)
 
 
 def update_stripe_customer_id(phone_number: str, customer_id: str):
@@ -156,7 +181,7 @@ def update_stripe_customer_id(phone_number: str, customer_id: str):
             if user:
                 user.stripe_customer_id = customer_id
     except Exception as e:
-        print(f"[IDENTITY] Erro ao atualizar stripe_customer_id para {phone_number}: {e}")
+        logger.error("Erro ao atualizar stripe_customer_id para %s: %s", phone_number, e)
 
 
 def change_user_phone_number(old_phone_number: str, new_phone_number: str):
@@ -185,7 +210,7 @@ def change_user_phone_number(old_phone_number: str, new_phone_number: str):
                 {"phone_number": new_phone_number}
             )
     except Exception as e:
-        print(f"[IDENTITY] Erro ao trocar telefone de {old_phone_number} para {new_phone_number}: {e}")
+        logger.error("Erro ao trocar telefone de %s para %s: %s", old_phone_number, new_phone_number, e)
         raise e
 
 
@@ -197,7 +222,7 @@ def update_user_name(phone_number: str, name: str):
                 user.name = name
                 user.onboarding_step = "completed"
     except Exception as e:
-        print(f"[IDENTITY] Erro ao atualizar nome de {phone_number}: {e}")
+        logger.error("Erro ao atualizar nome de %s: %s", phone_number, e)
 
 
 def update_last_seen(phone_number: str):
@@ -209,7 +234,7 @@ def update_last_seen(phone_number: str):
             if user:
                 user.last_seen_at = now
     except Exception as e:
-        print(f"[IDENTITY] Erro ao atualizar last_seen_at de {phone_number}: {e}")
+        logger.error("Erro ao atualizar last_seen_at de %s: %s", phone_number, e)
 
 
 def is_new_session(user: dict, threshold_hours: int = 4) -> bool:
@@ -230,7 +255,7 @@ def is_new_session(user: dict, threshold_hours: int = 4) -> bool:
         elapsed_hours = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
         return elapsed_hours >= threshold_hours
     except Exception as e:
-        print(f"[IDENTITY] Erro ao calcular is_new_session: {e}")
+        logger.error("Erro ao calcular is_new_session: %s", e)
         return False
 
 
