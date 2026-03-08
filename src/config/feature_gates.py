@@ -270,8 +270,8 @@ def get_all_usage_summary(user_id: str) -> dict:
     Retorna o resumo completo de uso de todas as features limitadas.
     Formato:
     {
-      "plan_name": "Free" | "Plano Pro Mensal",
-      "plan_code": "free" | "pro_mensal",
+      "plan_name": "Free" | "Plano Premium",
+      "plan_code": "free" | "premium",
       "resets_at": "...",
       "features": {
         "images": { "enabled": True, "limit": 5, "used": 3, "remaining": 2, "label": "..." },

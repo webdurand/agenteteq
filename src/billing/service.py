@@ -35,12 +35,14 @@ def sync_subscription_from_stripe(event_id: str, event_type: str, stripe_obj: di
         
         # Get plan code from local catalog by Stripe price
         items = stripe_obj.get("items", {}).get("data", [])
-        plan_code = "pro_mensal"
+        plan_code = None
         if items:
             price_id = items[0].get("price", {}).get("id")
             mapped_plan = get_plan_by_price_id(price_id) if price_id else None
             if mapped_plan:
                 plan_code = mapped_plan["code"]
+        if not plan_code:
+            plan_code = get_default_active_plan().get("code", "unknown") if get_default_active_plan() else "unknown"
 
         # Parse timestamps
         def ts_to_iso(ts):

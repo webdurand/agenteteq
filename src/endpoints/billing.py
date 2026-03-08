@@ -84,7 +84,7 @@ def subscribe(req: SubscribeRequest, user: dict = Depends(get_current_user)):
         try:
             upsert_subscription({
                 "user_id": user["phone_number"],
-                "plan_code": active_plan["code"] if active_plan else "pro_mensal",
+                "plan_code": active_plan["code"],
                 "provider": "stripe",
                 "provider_customer_id": customer_id,
                 "provider_subscription_id": subscription["id"],
@@ -102,7 +102,7 @@ def subscribe(req: SubscribeRequest, user: dict = Depends(get_current_user)):
             "subscription_id": subscription["id"],
             "client_secret": client_secret,
             "status": subscription["status"],
-            "plan_code": active_plan["code"] if active_plan else None,
+            "plan_code": active_plan["code"],
         }
     except Exception as e:
         logger.exception("Erro ao criar assinatura")
@@ -111,7 +111,11 @@ def subscribe(req: SubscribeRequest, user: dict = Depends(get_current_user)):
 
 @router.post("/upgrade")
 def upgrade_plan(req: UpgradeRequest, user: dict = Depends(get_current_user)):
-    """Switch active subscription to a different plan (upgrade/downgrade)."""
+    """
+    Switch active subscription to a different plan.
+    - paid → paid: Stripe proration (immediate price swap)
+    - paid → free: cancel subscription at period end (downgrade)
+    """
     from src.models.subscriptions import get_active_subscription, get_plan as get_plan_model
 
     sub = get_active_subscription(user["phone_number"])
@@ -121,10 +125,41 @@ def upgrade_plan(req: UpgradeRequest, user: dict = Depends(get_current_user)):
     target_plan = get_plan_model(req.plan_code)
     if not target_plan:
         raise HTTPException(status_code=404, detail="Plano não encontrado")
+
+    # --- Downgrade to free: cancel at period end ---
+    if target_plan["code"] == "free":
+        try:
+            updated_sub = cancel_subscription(sub["provider_subscription_id"])
+            from datetime import datetime, timezone
+            def ts_to_iso(ts):
+                return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else None
+
+            upsert_subscription({
+                "user_id": user["phone_number"],
+                "plan_code": sub["plan_code"],
+                "provider": "stripe",
+                "provider_customer_id": sub.get("provider_customer_id", ""),
+                "provider_subscription_id": updated_sub["id"],
+                "status": updated_sub["status"],
+                "current_period_start": ts_to_iso(updated_sub.get("current_period_start")),
+                "current_period_end": ts_to_iso(updated_sub.get("current_period_end")),
+                "cancel_at_period_end": True,
+            })
+
+            period_end = ts_to_iso(updated_sub.get("current_period_end"))
+            return {
+                "status": "downgrading_to_free",
+                "plan_code": "free",
+                "plan_name": "Free",
+                "effective_date": period_end,
+            }
+        except Exception:
+            logger.exception("Erro ao fazer downgrade para free")
+            raise HTTPException(status_code=500, detail="Erro interno do servidor")
+
+    # --- Upgrade/change between paid plans ---
     if not target_plan.get("stripe_price_id"):
         raise HTTPException(status_code=400, detail="Plano sem Price ID configurado no Stripe")
-    if target_plan["code"] == "free":
-        raise HTTPException(status_code=400, detail="Para cancelar, use o endpoint de cancelamento")
 
     try:
         updated_sub = update_subscription_price(
@@ -153,7 +188,7 @@ def upgrade_plan(req: UpgradeRequest, user: dict = Depends(get_current_user)):
             "plan_code": target_plan["code"],
             "plan_name": target_plan["name"],
         }
-    except Exception as e:
+    except Exception:
         logger.exception("Erro ao fazer upgrade de plano")
         raise HTTPException(status_code=500, detail="Erro interno do servidor")
 

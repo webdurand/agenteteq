@@ -53,28 +53,8 @@ def ensure_default_plans():
     elif not free.get("limits_json") or free["limits_json"] == "{}":
         update_plan("free", limits_json=json.dumps(FREE_LIMITS))
 
-    # --- Pro mensal ---
-    price_id = os.getenv("STRIPE_PRICE_ID_DEFAULT", "")
-    pro = get_plan("pro_mensal", initialize=False)
-    if not pro:
-        create_plan(
-            code="pro_mensal",
-            name="Plano Pro Mensal",
-            description="Acesso completo ao Teq com tudo liberado e 7 dias gratis.",
-            amount_cents=4990,
-            trial_days=7,
-            stripe_price_id=price_id,
-            features_json='["Acesso completo","WhatsApp","Tarefas","Lembretes","Chat por voz"]',
-            limits_json=json.dumps(PAID_LIMITS),
-        )
-    else:
-        updates = {}
-        if not pro.get("stripe_price_id") and price_id:
-            updates["stripe_price_id"] = price_id
-        if not pro.get("limits_json") or pro["limits_json"] == "{}":
-            updates["limits_json"] = json.dumps(PAID_LIMITS)
-        if updates:
-            update_plan("pro_mensal", **updates)
+    # Planos pagos são criados manualmente pelo admin via API.
+    # Certifique-se de configurar o stripe_price_id ao criar o plano.
 
 
 def is_event_processed(event_id: str) -> bool:
@@ -161,10 +141,14 @@ def get_plan_by_price_id(price_id: str) -> Optional[dict]:
 
 
 def get_default_active_plan() -> Optional[dict]:
+    """Return the first active *paid* plan (skips free)."""
     with get_db() as session:
         plan = (
             session.query(BillingPlan)
-            .filter_by(is_active=True)
+            .filter(
+                BillingPlan.is_active == True,  # noqa: E712
+                BillingPlan.code != "free",
+            )
             .order_by(BillingPlan.id.asc())
             .first()
         )

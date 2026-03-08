@@ -445,6 +445,126 @@ def get_system_metrics(days: int = 7, user: dict = Depends(require_admin)):
     return metrics
 
 
+# ---------------------------------------------------------------------------
+# Custo aproximado por usuário
+# Estimativas baseadas nos preços oficiais Google AI (paid tier, USD).
+# Ajuste os valores conforme necessário.
+# ---------------------------------------------------------------------------
+
+_COST_USD = {
+    "chat_per_turn": 0.0035,        # ~1K tokens in + 1K out via gemini-2.5-flash
+    "voice_live_per_min": 0.045,     # áudio in/out via gemini-2.5-flash-native-audio
+    "tts_per_synthesis": 0.002,      # ~200 tokens text in + 500 tokens audio out
+    "image_per_unit": 0.039,         # gemini-3-pro-image-preview por imagem gerada
+    "search_per_call": 0.0,          # DuckDuckGo (padrão) é grátis
+    "deep_research_per_call": 0.025, # ~5 chamadas flash (decisor + pesquisadores)
+}
+_USD_TO_BRL = 5.80
+
+
+@router.get("/business/cost-per-user")
+def get_cost_per_user(days: int = 30, user: dict = Depends(require_admin)):
+    if _is_sqlite():
+        return {"error": "Not supported on SQLite"}
+
+    with get_db() as session:
+        # 1) chat turns (message_sent) por usuário
+        rows = session.execute(text("""
+            SELECT ue.user_id,
+                   SUM(CASE WHEN ue.event_type = 'message_sent' THEN 1 ELSE 0 END) AS chat_turns,
+                   SUM(CASE WHEN ue.event_type = 'voice_live_session' THEN COALESCE(ue.latency_ms, 0) ELSE 0 END) AS voice_ms,
+                   SUM(CASE WHEN ue.event_type = 'feature_usage' AND ue.tool_name = 'max_searches_daily' THEN 1 ELSE 0 END) AS searches,
+                   SUM(CASE WHEN ue.event_type = 'feature_usage' AND ue.tool_name = 'max_deep_research_daily' THEN 1 ELSE 0 END) AS deep_researches
+            FROM usage_events ue
+            WHERE ue.created_at >= NOW() - make_interval(days => :d)
+            GROUP BY ue.user_id
+        """), {"d": days}).fetchall()
+
+        # 2) imagens (background_tasks carousel done) por usuário
+        img_rows = session.execute(text("""
+            SELECT user_id, COUNT(*) AS images
+            FROM background_tasks
+            WHERE task_type = 'carousel' AND status = 'done'
+                  AND created_at >= NOW() - make_interval(days => :d)
+            GROUP BY user_id
+        """), {"d": days}).fetchall()
+        img_map = {r[0]: r[1] for r in img_rows}
+
+        # 3) nomes dos usuários
+        all_user_ids = list({r[0] for r in rows} | set(img_map.keys()))
+        name_map: dict[str, str] = {}
+        if all_user_ids:
+            placeholders = ",".join([f":u{i}" for i in range(len(all_user_ids))])
+            params = {f"u{i}": uid for i, uid in enumerate(all_user_ids)}
+            name_rows = session.execute(
+                text(f"SELECT phone_number, name FROM users WHERE phone_number IN ({placeholders})"),
+                params,
+            ).fetchall()
+            name_map = {r[0]: r[1] or "" for r in name_rows}
+
+    # Calcula custo por usuário
+    user_costs: list[dict] = []
+    for r in rows:
+        uid = r[0]
+        chat = int(r[1] or 0)
+        voice_min = int(r[2] or 0) / 60_000.0
+        searches = int(r[3] or 0)
+        deep = int(r[4] or 0)
+        images = img_map.pop(uid, 0)
+
+        cost_usd = (
+            chat * _COST_USD["chat_per_turn"]
+            + voice_min * _COST_USD["voice_live_per_min"]
+            + chat * _COST_USD["tts_per_synthesis"]  # aproximação: TTS ≈ 1 por chat turn
+            + images * _COST_USD["image_per_unit"]
+            + searches * _COST_USD["search_per_call"]
+            + deep * _COST_USD["deep_research_per_call"]
+        )
+        cost_brl = round(cost_usd * _USD_TO_BRL, 2)
+
+        user_costs.append({
+            "user_id": uid,
+            "name": name_map.get(uid, ""),
+            "cost_brl": cost_brl,
+            "breakdown": {
+                "chat": round(chat * _COST_USD["chat_per_turn"] * _USD_TO_BRL, 2),
+                "voice": round(voice_min * _COST_USD["voice_live_per_min"] * _USD_TO_BRL, 2),
+                "tts": round(chat * _COST_USD["tts_per_synthesis"] * _USD_TO_BRL, 2),
+                "images": round(images * _COST_USD["image_per_unit"] * _USD_TO_BRL, 2),
+                "search": round(searches * _COST_USD["search_per_call"] * _USD_TO_BRL, 2),
+                "deep_research": round(deep * _COST_USD["deep_research_per_call"] * _USD_TO_BRL, 2),
+            },
+        })
+
+    # Usuários que só têm imagens e não apareceram na query de usage_events
+    for uid, images in img_map.items():
+        cost_usd = images * _COST_USD["image_per_unit"]
+        cost_brl = round(cost_usd * _USD_TO_BRL, 2)
+        user_costs.append({
+            "user_id": uid,
+            "name": name_map.get(uid, ""),
+            "cost_brl": cost_brl,
+            "breakdown": {
+                "chat": 0, "voice": 0, "tts": 0,
+                "images": cost_brl, "search": 0, "deep_research": 0,
+            },
+        })
+
+    user_costs.sort(key=lambda x: x["cost_brl"], reverse=True)
+    total_brl = round(sum(u["cost_brl"] for u in user_costs), 2)
+    active = len(user_costs)
+    avg_brl = round(total_brl / active, 2) if active else 0
+
+    return {
+        "total_cost_brl": total_brl,
+        "active_users": active,
+        "avg_cost_per_user_brl": avg_brl,
+        "top_users": user_costs[:15],
+        "cost_multipliers": _COST_USD,
+        "usd_to_brl": _USD_TO_BRL,
+    }
+
+
 @router.get("/business/analytics")
 def get_business_analytics(days: int = 30, user: dict = Depends(require_admin)):
     analytics: dict = {

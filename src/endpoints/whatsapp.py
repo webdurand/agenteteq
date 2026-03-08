@@ -58,7 +58,12 @@ def flush_ready_buffers():
     ready_rows = []
 
     with get_db() as db:
-        buffers = db.query(MessageBuffer).filter(MessageBuffer.flush_at <= now).all()
+        buffers = (
+            db.query(MessageBuffer)
+            .filter(MessageBuffer.flush_at <= now)
+            .with_for_update(skip_locked=True)
+            .all()
+        )
         for buf in buffers:
             ready_rows.append((buf.user_id, buf.events))
             db.delete(buf)
@@ -357,6 +362,11 @@ def _clear_pending_choice(phone: str):
 async def orchestrate_message(event: dict):
     from_number = event["from_number"]
     message_id = event["id"]
+
+    orchestration_key = f"orch_{message_id}"
+    if deduplicate(orchestration_key):
+        print(f"[PROCESS] Orquestracao duplicada ignorada para {message_id} de {from_number}")
+        return
 
     try:
         user = get_user(from_number)
