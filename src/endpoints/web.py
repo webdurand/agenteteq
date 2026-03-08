@@ -217,13 +217,29 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
             for i, m in enumerate(response.messages[-5:]):
                 logger.info("  msg[%s] role=%s content=%s tool_calls=%s reasoning=%s", i, getattr(m, 'role', '?'), repr(getattr(m, 'content', None))[:120], bool(getattr(m, 'tool_calls', None)), repr(getattr(m, 'reasoning_content', None))[:80])
 
-        logger.info("[WEB WS] Retrying agent.run()...")
-        response = await asyncio.to_thread(agent.run, prompt, **kwargs)
-        final_text = extract_final_response(response)
+        # Não faz retry se tools com side-effects já foram chamadas (evita duplicação)
+        _side_effect_tools = {"generate_carousel_tool", "edit_image_tool", "schedule_message"}
+        _had_side_effects = False
+        if hasattr(response, "messages") and response.messages:
+            for msg in response.messages:
+                for tc in (getattr(msg, "tool_calls", None) or []):
+                    fn = getattr(tc, "function", None)
+                    tc_name = getattr(fn, "name", None) if fn else None
+                    if tc_name in _side_effect_tools:
+                        _had_side_effects = True
+                        break
 
-        if not final_text:
-            final_text = "Desculpa, tive um problema ao processar sua mensagem. Pode repetir?"
-            logger.info("[WEB WS] Retry tambem vazio, usando mensagem padrao")
+        if _had_side_effects:
+            logger.info("[WEB WS] Resposta vazia mas tools com side-effects foram chamadas, pulando retry")
+            final_text = ""
+        else:
+            logger.info("[WEB WS] Retrying agent.run()...")
+            response = await asyncio.to_thread(agent.run, prompt, **kwargs)
+            final_text = extract_final_response(response)
+
+            if not final_text:
+                final_text = "Desculpa, tive um problema ao processar sua mensagem. Pode repetir?"
+                logger.info("[WEB WS] Retry tambem vazio, usando mensagem padrao")
 
     await asyncio.sleep(0)
 

@@ -14,7 +14,7 @@ O Teq possui ferramentas para conversar de forma descontraída, publicar posts n
 5. **Transcrição (Desacoplada)**: Lê o áudio e transforma em texto. O serviço é parametrizado via `.env` (ex. Whisper, Groq, Gemini) para permitir fácil troca.
 6. **Agente Teq (Agno)**:
    - Recebe a transcrição ou texto (com possível GREETING_INJECTION prefixado).
-   - Possui estado (histórico) salvo em SQLite (Agno SqliteDb), usando o número de WhatsApp como `session_id`.
+   - Possui estado (histórico) salvo em PostgreSQL (Agno `PostgresDb`) em produção (fallback `SqliteDb` em dev), usando o número de WhatsApp como `session_id`.
    - É instanciado com ferramentas contextuais injetadas pelo orchestrator (notifier, search tools).
    - Pode conversar de forma descontraída, pesquisar na web, publicar posts no blog, gerenciar memórias, consultar tempo e agendar mensagens.
 7. **Atualização de last_seen_at**: Após cada mensagem processada com sucesso, o orchestrator atualiza o `last_seen_at` do usuário no banco.
@@ -73,13 +73,13 @@ Como o webhook do WhatsApp (Evolution/Meta) emite um evento por mensagem, implem
 3. **Indexação na Base de Conhecimento**: Em background, o próprio Gemini gera uma descrição curta para cada imagem, que é então salva na base de conhecimento `PgVector` junto com a URL permanente. Quando o agente busca em sua memória no futuro, ele pode resgatar a referência e URL originais.
 
 ### Edição e Transformação de Imagens (`src/tools/image_editor.py`)
-O agente pode **editar ou transformar imagens** enviadas pelo usuário usando o modelo Gemini (`gemini-3-pro-image-preview`) que suporta image editing nativo.
+O agente pode **editar ou transformar imagens** enviadas pelo usuário usando o modelo Gemini (`gemini-3.1-flash-image-preview`, configurável via `IMAGE_MODEL`) que suporta image editing nativo.
 
 **Fluxo:**
 1. O usuário envia uma imagem + instrução textual (ex: "coloca um dragão nessa cena").
-2. Os bytes da imagem são armazenados em `_session_images[session_id]` antes de `agent.run()`.
+2. Os bytes da imagem são enviados ao Cloudinary e a URL é persistida na tabela `image_sessions` (modelo `ImageSession` em `src/db/models.py`) via `store_session_images()`.
 3. O agente detecta a intenção de edição e chama `edit_image_tool`.
-4. A tool recupera os bytes da sessão e dispara `_process_edit_background` (assíncrono):
+4. A tool recupera as URLs da sessão via `get_session_images()` e dispara `_process_edit_background` (assíncrono):
    - Envia evento WS `image_editing` → frontend exibe indicador de loading no chat.
    - Chama `provider.edit(prompt, reference_image)` no Gemini.
    - Faz upload do resultado no Cloudinary (`edited_images/{user_id}`).
@@ -124,6 +124,26 @@ O agente pode **editar ou transformar imagens** enviadas pelo usuário usando o 
 
 - **Grounding com Google Search**: Com `LLM_PROVIDER=gemini`, é possível ativar busca web nativa do Gemini via `GEMINI_GOOGLE_SEARCH=true`. O modelo passa a poder consultar a web em tempo real e retornar respostas com citações (`groundingMetadata`). No Agno isso é feito com `Gemini(..., search=True)`. Funciona como capacidade do modelo, não como tool separada; pode coexistir com as tools `web_search` e `deep_research` (provider externo).
 - **Deep Research oficial (Google)**: A Google oferece um agente "Deep Research" via **Interactions API** (`client.interactions.create(...)`), com planejamento iterativo e múltiplas buscas. O `deep_research` atual do projeto é uma implementação própria (Agno Team + sub-agentes + provider configurável). Para usar o Deep Research nativo da Google seria necessário integrar a Interactions API em um fluxo dedicado (ex.: nova tool ou endpoint que chame `genai.Client().interactions.create(...)`).
+
+## Integrações Google Workspace
+
+O agente pode interagir com Gmail e Google Calendar do usuário quando a integração estiver conectada.
+
+### Módulos
+
+| Arquivo | Responsabilidade |
+|---------|-----------------|
+| `src/tools/google_tools.py` | Factory `create_google_tools(user_phone)` que retorna 3 tools: `read_emails` (Gmail), `get_calendar_events` e `create_calendar_event` (Google Calendar). |
+| `src/endpoints/integrations.py` | Rotas REST `/integrations/*` para o fluxo OAuth com Google (conectar/desconectar Gmail e Calendar). |
+| `src/memory/integrations.py` | CRUD para modelo `UserIntegration` — tokens são encriptados em repouso via `src/auth/crypto.py`. |
+
+### Fluxo de Conexão
+1. Frontend chama `GET /integrations/connect/{provider}` → backend gera URL de autorização Google OAuth.
+2. Usuário autoriza no Google → callback retorna `code` → frontend envia `POST /integrations/connect` com o `code`.
+3. Backend troca code por tokens, encripta e salva em `user_integrations`.
+
+### Injeção Condicional no Agente
+O `factory.py` verifica se o usuário possui integrações ativas (`gmail`, `google_calendar`) e injeta as tools correspondentes + instruções extras no agente. Sem integração, as tools não aparecem no agente.
 
 ## Lista de Tarefas (`src/tools/task_manager.py`)
 
@@ -175,7 +195,7 @@ O agente se identifica como **Teq**, criado por **Pedro Durand**. Tem tom descon
 
 ## Previsão do Tempo (`src/tools/weather.py`)
 
-Ferramenta `get_weather(city)` que consulta `wttr.in` (gratuito, sem API key). Retorna temperatura atual, sensação térmica, umidade, vento e previsão dos próximos 2 dias em português. Usada tanto na saudação automática quanto em consultas diretas do usuário.
+Ferramenta `get_weather(city)` que busca a previsão do tempo via `web_search_raw()` (mesmo provider de busca web configurado no sistema). Retorna temperatura atual, condição do tempo e previsão em português. Usada tanto na saudação automática quanto em consultas diretas do usuário.
 
 ## Motor de Agendamento (`src/scheduler/`)
 
@@ -285,7 +305,7 @@ Permite ao agente gerar múltiplos slides em paralelo para o Instagram, utilizan
 4. Em background, as imagens são geradas em paralelo usando a interface `ImageProvider` (`src/tools/image_generation/base.py`).
    - **Com referência**: cada slide usa `provider.edit(prompt, reference_bytes)` — o Gemini recebe a foto como contexto visual e gera o slide baseado nela.
    - **Sem referência**: cada slide usa `provider.generate(prompt)` — geração puramente textual.
-5. O provider padrão é o `NanoBananaProvider`, que encapsula o uso da API do Gemini (`gemini-3-pro-image-preview`).
+5. O provider padrão é o `NanoBananaProvider`, que encapsula o uso da API do Gemini (`gemini-3.1-flash-image-preview`, configurável via `IMAGE_MODEL`).
 6. Cada imagem gerada (em bytes) é enviada via upload para o **Cloudinary** (usado pelo seu plano gratuito generoso com CDN global).
 7. O banco de dados é atualizado com o status `done` e as URLs finais das imagens geradas.
 8. Um evento WebSocket (`carousel_generated`) é disparado sincronicamente (`emit_event_sync`) para atualizar o frontend.
@@ -378,19 +398,18 @@ A aplicação opera voz em modo Live por padrão no frontend:
 
 ### Módulo TTS Clássico (`src/integrations/tts.py`)
 
-Interface desacoplada `BaseTTS` com factory `get_tts()`:
+Interface desacoplada `BaseTTS` com factory `get_tts()`. Atualmente apenas o provider Gemini está implementado:
 
 | Provider | Variável | Custo | Observação |
 |---|---|---|---|
-| `gemini` (padrão) | `GOOGLE_API_KEY` | Grátis (tier atual) | `gemini-2.5-flash-tts` (pt-BR), voz `Aoede` padrão |
-| `openai` | `OPENAI_API_KEY` | ~$15/1M chars | `tts-1`, vozes configuráveis |
-| `elevenlabs` | `ELEVENLABS_API_KEY` | Pago | `eleven_multilingual_v2` |
-| `browser` | — | Grátis | Web Speech API (`SpeechSynthesisUtterance`) no cliente |
+| `gemini` (único) | `GOOGLE_API_KEY` | Grátis (tier atual) | `gemini-2.5-flash-preview-tts` (pt-BR), voz `Aoede` padrão (configurável via `TTS_VOICE`) |
+
+- Retorna PCM linear16 (24kHz, mono) convertido para WAV.
+- Retry automático com backoff exponencial para erros 5xx.
 
 Configuração via `.env`:
 ```
-TTS_PROVIDER=gemini   # gemini | openai | elevenlabs | browser
-TTS_VOICE=Puck        # Gemini: Puck, Aoede, Fenrir | OpenAI: onyx, nova...
+TTS_VOICE=Aoede       # Gemini: Puck, Aoede, Fenrir, Charon, Kore...
 FRONTEND_ORIGIN=http://localhost:5173  # origin do React para CORS
 ```
 
@@ -425,10 +444,12 @@ VITE_WS_URL=ws://localhost:8000   # em produção: wss://seu-dominio.com
 - **Testes Automatizados**: Suite `pytest` em `tests/` com 25 testes cobrindo OTP, autenticação, identidade e criptografia de tokens. Usa SQLite in-memory para isolamento.
 - **Identidade e Onboarding Determinístico**: Reduz custos de LLM e garante uma experiência controlada ao coletar os dados iniciais do usuário.
 - **Módulo de Memória**: Utiliza NeonDB com PgVector e a Knowledge Base do Agno para armazenar memórias do usuário em background e injetar contexto de forma "Agentic" ou "Always-on".
+- **Extração Automática de Fatos (`src/memory/extractor.py`)**: Após cada turno de conversa, um agente Gemini separado (`gemini-2.5-flash`) analisa a interação e extrai fatos/preferências permanentes sobre o usuário (ex: "gosta de títulos curtos", "tem empresa chamada XYZ"), salvando via `add_memory`. Ignora fatos temporários ou irrelevantes.
+- **Analytics de Uso (`src/memory/analytics.py`)**: Módulo que registra eventos na tabela `usage_events` via `log_event()` (user_id, channel, event_type, tool_name, status, latency_ms). `log_agent_tools()` percorre as mensagens recentes do agente e registra tool calls automaticamente.
 - **Desacoplamento**: LLM, transcrição, WhatsApp provider, search provider e scraper provider são todos configuráveis via `.env`. Trocar qualquer um exige apenas mudar a variável de ambiente.
 - **Agent Factory (`src/agent/factory.py`)**: Centraliza a criação de agentes com search tools. `create_agent_with_tools(session_id, notifier, ...)` é o ponto único de instanciação, evitando duplicação entre `whatsapp.py` e `web.py`.
-- **Prompts Compartilhados (`src/agent/prompts.py`)**: Constantes de injeção de contexto (GREETING, CONTINUATION) ficam em módulo único, importadas por ambos os canais.
-- **Armazenamento de Sessão**: Agno SqliteDb para manter histórico por telefone do usuário.
+- **Prompts Compartilhados (`src/agent/prompts.py`)**: Constantes de injeção de contexto (`GREETING_INJECTION`, `GREETING_INJECTION_WEB`, `CONTINUATION_INJECTION`) ficam em módulo único, importadas por ambos os canais.
+- **Armazenamento de Sessão**: Agno `PostgresDb` em produção (PostgreSQL via `DATABASE_URL`) com fallback para `SqliteDb` em dev. Mantém histórico por telefone do usuário.
 - **Integração via GitHub API**: A publicação do blog foi migrada de comandos git locais para a GitHub API (`httpx.put`), permitindo que a API e o blog sejam deployados em servidores diferentes e desacoplados (ex: backend na Koyeb, frontend na Vercel).
 
 ## Segurança
@@ -455,10 +476,11 @@ VITE_WS_URL=ws://localhost:8000   # em produção: wss://seu-dominio.com
 | Google Search (Gemini) | `GEMINI_GOOGLE_SEARCH` | — | `true` habilita grounding nativo com citações (requer `LLM_PROVIDER=gemini`) |
 | Scraping | `SCRAPER_PROVIDER` | `jina` | `jina`, `newspaper4k`, `crawl4ai` |
 | Memória | `MEMORY_MODE` | `agentic` | `agentic`, `always-on` |
-| Agendamentos | `scheduler.db` | SQLite local | — (persistência automática) |
+| Agendamentos | `DATABASE_URL` | PostgreSQL (prod) / SQLite fallback | APScheduler `SQLAlchemyJobStore` com pool e reconnect |
 | Sentry | `SENTRY_DSN` | — (desativado) | DSN do projeto Sentry |
 | Token Encryption | `TOKEN_ENCRYPTION_KEY` | — (plaintext) | Chave para encriptar tokens OAuth |
-| TTS | `TTS_PROVIDER` | `gemini` | `gemini`, `openai`, `elevenlabs`, `browser` |
+| TTS | `TTS_VOICE` | `Aoede` | Vozes Gemini: `Puck`, `Aoede`, `Fenrir`, `Charon`, `Kore` |
+| Imagem | `IMAGE_MODEL` | `gemini-3.1-flash-image-preview` | Qualquer modelo Gemini com suporte a imagem |
 
 ## Autenticação e Registro
 
@@ -479,6 +501,22 @@ O sistema de autenticação suporta login manual (email+senha) com 2FA via Whats
 - `google.py`: Isola as chamadas ao SDK do Google para validação do token.
 - `deps.py`: Dependências FastAPI para extrair JWT e validar plano ativo.
 - `routes.py`: Endpoints REST, que orquestram a verificação de senha/token e o envio de mensagens chamando o `whatsapp_client`.
+
+### Rotas de Auth (`src/auth/routes.py`)
+
+| Rota | Método | Descrição |
+|------|--------|-----------|
+| `/auth/register` | POST | Cadastro manual (cria conta + envia OTP) |
+| `/auth/verify-whatsapp` | POST | Confirma OTP de cadastro |
+| `/auth/login` | POST | Login com email+senha (gera OTP 2FA) |
+| `/auth/verify-2fa` | POST | Confirma OTP 2FA do login |
+| `/auth/google` | POST | Login/cadastro via Google OAuth |
+| `/auth/google/complete` | POST | Completa cadastro Google (username, telefone) |
+| `/auth/resend-code` | POST | Reenvia código OTP |
+| `/auth/change-phone/request` | POST | Solicita troca de telefone (envia OTP para novo número) |
+| `/auth/change-phone/verify` | POST | Confirma troca de telefone |
+| `/auth/me` | GET | Retorna dados do usuário autenticado |
+| `/auth/accept-terms` | POST | Aceita versão atual dos termos |
 
 ### Estrutura do JWT
 
@@ -508,11 +546,13 @@ O sistema conta com um Painel Administrativo integrado ao frontend principal (`a
 - Os pontos de entrada (`whatsapp.py`, `web.py` e o orquestrador do `assistant.py`) são instrumentados para gravar de forma assíncrona estes eventos.
 
 ### Endpoints Admin (`src/endpoints/admin.py`)
-- `/admin/business/analytics`: Endpoint centralizado que retorna métricas agregadas de negócio divididas em financeiro, engajamento, features e operacional.
+- `/admin/business/summary`: Endpoint centralizado que retorna métricas agregadas de negócio divididas em financeiro, engajamento, features e operacional.
 - `/admin/business/users`: Lista de usuários com informações de assinatura.
+- `/admin/business/tools`: Ranking de tools mais utilizadas.
+- `/admin/business/cost-per-user`: Estimativa de custo em BRL por usuário baseado em uso (chat, voz, TTS, imagens, search, deep research).
 - `/admin/health/summary`: Checks de saúde do banco, scheduler e integrações.
 - `/admin/admins`: Gestão básica de administradores.
-- `/admin/system/*`: Gestão da fila de tarefas, configuração (`system_config`) e listagem de métricas de infraestrutura.
+- `/admin/system/*`: Gestão da fila de tarefas (retry/cancel), configuração (`system_config`), métricas de infraestrutura e status da fila em tempo real.
 - `/admin/campaigns*`: CRUD de campanhas in-app para popup estratégico (imagem, título, mensagem, CTA, audiência e frequência).
 
 ### Dashboard Frontend (Admin)
@@ -553,12 +593,33 @@ O frontend web (`agenteteq-front`) passou a operar com três componentes indepen
      - `priority`, `active`.
 
 ### Endpoints de suporte (Web)
-- `GET /api/usage/limits`: retorna `plan_name`, `runs_limit`, `runs_used`, `runs_remaining`, `resets_at`.
+- `GET /api/usage/limits`: retorna `plan_name`, `plan_code`, `resets_at` e `features` com status detalhado por feature (enabled, limit, used, remaining, label). Alimentado por `get_all_usage_summary()` em `feature_gates.py`.
 - `GET /api/campaigns/active`: retorna a campanha ativa elegível para o usuário atual.
 
 ### Persistência
 - Tabela `in_app_campaigns` (ORM `InAppCampaign`) para campanhas de popup.
 - Preferências de exibição de onboarding e frequência de popup são armazenadas no frontend (storage do navegador), por usuário.
+
+## Rotas da API Geral (`src/endpoints/api.py`)
+
+| Rota | Método | Descrição |
+|------|--------|-----------|
+| `/api/tasks` | GET/POST | Listar e criar tarefas |
+| `/api/tasks/{task_id}` | PUT/DELETE | Atualizar status e deletar tarefas |
+| `/api/reminders` | GET/POST | Listar e criar lembretes |
+| `/api/reminders/{reminder_id}` | DELETE | Deletar lembrete |
+| `/api/usage/limits` | GET | Resumo de uso e limites por feature |
+| `/api/plan/features` | GET | Features habilitadas para o plano do usuário |
+| `/api/campaigns/active` | GET | Campanha in-app ativa elegível |
+| `/api/chat/history` | GET | Histórico de mensagens do chat (paginado) |
+
+## Rotas de Carrossel (`src/endpoints/carousel.py`)
+
+| Rota | Método | Descrição |
+|------|--------|-----------|
+| `/carousel/` | GET | Lista carrosséis do usuário (com paginação) |
+| `/carousel/{carousel_id}` | GET | Retorna carrossel específico (com validação de ownership) |
+| `/carousel/{carousel_id}` | DELETE | Deleta carrossel do usuário |
 
 *(Este arquivo deve ser atualizado sempre que novas ferramentas, rotas ou fluxos forem adicionados)*
 
@@ -571,11 +632,14 @@ O projeto utiliza **Stripe Billing** como fonte de verdade para assinaturas reco
 - **Não suportados no MVP**: PIX (não suporta recorrência no modo assinatura na Stripe BR), PayPal (indisponível para conta BR), Débito automático (não existe para o Brasil).
 - **Trial**: 7 dias gratuitos para todos.
 
-### Fluxo de Checkout (Embedded)
-1. Frontend chama `POST /billing/subscribe` que cria um `Customer` e uma `Subscription` (`payment_behavior='default_incomplete'`, `trial_period_days=7`) e retorna um `client_secret`.
-2. Frontend exibe o `Payment Element` embedded.
-3. Usuário insere dados e chama `stripe.confirmSetup()`.
-4. Webhooks sincronizam o status e liberam acesso.
+### Fluxo de Checkout (Two-step)
+1. Frontend chama `POST /billing/setup` que cria um `Customer` Stripe (se necessário) e um `SetupIntent`, retornando `client_secret` + `setup_intent_id`.
+2. Frontend exibe o `Payment Element` embedded e o usuário insere os dados do cartão.
+3. Frontend chama `stripe.confirmCardSetup(client_secret)` para validar o cartão.
+4. Frontend chama `POST /billing/activate` com `plan_code` + `setup_intent_id`. O backend recupera o `payment_method` do `SetupIntent`, vincula ao `Customer`, e cria a `Subscription` com trial.
+5. Webhooks (`/webhook/stripe`) sincronizam o status e mantêm o espelho local atualizado.
+
+Essa separação em dois passos garante que o trial só começa após o cartão ser salvo com sucesso.
 
 ### Arquitetura de Billing Desacoplada
 - `src/endpoints/billing.py`: Rotas REST de checkout e webhook, não contém lógica Stripe, apenas orquestra chamadas.
@@ -585,9 +649,50 @@ O projeto utiliza **Stripe Billing** como fonte de verdade para assinaturas reco
 - `src/models/subscriptions.py`: Persistência local (tabelas `billing_plans`, `subscriptions`, `billing_events` para idempotência de webhooks, `refund_logs`).
 
 ### Política de Acesso e Gate
-A função `is_plan_active` (em `src/auth/deps.py`) foi expandida para validar a assinatura real do usuário:
+A função `is_plan_active` (definida em `src/memory/identity.py`, importada por `src/auth/deps.py`) foi expandida para validar a assinatura real do usuário:
 - **Acesso liberado**: `trialing`, `active` ou `past_due` (com grace period de 5 dias). Admins têm bypass automático.
 - **Acesso bloqueado**: `canceled` com período encerrado, `unpaid`, `incomplete_expired` ou sem assinatura ativa após trial.
+
+### Feature Gates e Limites por Plano (`src/config/feature_gates.py`)
+
+Sistema granular de gating de features e limites diários baseado no plano do usuário. Os limites são lidos de `BillingPlan.limits_json` (editável pelo admin no tab Planos).
+
+**Tipos de controle:**
+- **Limites diários numéricos**: `max_tasks_per_user_daily` (imagens), `max_searches_daily`, `max_deep_research_daily` — contados via `usage_events` ou `background_tasks`.
+- **Limites de minutos**: `voice_live_max_minutes_daily` — soma `latency_ms` de eventos `voice_live_session`.
+- **Features on/off**: `voice_live_enabled`, `tts_enabled` — habilitadas/desabilitadas por plano.
+- **Admin bypass**: Admins com `admin_bypass_limits=true` na `system_config` ignoram todos os limites.
+
+**Funções principais:**
+- `is_feature_enabled(user_id, feature_key)`: checa se feature on/off está habilitada.
+- `check_daily_feature_limit(user_id, feature_key)`: retorna mensagem de erro se limite atingido, `None` se ok.
+- `check_voice_live_minutes(user_id)`: checa minutos de voz live restantes.
+- `get_all_usage_summary(user_id)`: retorna resumo completo de uso (alimenta `GET /api/usage/limits`).
+- `log_feature_usage(user_id, feature_key)`: registra utilização para contabilizar limites.
+
+### Rotas de Billing (`src/endpoints/billing.py`)
+
+| Rota | Método | Descrição |
+|------|--------|-----------|
+| `/billing/setup` | POST | Cria Customer + SetupIntent Stripe |
+| `/billing/activate` | POST | Cria Subscription com payment method do SetupIntent |
+| `/billing/upgrade` | POST | Troca de plano (upgrade/downgrade) |
+| `/billing/setup-payment-method` | POST | Cria SetupIntent para atualizar cartão |
+| `/billing/update-default-payment` | POST | Atualiza método de pagamento padrão |
+| `/billing/cancel` | POST | Cancela assinatura no fim do período |
+| `/billing/portal` | POST | Cria sessão do Stripe Customer Portal |
+| `/billing/overview` | GET | Retorna overview de billing do usuário |
+| `/billing/plans` | GET | Lista planos disponíveis |
+| `/webhook/stripe` | POST | Webhook do Stripe (idempotente via `billing_events`) |
+
+### Admin Billing (`src/endpoints/admin_billing.py`)
+
+Rotas protegidas por `require_admin` para gestão de planos e assinaturas:
+- `GET/POST /admin/billing/plans`: Listar e criar planos (auto-cria produto+preço no Stripe se não informado).
+- `PUT/DELETE /admin/billing/plans/{code}`: Atualizar e deletar planos.
+- `GET /admin/billing/subscriptions`: Listar todas as assinaturas.
+- `POST /admin/billing/subscriptions/manual`: Criar assinatura manual (sem Stripe).
+- `POST /admin/billing/refund`: Processar reembolso via Stripe.
 
 ## Fila Persistente e Concorrência (Multi-pod)
 
@@ -596,7 +701,7 @@ O projeto suporta escalabilidade horizontal (autoscaling) e delega tarefas demor
 ### Infraestrutura Compartilhada
 - **system_config**: Tabela no banco de dados (`src/config/system_config.py`) para definir limites dinamicamente (ex: `max_concurrent_images`, `max_tasks_per_user_daily`). Suporta sufixos por plano (ex: `:trial`, `:paid`). Modificada pelo painel Admin.
 - **processed_messages**: Tabela no banco para deduplicação de mensagens recebidas de webhooks, substituindo o cache em memória para que todos os pods compartilhem o mesmo estado. A chave de idempotência é estável por `provider + message_id` (com fallback por hash quando `message_id` não existe), evitando respostas duplicadas quando o provedor reentrega o mesmo evento com pequenas variações de payload.
-- **Agno PostgresStorage**: O histórico de sessões do agente foi migrado de `SqliteDb` para `PostgresStorage`, permitindo continuidade do contexto entre diferentes pods.
+- **Agno `PostgresDb`**: O histórico de sessões do agente foi migrado de `SqliteDb` para `PostgresDb` (de `agno.db.postgres`), permitindo continuidade do contexto entre diferentes pods.
 
 ### Fila de Tasks (`background_tasks`)
 Implementada via PostgreSQL usando a diretiva `FOR UPDATE SKIP LOCKED`.
