@@ -259,19 +259,19 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
                 
             elif function_name == "schedule_message":
                 from src.tools.scheduler_tool import create_scheduler_tools
-                tools = create_scheduler_tools(user_id)
+                tools = create_scheduler_tools(user_id, channel="web_live")
                 schedule_func = tools[0]
                 return {"result": schedule_func(**args)}
                 
             elif function_name == "list_schedules":
                 from src.tools.scheduler_tool import create_scheduler_tools
-                tools = create_scheduler_tools(user_id)
+                tools = create_scheduler_tools(user_id, channel="web_live")
                 list_func = tools[1]
                 return {"result": list_func(**args)}
                 
             elif function_name == "cancel_schedule":
                 from src.tools.scheduler_tool import create_scheduler_tools
-                tools = create_scheduler_tools(user_id)
+                tools = create_scheduler_tools(user_id, channel="web_live")
                 cancel_func = tools[2]
                 return {"result": cancel_func(**args)}
 
