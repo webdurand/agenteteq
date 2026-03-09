@@ -3,7 +3,7 @@
 ## Visão Geral
 
 O `agenteteq` é uma API em Python baseada no FastAPI responsável por receber webhooks do WhatsApp, processar áudios utilizando serviços de transcrição, e alimentar um Agente Agno chamado **Teq**.
-O Teq possui ferramentas para conversar de forma descontraída, publicar posts no blog, gerenciar memória, pesquisar na web, realizar pesquisas profundas com múltiplos sub-agentes, gerenciar uma lista de tarefas pessoal, consultar previsão do tempo e agendar mensagens proativas.
+O Teq possui ferramentas para conversar de forma descontraída, publicar posts no blog, gerenciar memória, pesquisar na web, realizar pesquisas profundas com múltiplos sub-agentes, gerenciar uma lista de tarefas pessoal, consultar previsão do tempo, agendar mensagens proativas, gerar e editar imagens, criar carrosséis para Instagram e interagir com Gmail e Google Calendar do usuário.
 
 ## Fluxo Principal
 
@@ -438,16 +438,21 @@ FRONTEND_ORIGIN=http://localhost:5173  # origin do React para CORS
 
 Equivalente ao `StatusNotifier` para a interface web. Como `agent.run()` executa em thread via `asyncio.to_thread()`, usa `asyncio.run_coroutine_threadsafe()` para enviar atualizações de status ao cliente em tempo real durante pesquisas.
 
-### Componentes React
+### Hooks React
 
 | Arquivo | Responsabilidade |
 |---|---|
-| `hooks/useVoiceLive.ts` | Conexão de voz em tempo real com Gemini Live, estados (`connecting/listening/speaking/processing/muted/idle`), controle de mute/unmute e timeout de inatividade |
-| `hooks/useChat.ts` | Mensagens de texto, histórico e atualização por eventos |
-| `components/Orb.tsx` | Orb em estilo Siri-glow com diferenciação visual de entrada (user), saída (AI) e processamento de tools |
-| `components/ChatHistory.tsx` | Painel lateral colapsável com histórico |
-| `components/LoginModal.tsx` | Tela de identificação por telefone |
-| `components/OnboardingModal.tsx` | Captura de nome no primeiro acesso |
+| `hooks/useWebSocket.ts` | Conexão compartilhada e barramento de eventos no frontend. |
+| `hooks/useVoiceLive.ts` | Conexão de voz em tempo real com Gemini Live, estados (`connecting/listening/speaking/processing/muted/idle`), controle de mute/unmute e timeout de inatividade. |
+| `hooks/useChat.ts` | Canal de chat texto (`/ws/voice`) + histórico + eventos de UI (carrossel/edição/action log). |
+| `hooks/useAuth.ts` | Gerenciamento de autenticação (JWT, login, registro, refresh). |
+| `hooks/useTasks.ts` | CRUD de tarefas com sync via REST + eventos WS. |
+| `hooks/useReminders.ts` | CRUD de lembretes com sync via REST + eventos WS. |
+| `hooks/useCarousels.ts` | Listagem e refresh de carrosséis via REST + eventos WS. |
+| `hooks/useHistory.ts` | Carregamento paginado do histórico de chat. |
+| `hooks/useTheme.ts` | Alternância de tema claro/escuro. |
+| `hooks/useProductTourPreferences.ts` | Controle de exibição do onboarding de produto (localStorage). |
+| `hooks/chatTypes.ts` | Tipos TypeScript compartilhados para mensagens de chat. |
 
 ### Variável de ambiente (frontend)
 
@@ -461,6 +466,7 @@ VITE_WS_URL=ws://localhost:8000   # em produção: wss://seu-dominio.com
 - **Agno**: Framework para construção de agentes stateful.
 - **Agno Team**: Usado para orquestração multi-agent nativa (em vez de implementar ThreadPoolExecutor custom). Suporta execução paralela no modo `broadcast`.
 - **Camada de Dados ORM (`src/db/`)**: Toda a persistência é centralizada em SQLAlchemy ORM. `db/session.py` provê um engine único (PG via `DATABASE_URL` ou SQLite `app.db` em dev) e `db/models.py` contém todos os modelos declarativos. Nenhum módulo precisa saber qual backend está em uso — o ORM abstrai isso. A criação de tabelas é feita no startup via `db/init.py` → `Base.metadata.create_all()`.
+  - Modelos em `db/models.py`: `User`, `ChatMessage`, `OtpCode`, `UserIntegration`, `Task`, `Reminder`, `Carousel`, `BillingPlan`, `Subscription`, `BillingEvent`, `RefundLog`, `UsageEvent`, `InAppCampaign`, `SystemConfig`, `BackgroundTask`, `MessageBuffer`, `ProcessedMessage`, `ImageSession`.
 - **Migrações (Alembic)**: Infraestrutura de migrações configurada em `alembic/`. Migrations existentes: baseline + `otp_codes`. O `ensure_tables()` atual continua funcionando para criação de tabelas; Alembic é usado para alterações de schema que `CREATE TABLE IF NOT EXISTS` não suporta (renomear colunas, alterar tipos, etc.).
 - **Testes Automatizados**: Suite `pytest` em `tests/` com 25 testes cobrindo OTP, autenticação, identidade e criptografia de tokens. Usa SQLite in-memory para isolamento.
 - **Identidade e Onboarding Determinístico**: Reduz custos de LLM e garante uma experiência controlada ao coletar os dados iniciais do usuário.
