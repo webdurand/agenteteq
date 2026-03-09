@@ -4,6 +4,7 @@ from src.agent.assistant import get_assistant
 from src.tools.web_search import create_web_search_tool, create_fetch_page_tool, create_explore_site_tool
 from src.tools.deep_research import create_deep_research_tool
 from src.tools.google_tools import create_google_tools
+from src.tools.slack_tools import create_slack_tools
 from src.memory.integrations import get_user_integrations
 
 logger = logging.getLogger(__name__)
@@ -53,7 +54,24 @@ def create_agent_with_tools(
     except Exception as e:
         logger.error("Erro ao carregar Google tools para %s: %s", phone, e)
 
-    all_instructions = (extra_instructions or []) + google_instructions
+    # Injeta Slack tools se o usuario tiver integracao ativa
+    slack_instructions = []
+    try:
+        has_slack = bool(get_user_integrations(phone, provider="slack"))
+        if has_slack:
+            list_channels, read_messages, search_msgs = create_slack_tools(phone)
+            search_tools.extend([list_channels, read_messages, search_msgs])
+            slack_instructions.append(
+                "SLACK: O usuario conectou o Slack. "
+                "Use list_slack_channels para ver os canais disponiveis. "
+                "Use read_slack_messages para ler mensagens recentes de um canal. "
+                "Use search_slack para pesquisar mensagens por palavra-chave. "
+                "Quando o usuario perguntar sobre notificacoes, mensagens ou conversas do Slack, use essas tools automaticamente."
+            )
+    except Exception as e:
+        logger.error("Erro ao carregar Slack tools para %s: %s", phone, e)
+
+    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions
 
     return get_assistant(
         session_id=session_id,
