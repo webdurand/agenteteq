@@ -40,6 +40,9 @@ class GeminiLiveClient:
                                 "voiceName": self.voice_name
                             }
                         }
+                    },
+                    "thinkingConfig": {
+                        "thinkingBudget": 0
                     }
                 },
                 "realtimeInputConfig": {

@@ -166,28 +166,18 @@ VOICE_TOOLS_DECLARATIONS = [
     },
     {
         "name": "generate_carousel",
-        "description": "Gera imagens (carrossel ou imagem unica) em background.",
+        "description": "Gera imagens (carrossel ou imagem unica) em background. Passe uma descricao simples do que gerar e a quantidade de slides.",
         "parameters": {
             "type": "object",
             "properties": {
-                "title": {"type": "string", "description": "Titulo da geracao"},
-                "slides": {
-                    "type": "array",
-                    "description": "Lista de slides com prompt e estilo",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "slide_number": {"type": "integer"},
-                            "prompt": {"type": "string"},
-                            "style": {"type": "string"}
-                        },
-                        "required": ["prompt"]
-                    }
-                },
-                "format": {"type": "string", "description": "Formato da imagem, ex: 1350x1080, 1:1, 16:9"},
+                "title": {"type": "string", "description": "Titulo curto da geracao"},
+                "description": {"type": "string", "description": "Descricao do que gerar, ex: 'paisagens brasileiras variadas', '10 gatos em estilo anime'"},
+                "num_slides": {"type": "integer", "description": "Quantidade de imagens/slides a gerar (padrao 5)"},
+                "style": {"type": "string", "description": "Estilo visual, ex: Fotorrealista, Cinematico, Clean/Mockup, Anime, Aquarela"},
+                "format": {"type": "string", "description": "Formato da imagem, ex: 1350x1080, 1080x1080, 16:9"},
                 "use_reference_image": {"type": "boolean", "description": "Usar imagem de referencia da conversa"}
             },
-            "required": ["title", "slides"]
+            "required": ["title", "description"]
         }
     },
     {
@@ -289,8 +279,17 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
                 return {"result": publish_post(**args)}
 
             elif function_name == "generate_carousel":
-                from src.tools.carousel_generator import create_carousel_tools
+                from src.tools.carousel_generator import create_carousel_tools, expand_slides_from_description
                 from src.queue.task_queue import pop_limit_flag
+
+                # Voice Live envia formato simplificado (description + num_slides)
+                # em vez do array completo de slides.
+                if "description" in args and "slides" not in args:
+                    description = args.pop("description")
+                    num_slides = int(args.pop("num_slides", 5) or 5)
+                    style = args.pop("style", "Fotorrealista") or "Fotorrealista"
+                    args["slides"] = expand_slides_from_description(description, num_slides, style)
+
                 generate_carousel, _ = create_carousel_tools(user_id, channel="web_voice")
                 tool_result = generate_carousel(**args)
                 limit_info = pop_limit_flag(user_id)

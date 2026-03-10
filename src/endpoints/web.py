@@ -212,6 +212,22 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     asyncio.create_task(asyncio.to_thread(log_run_metrics, phone_number, "web", response))
     final_text = extract_final_response(response)
 
+    # Suprime resposta textual quando tools de imagem foram chamadas (web only)
+    # A UI já exibe loading bubble + carrossel/imagem via WebSocket
+    _image_tools = {"generate_carousel_tool", "edit_image_tool"}
+    _called_image_tool = False
+    if hasattr(response, "messages") and response.messages:
+        for msg in response.messages:
+            for tc in (getattr(msg, "tool_calls", None) or []):
+                fn = getattr(tc, "function", None)
+                tc_name = getattr(fn, "name", None) if fn else None
+                if tc_name in _image_tools:
+                    _called_image_tool = True
+                    break
+    if _called_image_tool and final_text:
+        logger.info("[WEB WS] Suprimindo resposta textual — tool de imagem chamada: '%s...'", final_text[:60])
+        final_text = ""
+
     if not final_text:
         rc = getattr(response, 'reasoning_content', None)
         logger.warning("[WEB WS] WARN resposta vazia — content=%s reasoning=%s", repr(getattr(response, 'content', None))[:200], repr(rc)[:200])
@@ -315,7 +331,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
         "mime_type": mime_type,
         "needs_follow_up": follow_up,
     })
-    if save_to_chat:
+    if save_to_chat and final_text:
         asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "agent", final_text))
     latency = int((time.time() - start_time) * 1000)
     log_event(user_id=phone_number, channel="web", event_type="message_sent", status="success", latency_ms=latency)
@@ -588,6 +604,20 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                     ))
 
                 update_last_seen(phone_number)
+
+                # Suprime resposta textual quando tools de imagem foram chamadas (audio path)
+                _img_tools = {"generate_carousel_tool", "edit_image_tool"}
+                _called_img = False
+                if hasattr(response, "messages") and response.messages:
+                    for _m in response.messages:
+                        for _tc in (getattr(_m, "tool_calls", None) or []):
+                            _fn = getattr(_tc, "function", None)
+                            if getattr(_fn, "name", None) in _img_tools:
+                                _called_img = True
+                                break
+                if _called_img and response_content:
+                    logger.info("[WEB WS] Suprimindo resposta textual (audio) — tool de imagem: '%s...'", response_content[:60])
+                    response_content = ""
 
                 logger.info("[WEB WS] Resposta do agente (%s chars): %s...", len(response_content), response_content[:80])
 

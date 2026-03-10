@@ -14,6 +14,61 @@ logger = logging.getLogger(__name__)
 
 _ensure_cloudinary_config()
 
+
+def expand_slides_from_description(
+    description: str,
+    num_slides: int = 5,
+    style: str = "Fotorrealista",
+) -> List[Dict[str, str]]:
+    """
+    Expande uma descrição simples (vinda do Voice Live) em N prompts detalhados
+    usando Gemini Flash. Retorna lista no formato esperado por generate_carousel_tool.
+    """
+    import json as _json
+    from google import genai
+
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        # Fallback: replica o prompt base para cada slide
+        return [
+            {"slide_number": i + 1, "prompt": description, "style": style}
+            for i in range(num_slides)
+        ]
+
+    client = genai.Client(api_key=api_key)
+    system_prompt = (
+        "Voce e um gerador de prompts para imagens. "
+        "Dado um tema e quantidade, gere prompts detalhados e VARIADOS para cada imagem. "
+        "Cada prompt deve descrever uma cena, composicao e elementos visuais especificos. "
+        "Responda SOMENTE com um JSON array, sem markdown, sem explicacao. "
+        f"Formato: [{{'slide_number': 1, 'prompt': '...', 'style': '{style}'}}]"
+    )
+    user_prompt = f"Tema: {description}\nQuantidade: {num_slides}\nEstilo: {style}"
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=[{"role": "user", "parts": [{"text": user_prompt}]}],
+            config={"system_instruction": system_prompt, "temperature": 0.9},
+        )
+        raw = response.text.strip()
+        # Remove possíveis delimitadores markdown
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+            raw = raw.rsplit("```", 1)[0]
+        slides = _json.loads(raw)
+        if isinstance(slides, list) and len(slides) > 0:
+            logger.info("expand_slides_from_description: %s slides expandidos via LLM", len(slides))
+            return slides[:num_slides]
+    except Exception as e:
+        logger.warning("expand_slides_from_description fallback (erro LLM): %s", e)
+
+    # Fallback: replica prompt base
+    return [
+        {"slide_number": i + 1, "prompt": description, "style": style}
+        for i in range(num_slides)
+    ]
+
 async def _process_carousel_background(
     carousel_id: str,
     user_id: str,
@@ -321,6 +376,12 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
                     except Exception as e:
                         logger.error("Erro ao persistir placeholder de carrossel: %s", e)
 
+                    # UI já exibe loading bubble e entrega o carrossel — agente NÃO deve falar nada
+                    return (
+                        "[IMAGENS EM GERACAO — NAO ESCREVA NADA SOBRE ISSO. "
+                        "O usuario ja esta vendo o progresso visualmente na interface. "
+                        "Responda APENAS se o usuario tiver feito uma pergunta adicional, caso contrario fique em silencio.]"
+                    )
                 return (
                     f"Carrossel '{title}' com {len(slides)} slides na fila ({format_label}{ref_msg}). "
                     f"Posição {result['position']}. Estimativa: ~{result['estimated_wait']}. "

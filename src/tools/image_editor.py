@@ -309,6 +309,13 @@ def create_image_editor_tools(user_id: str, channel: str = "web"):
         })
         
         if result["status"] == "queued":
+            if channel in ("web", "web_voice", "web_text"):
+                # UI já exibe loading bubble e entrega a imagem — agente NÃO deve falar nada
+                return (
+                    "[IMAGEM EM EDICAO — NAO ESCREVA NADA SOBRE ISSO. "
+                    "O usuario ja esta vendo o progresso visualmente na interface. "
+                    "Responda APENAS se o usuario tiver feito uma pergunta adicional, caso contrario fique em silencio.]"
+                )
             return (
                 f"Edição de imagem na fila (ref: {source_label})! "
                 f"Posição {result['position']}. Estimativa: ~{result['estimated_wait']}."
