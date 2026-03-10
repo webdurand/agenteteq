@@ -84,35 +84,47 @@ def log_run_metrics(user_id: str, channel: str, response):
         logger.error("Erro ao gravar run_metrics para %s: %s", user_id, e)
 
 
-def log_agent_tools(user_id: str, channel: str, agent):
+def log_agent_tools(user_id: str, channel: str, response):
+    """Grava tool_called / tool_failed a partir do RunOutput do agno."""
     try:
-        if not agent or getattr(agent, "run_response", None) is None:
+        if response is None:
             return
 
-        if hasattr(agent.memory, "messages"):
-            recent_msgs = agent.memory.messages[-10:]
-            for msg in recent_msgs:
-                role = getattr(msg, "role", "")
-                if not role and isinstance(msg, dict):
-                    role = msg.get("role", "")
+        # Preferred path: RunOutput.tools (List[ToolExecution])
+        tools = getattr(response, "tools", None)
+        if tools:
+            for t in tools:
+                name = getattr(t, "tool_name", None) or "unknown_tool"
+                is_error = bool(getattr(t, "tool_call_error", False))
+                log_event(
+                    user_id=user_id,
+                    channel=channel,
+                    event_type="tool_failed" if is_error else "tool_called",
+                    tool_name=name,
+                    status="error" if is_error else "success",
+                )
+            return
 
-                if role in ("tool", "function"):
-                    name = getattr(msg, "name", getattr(msg, "tool_name", "unknown_tool"))
-                    if isinstance(msg, dict):
-                        name = msg.get("name", msg.get("tool_name", "unknown_tool"))
-
-                    content = getattr(msg, "content", "")
-                    if isinstance(msg, dict):
-                        content = msg.get("content", "")
-                    content_str = str(content or "").lower()
+        # Fallback: scan response.messages for tool-role messages
+        messages = getattr(response, "messages", None)
+        if not messages:
+            return
+        for msg in messages:
+            role = getattr(msg, "role", "")
+            tool_name = getattr(msg, "tool_name", None)
+            if not tool_name:
+                continue
+            if role == "tool" or tool_name:
+                is_error = bool(getattr(msg, "tool_call_error", False))
+                if not is_error:
+                    content_str = str(getattr(msg, "content", "") or "").lower()
                     is_error = any(kw in content_str for kw in ("erro", "error", "falha", "failed", "exception", "traceback"))
-
-                    log_event(
-                        user_id=user_id,
-                        channel=channel,
-                        event_type="tool_failed" if is_error else "tool_called",
-                        tool_name=name,
-                        status="error" if is_error else "success",
-                    )
+                log_event(
+                    user_id=user_id,
+                    channel=channel,
+                    event_type="tool_failed" if is_error else "tool_called",
+                    tool_name=tool_name,
+                    status="error" if is_error else "success",
+                )
     except Exception as e:
         logger.error("Erro ao buscar tools: %s", e)

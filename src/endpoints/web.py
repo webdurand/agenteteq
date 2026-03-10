@@ -208,7 +208,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     response = await asyncio.to_thread(
         agent.run, prompt, **kwargs
     )
-    log_agent_tools(phone_number, "web", agent)
+    log_agent_tools(phone_number, "web", response)
     asyncio.create_task(asyncio.to_thread(log_run_metrics, phone_number, "web", response))
     final_text = extract_final_response(response)
 
@@ -532,7 +532,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                         audio=[Audio(content=audio_bytes, format=audio_fmt)],
                         knowledge_filters={"user_id": phone_number},
                     )
-                    log_agent_tools(phone_number, "web", agent)
+                    log_agent_tools(phone_number, "web", response)
                     asyncio.create_task(asyncio.to_thread(log_run_metrics, phone_number, "web", response))
                     response_content = extract_final_response(response)
                     asyncio.create_task(asyncio.to_thread(
@@ -580,7 +580,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                         prompt,
                         knowledge_filters={"user_id": phone_number},
                     )
-                    log_agent_tools(phone_number, "web", agent)
+                    log_agent_tools(phone_number, "web", response)
                     asyncio.create_task(asyncio.to_thread(log_run_metrics, phone_number, "web", response))
                     response_content = extract_final_response(response)
                     asyncio.create_task(asyncio.to_thread(

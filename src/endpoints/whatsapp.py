@@ -499,7 +499,7 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
         kwargs["audio"] = agent_audios
 
     response = await asyncio.to_thread(agent.run, text_body, **kwargs)
-    log_agent_tools(from_number, "whatsapp", agent)
+    log_agent_tools(from_number, "whatsapp", response)
     asyncio.create_task(asyncio.to_thread(log_run_metrics, from_number, "whatsapp", response))
     final_text = extract_final_response(response)
     asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, text_body, final_text))
