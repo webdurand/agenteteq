@@ -13,6 +13,7 @@ from src.agent.voice_tools import VOICE_TOOLS_DECLARATIONS, execute_voice_tool
 from src.memory.analytics import log_event
 from src.models.chat_messages import save_message
 from src.config.feature_gates import is_feature_enabled, check_voice_live_minutes
+from src.utils.privacy import mask_phone
 import logging
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,7 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
     session_start_monotonic = time.monotonic()
 
     ws_manager.connect(websocket, phone_number, channel="voice_live")
-    logger.info("[VOICE LIVE] Cliente conectado: %s", phone_number)
+    logger.info("[VOICE LIVE] Cliente conectado: %s", mask_phone(phone_number))
 
     # Monta instrucoes base parecidas com assistant.py
     base_instructions = [
@@ -259,7 +260,7 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
                     continue
                 
     except WebSocketDisconnect:
-        logger.info("[VOICE LIVE] Cliente desconectado: %s", phone_number)
+        logger.info("[VOICE LIVE] Cliente desconectado: %s", mask_phone(phone_number))
     except Exception as e:
         import traceback
 
@@ -278,4 +279,4 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
             status="success",
             latency_ms=duration_ms,
         )
-        logger.info("[VOICE LIVE] Sessao encerrada: %s durou %ss", phone_number, duration_ms // 1000)
+        logger.info("[VOICE LIVE] Sessao encerrada: %s durou %ss", mask_phone(phone_number), duration_ms // 1000)

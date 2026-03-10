@@ -18,6 +18,7 @@ from src.memory.extractor import extract_and_save_facts
 from src.tools.memory_manager import add_memory
 from src.auth.jwt import decode_token
 from src.memory.analytics import log_event, log_agent_tools
+from src.utils.privacy import mask_phone
 from src.models.chat_messages import save_message
 from src.agent.prompts import GREETING_INJECTION_WEB as GREETING_INJECTION
 from src.queue.task_queue import get_usage_context, get_usage_status
@@ -260,7 +261,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
         }
 
     if limit_info:
-        logger.info("[WEB WS] Limite atingido para %s, enviando limit_reached determinístico", phone_number)
+        logger.info("[WEB WS] Limite atingido para %s, enviando limit_reached determinístico", mask_phone(phone_number))
         await websocket.send_json({
             "type": "limit_reached",
             "message": limit_info["message"],
@@ -367,7 +368,7 @@ class ConnectionManager:
                 await ws.send_json(message)
                 delivered = True
             except Exception as e:
-                logger.error("[WS MANAGER] Erro ao enviar mensagem para %s (%s): %s", phone_number, key, e)
+                logger.error("[WS MANAGER] Erro ao enviar mensagem para %s (%s): %s", mask_phone(phone_number), key, e)
                 dead_keys.append(key)
 
         for key in dead_keys:
@@ -421,7 +422,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
     audio_ext_hint: str = ""
 
     ws_manager.connect(websocket, phone_number, channel="web")
-    logger.info("[WEB WS] Cliente conectado: %s", phone_number)
+    logger.info("[WEB WS] Cliente conectado: %s", mask_phone(phone_number))
 
     async def run_text(user_text: str, mode: str = "voice", images_b64: list = None) -> None:
         try:
@@ -446,7 +447,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
             logger.info("[WEB WS] Frame recebido | tipo=%s | bytes=%s | text=%s", frame_type, len(audio_bytes) if audio_bytes else 0, text_frame[:60] if text_frame else None)
 
             if frame_type == "websocket.disconnect":
-                logger.info("[WEB WS] Disconnect recebido: %s", phone_number)
+                logger.info("[WEB WS] Disconnect recebido: %s", mask_phone(phone_number))
                 await _cancel_task(current_task)
                 break
 
@@ -457,7 +458,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                 logger.info("[WEB WS] Mensagem texto | tipo=%s | conteudo=%s", msg_type, str(msg)[:80])
 
                 if msg_type == "cancel":
-                    logger.info("[WEB WS] Cancel recebido do cliente: %s", phone_number)
+                    logger.info("[WEB WS] Cancel recebido do cliente: %s", mask_phone(phone_number))
                     await _cancel_task(current_task)
                     current_task = None
                     await websocket.send_json({"type": "status", "text": ""})
@@ -487,7 +488,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                 logger.info("[WEB WS] Frame sem bytes e sem texto — ignorando (tipo=%s)", frame_type)
                 continue
 
-            logger.info("[WEB WS] Audio recebido: %s bytes de %s", len(audio_bytes), phone_number)
+            logger.info("[WEB WS] Audio recebido: %s bytes de %s", len(audio_bytes), mask_phone(phone_number))
 
             try:
                 start_time = time.time()
@@ -612,7 +613,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                     "mime_type": mime_type,
                     "needs_follow_up": follow_up,
                 })
-                logger.info("[WEB WS] Resposta enviada ao cliente: %s", phone_number)
+                logger.info("[WEB WS] Resposta enviada ao cliente: %s", mask_phone(phone_number))
                 latency = int((time.time() - start_time) * 1000)
                 log_event(user_id=phone_number, channel="web", event_type="message_sent", status="success", latency_ms=latency)
                 await websocket.send_json({"type": "reminder_updated"})
@@ -620,11 +621,11 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
             except Exception as e:
                 import traceback
 
-                logger.error("[WEB WS] ERRO ao processar mensagem de %s: %s", phone_number, e)
+                logger.error("[WEB WS] ERRO ao processar mensagem de %s: %s", mask_phone(phone_number), e)
                 print(traceback.format_exc())
                 await websocket.send_json({"type": "error", "message": "Erro interno. Tenta de novo!"})
 
     except WebSocketDisconnect:
         await _cancel_task(current_task)
         ws_manager.disconnect(phone_number, websocket=websocket)
-        logger.info("[WEB WS] Cliente desconectado: %s", phone_number)
+        logger.info("[WEB WS] Cliente desconectado: %s", mask_phone(phone_number))

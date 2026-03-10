@@ -13,6 +13,7 @@ from src.auth.google import verify_google_token
 from src.auth.deps import get_current_user
 from src.memory.identity import (
     create_user_full,
+    delete_account,
     get_user,
     get_user_by_email,
     get_user_by_username,
@@ -79,6 +80,8 @@ async def send_otp_whatsapp(phone: str, purpose: str):
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 @limiter.limit("5/minute")
 async def register(request: Request, req: RegisterRequest):
+    from src.auth.terms import CURRENT_TERMS_VERSION
+
     if get_user_by_email(req.email):
         raise HTTPException(status_code=400, detail="E-mail ja cadastrado")
     if get_user_by_username(req.username):
@@ -93,7 +96,8 @@ async def register(request: Request, req: RegisterRequest):
         name=req.name,
         email=req.email,
         birth_date=req.birth_date,
-        password_hash=hashed
+        password_hash=hashed,
+        terms_accepted_version=CURRENT_TERMS_VERSION,
     )
     
     await send_otp_whatsapp(req.phone, "register")
@@ -229,6 +233,8 @@ async def google_complete(req: GoogleCompleteRequest):
     if get_user(req.phone):
         raise HTTPException(status_code=400, detail="Telefone ja cadastrado")
         
+    from src.auth.terms import CURRENT_TERMS_VERSION
+
     hashed = hash_password(req.password)
     create_user_full(
         phone_number=req.phone,
@@ -238,7 +244,8 @@ async def google_complete(req: GoogleCompleteRequest):
         birth_date=req.birth_date,
         password_hash=hashed,
         google_id=google_data["google_id"],
-        auth_provider="google"
+        auth_provider="google",
+        terms_accepted_version=CURRENT_TERMS_VERSION,
     )
     
     await send_otp_whatsapp(req.phone, "register")
@@ -324,3 +331,81 @@ async def accept_terms(current_user: dict = Depends(get_current_user)):
     except Exception as e:
         logger.error("Erro ao aceitar termos: %s", e)
         raise HTTPException(status_code=500, detail="Erro ao registrar aceite dos termos.")
+
+
+@router.delete("/account")
+async def delete_my_account(current_user: dict = Depends(get_current_user)):
+    """Exclui permanentemente a conta e todos os dados pessoais (LGPD Art. 18 VI)."""
+    phone = current_user["phone_number"]
+    try:
+        deleted = delete_account(phone)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Conta não encontrada.")
+        return {"message": "Conta e todos os dados pessoais foram excluídos permanentemente."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Erro ao excluir conta: %s", e)
+        raise HTTPException(status_code=500, detail="Erro ao excluir conta.")
+
+
+@router.get("/export-data")
+async def export_my_data(current_user: dict = Depends(get_current_user)):
+    """Retorna todos os dados pessoais do usuario em formato JSON (LGPD Art. 18 V — portabilidade)."""
+    from src.db.session import get_db
+    from src.db.models import (
+        User, ChatMessage, Task, Reminder, Subscription,
+        UsageEvent, UserIntegration, Carousel, BackgroundTask,
+    )
+
+    phone = current_user["phone_number"]
+    try:
+        with get_db() as session:
+            user = session.query(User).filter_by(phone_number=phone).first()
+            if not user:
+                raise HTTPException(status_code=404, detail="Usuário não encontrado.")
+
+            messages = session.query(ChatMessage).filter_by(user_id=phone).order_by(ChatMessage.created_at).all()
+            tasks = session.query(Task).filter_by(user_id=phone).all()
+            reminders = session.query(Reminder).filter_by(user_id=phone).all()
+            subscriptions = session.query(Subscription).filter_by(user_id=phone).all()
+            usage = session.query(UsageEvent).filter_by(user_id=phone).all()
+            integrations = session.query(UserIntegration).filter_by(user_id=phone).all()
+            carousels = session.query(Carousel).filter_by(user_id=phone).all()
+
+            return {
+                "export_date": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+                "profile": {
+                    "phone_number": user.phone_number,
+                    "name": user.name,
+                    "username": user.username,
+                    "email": user.email,
+                    "birth_date": user.birth_date,
+                    "auth_provider": user.auth_provider,
+                    "plan_type": user.plan_type,
+                    "timezone": user.timezone,
+                    "created_terms_version": user.terms_accepted_version,
+                    "terms_accepted_at": user.terms_accepted_at.isoformat() if user.terms_accepted_at else None,
+                },
+                "chat_messages": [
+                    {"role": m.role, "text": m.text, "session_id": m.session_id, "created_at": str(m.created_at)}
+                    for m in messages
+                ],
+                "tasks": [t.to_dict() for t in tasks],
+                "reminders": [r.to_dict() for r in reminders],
+                "subscriptions": [s.to_dict() for s in subscriptions],
+                "usage_events": [
+                    {"event_type": u.event_type, "channel": u.channel, "tool_name": u.tool_name, "created_at": u.created_at}
+                    for u in usage
+                ],
+                "integrations": [
+                    {"provider": i.provider, "account_email": i.account_email, "scopes": i.scopes, "created_at": str(i.created_at)}
+                    for i in integrations
+                ],
+                "carousels": [c.to_dict() for c in carousels],
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Erro ao exportar dados: %s", e)
+        raise HTTPException(status_code=500, detail="Erro ao exportar dados.")

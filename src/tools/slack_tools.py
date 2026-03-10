@@ -123,12 +123,15 @@ def create_slack_tools(user_phone: str):
         if not connections:
             return "Usuário não conectou o Slack. Peça para conectar em Configurações > Integrações."
 
+        all_available: list[str] = []
         for conn in connections:
             try:
                 token = conn["token"]
                 channel_id = channel
+                available_names: list[str] = []
                 if not channel.startswith("C") and not channel.startswith("G") and not channel.startswith("D"):
-                    channel_id = _resolve_channel_id(token, channel)
+                    channel_id, available_names = _resolve_channel_id(token, channel)
+                    all_available.extend(available_names)
                     if not channel_id:
                         continue
 
@@ -160,6 +163,9 @@ def create_slack_tools(user_phone: str):
                 logger.error("Erro ao ler mensagens Slack [%s] para %s: %s", conn['workspace'], user_phone, e)
                 continue
 
+        if all_available:
+            names_list = ", ".join(f"#{n}" for n in sorted(set(all_available)) if n)
+            return f"Canal '#{channel}' não encontrado. Canais disponíveis: {names_list}"
         return f"Canal '#{channel}' não encontrado em nenhum workspace conectado. Use list_slack_channels para ver os canais disponíveis."
 
     def search_slack(
@@ -222,18 +228,45 @@ def create_slack_tools(user_phone: str):
     return list_slack_channels, read_slack_messages, search_slack
 
 
-def _resolve_channel_id(token: str, channel_name: str) -> Optional[str]:
+def _resolve_channel_id(token: str, channel_name: str) -> tuple[Optional[str], list[str]]:
+    """Resolve channel name to ID with fuzzy fallback.
+    Returns (channel_id, all_channel_names). channel_id is None if not found."""
+    from difflib import get_close_matches
+
     clean_name = channel_name.lstrip("#").lower()
+    all_channels: list[dict] = []
+
     for ch_type in ["public_channel,private_channel", "mpim,im"]:
         data = _slack_get(token, "conversations.list", {
             "types": ch_type,
             "limit": 200,
             "exclude_archived": "true",
         })
-        for ch in data.get("channels", []):
-            if ch.get("name", "").lower() == clean_name:
-                return ch["id"]
-    return None
+        all_channels.extend(data.get("channels", []))
+
+    all_names = [ch.get("name", "") for ch in all_channels]
+
+    # Nivel 1: match exato
+    for ch in all_channels:
+        if ch.get("name", "").lower() == clean_name:
+            return ch["id"], all_names
+
+    # Nivel 2: contains (prefere o nome mais curto = mais provavel)
+    contains = [ch for ch in all_channels if clean_name in ch.get("name", "").lower()]
+    if contains:
+        best = min(contains, key=lambda c: len(c.get("name", "")))
+        logger.info("Slack channel fuzzy match (contains): '%s' -> '#%s'", channel_name, best.get("name"))
+        return best["id"], all_names
+
+    # Nivel 3: similaridade (difflib)
+    close = get_close_matches(clean_name, [n.lower() for n in all_names], n=1, cutoff=0.6)
+    if close:
+        for ch in all_channels:
+            if ch.get("name", "").lower() == close[0]:
+                logger.info("Slack channel fuzzy match (similarity): '%s' -> '#%s'", channel_name, ch.get("name"))
+                return ch["id"], all_names
+
+    return None, all_names
 
 
 def _resolve_username(token: str, user_id: str, cache: dict) -> str:

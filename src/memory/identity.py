@@ -105,6 +105,7 @@ def create_user_full(
     google_id: str = None,
     auth_provider: str = "local",
     role: str = "user",
+    terms_accepted_version: str = None,
 ):
     now = datetime.now(timezone.utc)
 
@@ -126,6 +127,8 @@ def create_user_full(
                     trial_started_at=now,
                     whatsapp_verified=False,
                     role=role,
+                    terms_accepted_version=terms_accepted_version,
+                    terms_accepted_at=now if terms_accepted_version else None,
                 ))
     except Exception as e:
         logger.error("Erro ao criar usuario completo %s: %s", phone_number, e)
@@ -257,6 +260,67 @@ def is_new_session(user: dict, threshold_hours: int = 4) -> bool:
     except Exception as e:
         logger.error("Erro ao calcular is_new_session: %s", e)
         return False
+
+
+def delete_account(phone_number: str) -> bool:
+    """
+    Remove permanentemente todos os dados pessoais do usuario (LGPD Art. 18 VI).
+    Retorna True se o usuario existia e foi removido.
+    """
+    from src.db.models import (
+        BackgroundTask,
+        Carousel,
+        ImageSession,
+        MessageBuffer,
+        OtpCode,
+        UserIntegration,
+    )
+
+    try:
+        with get_db() as session:
+            user = session.query(User).filter_by(phone_number=phone_number).first()
+            if not user:
+                return False
+
+            # Cancela assinatura Stripe se houver
+            if user.stripe_customer_id:
+                try:
+                    sub = session.query(Subscription).filter_by(user_id=phone_number).first()
+                    if sub and sub.provider_subscription_id and sub.status in ("active", "trialing", "past_due"):
+                        from src.integrations.stripe import cancel_subscription
+                        cancel_subscription(sub.provider_subscription_id, immediately=True)
+                except Exception as e:
+                    logger.warning("Erro ao cancelar assinatura Stripe durante exclusao de conta %s: %s", phone_number[:4] + "***", e)
+
+            # Limpa agno agent sessions (tabela gerenciada pelo agno, fora do ORM)
+            try:
+                session.execute(
+                    __import__("sqlalchemy").text("DELETE FROM agent_sessions WHERE session_id LIKE :pattern"),
+                    {"pattern": f"%{phone_number}%"},
+                )
+            except Exception:
+                pass  # tabela pode nao existir em dev
+
+            # Remove dados de todas as tabelas filhas
+            session.query(ChatMessage).filter_by(user_id=phone_number).delete()
+            session.query(Task).filter_by(user_id=phone_number).delete()
+            session.query(Reminder).filter_by(user_id=phone_number).delete()
+            session.query(Subscription).filter_by(user_id=phone_number).delete()
+            session.query(UsageEvent).filter_by(user_id=phone_number).delete()
+            session.query(UserIntegration).filter_by(user_id=phone_number).delete()
+            session.query(BackgroundTask).filter_by(user_id=phone_number).delete()
+            session.query(Carousel).filter_by(user_id=phone_number).delete()
+            session.query(MessageBuffer).filter_by(user_id=phone_number).delete()
+            session.query(OtpCode).filter_by(phone_number=phone_number).delete()
+
+            # Remove o usuario
+            session.delete(user)
+
+        logger.info("Conta excluida com sucesso: %s***", phone_number[:4])
+        return True
+    except Exception as e:
+        logger.error("Erro ao excluir conta %s***: %s", phone_number[:4], e)
+        raise e
 
 
 def is_plan_active(user: dict) -> bool:
