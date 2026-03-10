@@ -467,9 +467,38 @@ def get_cost_per_user(days: int = 30, user: dict = Depends(require_admin)):
     if _is_sqlite():
         return {"error": "Not supported on SQLite"}
 
+    import json as _json
+
     with get_db() as session:
-        # 1) chat turns (message_sent) por usuário
-        rows = session.execute(text("""
+        # 1) Custo REAL do LLM via llm_usage events (gravados pelo log_run_metrics)
+        llm_rows = session.execute(text("""
+            SELECT user_id, extra_data
+            FROM usage_events
+            WHERE event_type = 'llm_usage' AND extra_data IS NOT NULL
+                  AND created_at >= NOW() - make_interval(days => :d)
+        """), {"d": days}).fetchall()
+
+        # Agregar custo real por usuário
+        real_cost_map: dict[str, dict] = {}  # user_id -> {cost_usd, input_tokens, output_tokens, ...}
+        for r in llm_rows:
+            uid = r[0]
+            try:
+                meta = _json.loads(r[1]) if r[1] else {}
+            except (ValueError, TypeError):
+                continue
+            if uid not in real_cost_map:
+                real_cost_map[uid] = {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "calls": 0}
+            entry = real_cost_map[uid]
+            entry["cost_usd"] += meta.get("cost_usd") or 0.0
+            entry["input_tokens"] += meta.get("input_tokens") or 0
+            entry["output_tokens"] += meta.get("output_tokens") or 0
+            entry["total_tokens"] += meta.get("total_tokens") or 0
+            entry["calls"] += 1
+
+        has_real_data = bool(real_cost_map)
+
+        # 2) Fallback: dados de estimativa (para usuários sem llm_usage ou período misto)
+        est_rows = session.execute(text("""
             SELECT ue.user_id,
                    SUM(CASE WHEN ue.event_type = 'message_sent' THEN 1 ELSE 0 END) AS chat_turns,
                    SUM(CASE WHEN ue.event_type = 'voice_live_session' THEN COALESCE(ue.latency_ms, 0) ELSE 0 END) AS voice_ms,
@@ -480,7 +509,7 @@ def get_cost_per_user(days: int = 30, user: dict = Depends(require_admin)):
             GROUP BY ue.user_id
         """), {"d": days}).fetchall()
 
-        # 2) imagens (background_tasks carousel done) por usuário
+        # 3) imagens (background_tasks carousel done) por usuário
         img_rows = session.execute(text("""
             SELECT user_id, COUNT(*) AS images
             FROM background_tasks
@@ -490,8 +519,10 @@ def get_cost_per_user(days: int = 30, user: dict = Depends(require_admin)):
         """), {"d": days}).fetchall()
         img_map = {r[0]: r[1] for r in img_rows}
 
-        # 3) nomes dos usuários
-        all_user_ids = list({r[0] for r in rows} | set(img_map.keys()))
+        # 4) nomes dos usuários
+        all_user_ids = list(
+            {r[0] for r in est_rows} | set(img_map.keys()) | set(real_cost_map.keys())
+        )
         name_map: dict[str, str] = {}
         if all_user_ids:
             placeholders = ",".join([f":u{i}" for i in range(len(all_user_ids))])
@@ -502,9 +533,9 @@ def get_cost_per_user(days: int = 30, user: dict = Depends(require_admin)):
             ).fetchall()
             name_map = {r[0]: r[1] or "" for r in name_rows}
 
-    # Calcula custo por usuário
-    user_costs: list[dict] = []
-    for r in rows:
+    # Build estimate map for fallback
+    est_map: dict[str, dict] = {}
+    for r in est_rows:
         uid = r[0]
         chat = int(r[1] or 0)
         voice_min = int(r[2] or 0) / 60_000.0
@@ -512,48 +543,79 @@ def get_cost_per_user(days: int = 30, user: dict = Depends(require_admin)):
         deep = int(r[4] or 0)
         images = img_map.pop(uid, 0)
 
-        cost_usd = (
-            chat * _COST_USD["chat_per_turn"]
-            + voice_min * _COST_USD["voice_live_per_min"]
-            + chat * _COST_USD["tts_per_synthesis"]  # aproximação: TTS ≈ 1 por chat turn
-            + images * _COST_USD["image_per_unit"]
-            + searches * _COST_USD["search_per_call"]
-            + deep * _COST_USD["deep_research_per_call"]
-        )
-        cost_brl = round(cost_usd * _USD_TO_BRL, 2)
+        est_map[uid] = {
+            "chat": chat, "voice_min": voice_min, "searches": searches,
+            "deep": deep, "images": images,
+        }
 
-        user_costs.append({
-            "user_id": uid,
-            "name": name_map.get(uid, ""),
-            "cost_brl": cost_brl,
-            "breakdown": {
+    # Remaining image-only users
+    for uid, images in img_map.items():
+        est_map.setdefault(uid, {"chat": 0, "voice_min": 0, "searches": 0, "deep": 0, "images": 0})
+        est_map[uid]["images"] += images
+
+    # Merge: prefer real cost, fallback to estimate
+    user_costs: list[dict] = []
+    seen = set()
+    for uid in list(real_cost_map.keys()) + list(est_map.keys()):
+        if uid in seen:
+            continue
+        seen.add(uid)
+
+        real = real_cost_map.get(uid)
+        est = est_map.get(uid, {"chat": 0, "voice_min": 0, "searches": 0, "deep": 0, "images": 0})
+        images = est.get("images", 0)
+
+        if real and real["cost_usd"] and real["cost_usd"] > 0:
+            # Real LLM cost + estimated image cost
+            llm_usd = real["cost_usd"]
+            img_usd = images * _COST_USD["image_per_unit"]
+            cost_usd = llm_usd + img_usd
+            cost_brl = round(cost_usd * _USD_TO_BRL, 2)
+            source = "real"
+            breakdown = {
+                "llm": round(llm_usd * _USD_TO_BRL, 2),
+                "images": round(img_usd * _USD_TO_BRL, 2),
+                "total_tokens": real["total_tokens"],
+                "calls": real["calls"],
+            }
+        else:
+            # Fallback to estimate
+            chat = est.get("chat", 0)
+            voice_min = est.get("voice_min", 0)
+            searches = est.get("searches", 0)
+            deep = est.get("deep", 0)
+            cost_usd = (
+                chat * _COST_USD["chat_per_turn"]
+                + voice_min * _COST_USD["voice_live_per_min"]
+                + chat * _COST_USD["tts_per_synthesis"]
+                + images * _COST_USD["image_per_unit"]
+                + searches * _COST_USD["search_per_call"]
+                + deep * _COST_USD["deep_research_per_call"]
+            )
+            cost_brl = round(cost_usd * _USD_TO_BRL, 2)
+            source = "estimate"
+            breakdown = {
                 "chat": round(chat * _COST_USD["chat_per_turn"] * _USD_TO_BRL, 2),
                 "voice": round(voice_min * _COST_USD["voice_live_per_min"] * _USD_TO_BRL, 2),
                 "tts": round(chat * _COST_USD["tts_per_synthesis"] * _USD_TO_BRL, 2),
                 "images": round(images * _COST_USD["image_per_unit"] * _USD_TO_BRL, 2),
                 "search": round(searches * _COST_USD["search_per_call"] * _USD_TO_BRL, 2),
                 "deep_research": round(deep * _COST_USD["deep_research_per_call"] * _USD_TO_BRL, 2),
-            },
-        })
+            }
 
-    # Usuários que só têm imagens e não apareceram na query de usage_events
-    for uid, images in img_map.items():
-        cost_usd = images * _COST_USD["image_per_unit"]
-        cost_brl = round(cost_usd * _USD_TO_BRL, 2)
         user_costs.append({
             "user_id": uid,
             "name": name_map.get(uid, ""),
             "cost_brl": cost_brl,
-            "breakdown": {
-                "chat": 0, "voice": 0, "tts": 0,
-                "images": cost_brl, "search": 0, "deep_research": 0,
-            },
+            "source": source,
+            "breakdown": breakdown,
         })
 
     user_costs.sort(key=lambda x: x["cost_brl"], reverse=True)
     total_brl = round(sum(u["cost_brl"] for u in user_costs), 2)
     active = len(user_costs)
     avg_brl = round(total_brl / active, 2) if active else 0
+    real_count = sum(1 for u in user_costs if u.get("source") == "real")
 
     return {
         "total_cost_brl": total_brl,
@@ -562,6 +624,8 @@ def get_cost_per_user(days: int = 30, user: dict = Depends(require_admin)):
         "top_users": user_costs[:15],
         "cost_multipliers": _COST_USD,
         "usd_to_brl": _USD_TO_BRL,
+        "real_data_users": real_count,
+        "estimated_data_users": active - real_count,
     }
 
 
@@ -627,6 +691,44 @@ def _fill_analytics_pg(session, analytics: dict, days: int) -> None:
     )).fetchall()
     analytics["financial"]["status_distribution"] = [
         {"name": r[0] or "unknown", "value": r[1]} for r in rows
+    ]
+
+    # Conversion rate: users who started trial → active subscription
+    total_trialed = session.execute(text(
+        "SELECT COUNT(*) FROM users WHERE trial_started_at IS NOT NULL"
+    )).scalar() or 0
+    converted = session.execute(text(
+        "SELECT COUNT(DISTINCT user_id) FROM subscriptions WHERE status = 'active'"
+    )).scalar() or 0
+    analytics["financial"]["conversion_rate"] = round(
+        (converted / total_trialed * 100) if total_trialed > 0 else 0, 2
+    )
+
+    # Churn rate: canceled in period / (active + canceled that existed before period)
+    churned = session.execute(text(
+        "SELECT COUNT(*) FROM subscriptions "
+        "WHERE canceled_at IS NOT NULL "
+        "AND canceled_at >= NOW() - make_interval(days => :d)"
+    ), {"d": days}).scalar() or 0
+    base_subs = session.execute(text(
+        "SELECT COUNT(*) FROM subscriptions "
+        "WHERE status IN ('active', 'canceled', 'past_due') "
+        "AND created_at < NOW() - make_interval(days => :d)"
+    ), {"d": days}).scalar() or 0
+    analytics["financial"]["churn_rate"] = round(
+        (churned / base_subs * 100) if base_subs > 0 else 0, 2
+    )
+
+    # New users by day
+    rows = session.execute(text("""
+        SELECT DATE(trial_started_at) as d, COUNT(*)
+        FROM users
+        WHERE trial_started_at IS NOT NULL
+              AND trial_started_at >= NOW() - make_interval(days => :d)
+        GROUP BY d ORDER BY d
+    """), {"d": days}).fetchall()
+    analytics["engagement"]["new_users_by_day"] = [
+        {"date": str(r[0]), "users": r[1]} for r in rows
     ]
 
     rows = session.execute(text("""
@@ -703,6 +805,11 @@ def _fill_analytics_pg(session, analytics: dict, days: int) -> None:
     for r in rows:
         analytics["features"]["carousel_stats"][r[0] or "unknown"] = r[1]
 
+    reminders_active = session.execute(text(
+        "SELECT COUNT(*) FROM reminders WHERE status = 'active'"
+    )).scalar() or 0
+    analytics["features"]["reminders_active"] = int(reminders_active)
+
     failed = session.execute(text(
         "SELECT COUNT(*) FROM usage_events "
         "WHERE event_type = 'tool_failed' "
@@ -710,7 +817,7 @@ def _fill_analytics_pg(session, analytics: dict, days: int) -> None:
     ), {"d": days}).scalar() or 0
     called = session.execute(text(
         "SELECT COUNT(*) FROM usage_events "
-        "WHERE event_type = 'tool_called' "
+        "WHERE event_type IN ('tool_called', 'tool_failed') "
         "AND created_at >= NOW() - make_interval(days => :d)"
     ), {"d": days}).scalar() or 1
     if called == 0:
@@ -720,12 +827,12 @@ def _fill_analytics_pg(session, analytics: dict, days: int) -> None:
     rows = session.execute(text("""
         SELECT tool_name, AVG(latency_ms)
         FROM usage_events
-        WHERE event_type = 'tool_called' AND latency_ms IS NOT NULL
+        WHERE event_type IN ('tool_called', 'llm_usage') AND latency_ms IS NOT NULL
               AND created_at >= NOW() - make_interval(days => :d)
         GROUP BY tool_name ORDER BY AVG(latency_ms) DESC LIMIT 10
     """), {"d": days}).fetchall()
     analytics["operational"]["latency_by_tool"] = [
-        {"name": r[0] or "unknown", "avg_ms": int(r[1] or 0)} for r in rows
+        {"name": r[0] or "llm", "avg_ms": int(r[1] or 0)} for r in rows
     ]
 
 
@@ -749,6 +856,41 @@ def _fill_analytics_sqlite(session, analytics: dict, days: int) -> None:
     )).fetchall()
     analytics["financial"]["status_distribution"] = [
         {"name": r[0] or "unknown", "value": r[1]} for r in rows
+    ]
+
+    # Conversion rate
+    total_trialed = session.execute(text(
+        "SELECT COUNT(*) FROM users WHERE trial_started_at IS NOT NULL"
+    )).scalar() or 0
+    converted = session.execute(text(
+        "SELECT COUNT(DISTINCT user_id) FROM subscriptions WHERE status = 'active'"
+    )).scalar() or 0
+    analytics["financial"]["conversion_rate"] = round(
+        (converted / total_trialed * 100) if total_trialed > 0 else 0, 2
+    )
+
+    # Churn rate
+    churned = session.execute(text(
+        "SELECT COUNT(*) FROM subscriptions "
+        "WHERE canceled_at IS NOT NULL AND canceled_at >= :cutoff"
+    ), {"cutoff": cutoff}).scalar() or 0
+    base_subs = session.execute(text(
+        "SELECT COUNT(*) FROM subscriptions "
+        "WHERE status IN ('active', 'canceled', 'past_due') "
+        "AND created_at < :cutoff"
+    ), {"cutoff": cutoff}).scalar() or 0
+    analytics["financial"]["churn_rate"] = round(
+        (churned / base_subs * 100) if base_subs > 0 else 0, 2
+    )
+
+    # New users by day
+    rows = session.execute(text(
+        "SELECT date(trial_started_at) as d, COUNT(*) "
+        "FROM users WHERE trial_started_at IS NOT NULL AND trial_started_at >= :cutoff "
+        "GROUP BY d ORDER BY d"
+    ), {"cutoff": cutoff}).fetchall()
+    analytics["engagement"]["new_users_by_day"] = [
+        {"date": r[0], "users": r[1]} for r in rows
     ]
 
     rows = session.execute(text(
@@ -819,13 +961,18 @@ def _fill_analytics_sqlite(session, analytics: dict, days: int) -> None:
     for r in rows:
         analytics["features"]["carousel_stats"][r[0] or "unknown"] = r[1]
 
+    reminders_active = session.execute(text(
+        "SELECT COUNT(*) FROM reminders WHERE status = 'active'"
+    )).scalar() or 0
+    analytics["features"]["reminders_active"] = int(reminders_active)
+
     failed = session.execute(text(
         "SELECT COUNT(*) FROM usage_events "
         "WHERE event_type = 'tool_failed' AND created_at >= :cutoff"
     ), {"cutoff": cutoff}).scalar() or 0
     called = session.execute(text(
         "SELECT COUNT(*) FROM usage_events "
-        "WHERE event_type = 'tool_called' AND created_at >= :cutoff"
+        "WHERE event_type IN ('tool_called', 'tool_failed') AND created_at >= :cutoff"
     ), {"cutoff": cutoff}).scalar() or 1
     if called == 0:
         called = 1
@@ -833,10 +980,10 @@ def _fill_analytics_sqlite(session, analytics: dict, days: int) -> None:
 
     rows = session.execute(text(
         "SELECT tool_name, AVG(latency_ms) FROM usage_events "
-        "WHERE event_type = 'tool_called' AND latency_ms IS NOT NULL "
+        "WHERE event_type IN ('tool_called', 'llm_usage') AND latency_ms IS NOT NULL "
         "AND created_at >= :cutoff "
         "GROUP BY tool_name ORDER BY AVG(latency_ms) DESC LIMIT 10"
     ), {"cutoff": cutoff}).fetchall()
     analytics["operational"]["latency_by_tool"] = [
-        {"name": r[0] or "unknown", "avg_ms": int(r[1] or 0)} for r in rows
+        {"name": r[0] or "llm", "avg_ms": int(r[1] or 0)} for r in rows
     ]

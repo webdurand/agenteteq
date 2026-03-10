@@ -17,7 +17,7 @@ from src.memory.identity import get_user, update_user_name, update_last_seen, is
 from src.memory.extractor import extract_and_save_facts
 from src.tools.memory_manager import add_memory
 from src.auth.jwt import decode_token
-from src.memory.analytics import log_event, log_agent_tools
+from src.memory.analytics import log_event, log_agent_tools, log_run_metrics
 from src.utils.privacy import mask_phone
 from src.models.chat_messages import save_message
 from src.agent.prompts import GREETING_INJECTION_WEB as GREETING_INJECTION
@@ -209,6 +209,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
         agent.run, prompt, **kwargs
     )
     log_agent_tools(phone_number, "web", agent)
+    asyncio.create_task(asyncio.to_thread(log_run_metrics, phone_number, "web", response))
     final_text = extract_final_response(response)
 
     if not final_text:
@@ -532,6 +533,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                         knowledge_filters={"user_id": phone_number},
                     )
                     log_agent_tools(phone_number, "web", agent)
+                    asyncio.create_task(asyncio.to_thread(log_run_metrics, phone_number, "web", response))
                     response_content = extract_final_response(response)
                     asyncio.create_task(asyncio.to_thread(
                         extract_and_save_facts, phone_number, "Áudio do usuário", response_content
@@ -579,6 +581,7 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                         knowledge_filters={"user_id": phone_number},
                     )
                     log_agent_tools(phone_number, "web", agent)
+                    asyncio.create_task(asyncio.to_thread(log_run_metrics, phone_number, "web", response))
                     response_content = extract_final_response(response)
                     asyncio.create_task(asyncio.to_thread(
                         extract_and_save_facts, phone_number, transcript, response_content

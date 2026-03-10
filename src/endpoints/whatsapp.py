@@ -22,7 +22,7 @@ from src.memory.identity import get_user, create_user, update_user_name, update_
 from src.memory.knowledge import get_vector_db
 from src.memory.extractor import extract_and_save_facts
 from src.tools.memory_manager import add_memory
-from src.memory.analytics import log_event, log_agent_tools
+from src.memory.analytics import log_event, log_agent_tools, log_run_metrics
 from src.db.session import get_db
 from src.db.models import ProcessedMessage, MessageBuffer
 
@@ -500,6 +500,7 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
 
     response = await asyncio.to_thread(agent.run, text_body, **kwargs)
     log_agent_tools(from_number, "whatsapp", agent)
+    asyncio.create_task(asyncio.to_thread(log_run_metrics, from_number, "whatsapp", response))
     final_text = extract_final_response(response)
     asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, text_body, final_text))
 

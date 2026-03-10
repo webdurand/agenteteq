@@ -347,6 +347,7 @@ class UsageEvent(Base):
     tool_name = Column(String)
     status = Column(String)
     latency_ms = Column(Integer)
+    extra_data = Column(Text)
     created_at = Column(String, default=lambda: _utcnow().isoformat())
 
 

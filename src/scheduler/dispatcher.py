@@ -79,6 +79,12 @@ def dispatch_proactive_message(reminder_id: int):
                 include_scheduler=False,
             )
             response = agent.run(task_instructions, knowledge_filters={"user_id": user_phone})
+
+            from src.memory.analytics import log_run_metrics
+            try:
+                log_run_metrics(user_phone, agent_channel, response)
+            except Exception:
+                pass
             
             if response and response.content:
                 response_content = extract_final_response(response)
