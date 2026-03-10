@@ -12,6 +12,9 @@ def create_blog_tools(session_id: str, channel: str = "web"):
         Ferramenta responsável por criar o arquivo do post diretamente no repositório do blog
         no GitHub via API, acionando o deploy na Vercel indiretamente.
 
+        IMPORTANTE: Aguarde confirmação explícita do usuário antes de chamar esta tool.
+        Nunca publique automaticamente — sempre mostre o rascunho e peça aprovação.
+
         Parâmetros:
         - title: O título do post (será usado para gerar o nome do arquivo).
         - content: O conteúdo do post em markdown (.mdx), incluindo o frontmatter necessário.

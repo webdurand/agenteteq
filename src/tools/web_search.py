@@ -164,6 +164,7 @@ def create_web_search_tool(notifier: StatusNotifier, user_id: str = None):
         Use topic='general' (padrao) para buscas gerais.
         Use topic='news' para noticias recentes dos ultimos N dias (ajuste 'days', padrao 3).
         Retorna resultados com titulo, snippet, fonte e link.
+        Apos resultados relevantes, salve os achados com add_memory para referencia futura.
         """
         if user_id:
             limit_msg = check_daily_feature_limit(user_id, "max_searches_daily")

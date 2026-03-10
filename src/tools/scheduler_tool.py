@@ -41,6 +41,7 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
     ) -> str:
         """
         Agenda uma mensagem proativa para ser enviada ao usuario.
+        SEMPRE confirme o canal de entrega (web, WhatsApp ou ambos) com o usuario antes de agendar.
 
         Args:
             task_instructions: O que o seu 'eu do futuro' deve fazer quando o job disparar.
