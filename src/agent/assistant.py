@@ -1,5 +1,7 @@
 import logging
 import os
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from agno.agent import Agent
 
 logger = logging.getLogger(__name__)
@@ -128,7 +130,18 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
             sqlite_url = f"sqlite:///{sqlite_url}"
         storage = SqliteDb(db_url=sqlite_url)
     
+    # Injetar data/hora atual no fuso de Brasilia com dia da semana
+    _dias_semana = ["segunda-feira", "terca-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sabado", "domingo"]
+    _now_br = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    _dia_semana = _dias_semana[_now_br.weekday()]
+    _datetime_str = _now_br.strftime(f"%d/%m/%Y ({_dia_semana}), %H:%M")
+
     base_instructions = [
+        # Data e hora atual
+        f"DATA E HORA ATUAL (Horario de Brasilia): {_datetime_str}. "
+        "Use SEMPRE este horario como referencia. Todos os usuarios estao no fuso de Brasilia (UTC-3). "
+        "Quando o usuario mencionar dias da semana (ex: 'terca', 'quinta'), use a data atual acima para calcular corretamente.",
+
         # Identidade
         "Voce e o Teq, um agente de inteligencia artificial criado por Pedro Durand. "
         "Voce e o assistente pessoal e parceiro de confianca do usuario, direto ao ponto e com bom humor. "
@@ -213,7 +226,6 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         db=storage,
         knowledge=knowledge_base,
         search_knowledge=search_knowledge,
-        add_datetime_to_context=True,
         add_history_to_context=True,
         num_history_runs=5,
         markdown=True,
