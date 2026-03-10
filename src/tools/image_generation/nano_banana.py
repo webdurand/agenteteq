@@ -6,6 +6,8 @@ from google.genai.types import GenerateContentConfig, ImageConfig, Modality, Par
 from .base import ImageProvider
 import logging
 
+_FALLBACK_ENABLED = os.getenv("IMAGE_FALLBACK_ENABLED", "false").lower() == "true"
+
 logger = logging.getLogger(__name__)
 
 _image_executor = None
@@ -55,7 +57,7 @@ class NanoBananaProvider(ImageProvider):
         def _generate():
             logger.info("Gerando imagem | modelo=%s | aspect_ratio=%s | prompt=%s...", self.model_name, aspect_ratio, prompt[:80])
             config = GenerateContentConfig(
-                response_modalities=[Modality.TEXT, Modality.IMAGE],
+                response_modalities=[Modality.IMAGE],
                 image_config=ImageConfig(aspect_ratio=aspect_ratio, image_size="1K"),
             )
             response = self.client.models.generate_content(
@@ -67,6 +69,8 @@ class NanoBananaProvider(ImageProvider):
             try:
                 return _extract_image_from_response(response)
             except Exception:
+                if not _FALLBACK_ENABLED:
+                    raise
                 logger.info("Tentando prompt fallback...")
                 fallback_prompt = f"Professional editorial photo for tech blog, clean modern design, {prompt[:120]}"
                 response = self.client.models.generate_content(
@@ -84,7 +88,7 @@ class NanoBananaProvider(ImageProvider):
         def _edit():
             logger.info("Editando imagem | modelo=%s | aspect_ratio=%s | prompt=%s...", self.model_name, aspect_ratio, prompt[:80])
             config = GenerateContentConfig(
-                response_modalities=[Modality.TEXT, Modality.IMAGE],
+                response_modalities=[Modality.IMAGE],
                 image_config=ImageConfig(aspect_ratio=aspect_ratio, image_size="1K"),
             )
 

@@ -441,7 +441,7 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
 
     if image_bytes_list:
         from src.tools.image_editor import store_session_images
-        store_session_images(from_number, image_bytes_list)
+        await asyncio.to_thread(store_session_images, from_number, image_bytes_list)
         from src.integrations.image_storage import describe_and_store_images
         asyncio.create_task(describe_and_store_images(from_number, image_bytes_list))
 

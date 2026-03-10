@@ -102,11 +102,13 @@ async def _process_edit_background(
     try:
         provider = get_image_provider()
 
-        from src.endpoints.web import ws_manager
-        await ws_manager.send_personal_message(user_id, {
-            "type": "image_editing",
-            "prompt": edit_prompt[:100],
-        })
+        # Notifica via WS apenas para canais web
+        if channel in ("web", "web_voice", "web_text"):
+            from src.endpoints.web import ws_manager
+            await ws_manager.send_personal_message(user_id, {
+                "type": "image_editing",
+                "prompt": edit_prompt[:100],
+            })
 
         # Persiste placeholder no DB para sobreviver a refresh (canais web)
         if channel in ("web", "web_voice", "web_text"):
@@ -187,8 +189,8 @@ async def _process_edit_background(
         except Exception as e:
             logger.error("Erro ao salvar na galeria: %s", e)
 
-        from src.integrations.image_storage import describe_and_store_images
-        await describe_and_store_images(user_id, [result_bytes], pre_uploaded_urls=[image_url])
+        from src.integrations.image_storage import index_user_image
+        await asyncio.to_thread(index_user_image, user_id, image_url, f"Imagem editada: {edit_prompt[:200]}")
 
     except Exception as e:
         import traceback
@@ -209,6 +211,12 @@ async def _process_edit_background(
                     "__IMAGE_EDITING__",
                     "❌ Erro ao editar a imagem. Tente novamente.",
                 )
+            except Exception:
+                pass
+        elif channel in ("whatsapp_text", "whatsapp"):
+            try:
+                from src.integrations.whatsapp import whatsapp_client
+                await whatsapp_client.send_text_message(user_id, "❌ Eita, deu um erro ao editar a imagem. Tenta de novo!")
             except Exception:
                 pass
 

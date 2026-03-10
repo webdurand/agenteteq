@@ -110,7 +110,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     if image_bytes_list:
         from agno.media import Image
         from src.tools.image_editor import store_session_images
-        store_session_images(phone_number, image_bytes_list)
+        await asyncio.to_thread(store_session_images, phone_number, image_bytes_list)
         for i_bytes in image_bytes_list:
             agent_images.append(Image(content=i_bytes))
             
