@@ -67,6 +67,16 @@ def start_scheduler():
             misfire_grace_time=10
         )
         
+        from src.queue.task_queue import recover_stale_tasks
+        scheduler.add_job(
+            recover_stale_tasks,
+            trigger="interval",
+            minutes=2,
+            id="recover_stale_tasks",
+            replace_existing=True,
+            misfire_grace_time=30
+        )
+        
         from src.auth.otp import cleanup_expired_codes
         scheduler.add_job(
             cleanup_expired_codes,

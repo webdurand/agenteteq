@@ -31,27 +31,6 @@ async def _process_carousel_background(
         from src.endpoints.web import ws_manager
         from src.config.system_config import get_config
         
-        await ws_manager.send_personal_message(user_id, {
-            "type": "carousel_generating",
-            "carousel_id": carousel_id,
-            "title": slides[0].get("style", "Carrossel") if slides else "Carrossel",
-            "num_slides": len(slides),
-        })
-
-        # Persiste placeholder no DB para sobreviver a refresh (canais web)
-        if channel in ("web", "web_voice", "web_text"):
-            try:
-                import json as _json
-                from src.models.chat_messages import save_message
-                placeholder = "__CAROUSEL_GENERATING__" + _json.dumps({
-                    "carousel_id": carousel_id,
-                    "num_slides": len(slides),
-                    "slides_done": 0,
-                })
-                await asyncio.to_thread(save_message, user_id, user_id, "agent", placeholder)
-            except Exception as e:
-                logger.error("Erro ao persistir placeholder de carrossel: %s", e)
-
         provider = get_image_provider()
         
         max_concurrent = int(get_config("max_concurrent_images", "3"))
@@ -151,11 +130,12 @@ async def _notify_user(user_id: str, channel: str, carousel_id: str, slides: Lis
 
     elif channel in ("web", "web_voice", "web_text"):
         from src.endpoints.web import ws_manager
-        await ws_manager.send_personal_message(user_id, {
+        delivered = await ws_manager.send_personal_message(user_id, {
             "type": "carousel_ready",
             "carousel_id": carousel_id,
             "slides": done_slides,
         })
+        logger.info("[NOTIFY] carousel_ready enviado via WS para %s: delivered=%s", user_id[:8], delivered)
 
         # Atualiza o placeholder __CAROUSEL_GENERATING__ com o resultado estruturado
         try:
@@ -298,6 +278,26 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
             ref_msg = " usando a imagem enviada como referência" if ref_url else ""
             
             if result["status"] == "queued":
+                # Envia carousel_generating via WS imediatamente para o loading bubble aparecer
+                if channel in ("web", "web_voice", "web_text"):
+                    emit_event_sync(user_id, "carousel_generating", {
+                        "carousel_id": carousel_id,
+                        "num_slides": len(slides),
+                        "title": title,
+                    })
+                    # Persiste placeholder no DB para sobreviver a refresh
+                    try:
+                        import json as _json
+                        from src.models.chat_messages import save_message
+                        placeholder = "__CAROUSEL_GENERATING__" + _json.dumps({
+                            "carousel_id": carousel_id,
+                            "num_slides": len(slides),
+                            "slides_done": 0,
+                        })
+                        save_message(user_id, user_id, "agent", placeholder)
+                    except Exception as e:
+                        logger.error("Erro ao persistir placeholder de carrossel: %s", e)
+
                 return (
                     f"Carrossel '{title}' com {len(slides)} slides na fila ({format_label}{ref_msg}). "
                     f"Posição {result['position']}. Estimativa: ~{result['estimated_wait']}. "
