@@ -17,7 +17,7 @@ from src.integrations.transcriber import transcriber
 from src.integrations.status_notifier import StatusNotifier
 from src.agent.factory import create_agent_with_tools
 from src.agent.response_utils import extract_final_response, split_whatsapp_messages
-from src.agent.prompts import GREETING_INJECTION, CONTINUATION_INJECTION
+from src.agent.prompts import GREETING_INJECTION
 from src.memory.identity import get_user, create_user, update_user_name, update_last_seen, is_new_session, is_plan_active
 from src.memory.knowledge import get_vector_db
 from src.memory.extractor import extract_and_save_facts
@@ -333,35 +333,6 @@ def parse_webhook_payload(data: dict) -> list:
     return events
 
 
-def _get_pending_choice(phone: str) -> str | None:
-    from src.db.session import get_db
-    from src.db.models import SystemConfig
-    key = f"pending_choice:{phone}"
-    with get_db() as db:
-        row = db.get(SystemConfig, key)
-        return row.value if row else None
-
-def _set_pending_choice(phone: str, message: str):
-    from src.db.session import get_db
-    from src.db.models import SystemConfig
-    key = f"pending_choice:{phone}"
-    with get_db() as db:
-        row = db.get(SystemConfig, key)
-        if row:
-            row.value = message
-        else:
-            db.add(SystemConfig(key=key, value=message))
-
-def _clear_pending_choice(phone: str):
-    from src.db.session import get_db
-    from src.db.models import SystemConfig
-    key = f"pending_choice:{phone}"
-    with get_db() as db:
-        row = db.get(SystemConfig, key)
-        if row:
-            db.delete(row)
-
-
 async def orchestrate_message(event: dict):
     from_number = event["from_number"]
     message_id = event["id"]
@@ -395,48 +366,13 @@ async def orchestrate_message(event: dict):
             )
             return
 
-        aggregated_text = event.get("aggregated_text", "")
-
-        pending_choice = _get_pending_choice(from_number)
-        if pending_choice is not None and aggregated_text:
-            original_message = pending_choice
-            _clear_pending_choice(from_number)
-            response_text = aggregated_text.strip().lower()
-
-            yes_keywords = {"sim", "s", "yes", "continuar", "continua", "pode", "bora", "claro", "vamos", "quero"}
-            is_yes = any(response_text == kw or response_text.startswith(kw + " ") for kw in yes_keywords)
-
-            injection = CONTINUATION_INJECTION if is_yes else GREETING_INJECTION
-            log_label = "continuacao" if is_yes else "nova sessao (usuario recusou)"
-            logger.info("Usuario %s escolheu: %s.", from_number, log_label)
-
-            agent = create_agent_with_tools(from_number, user_id=from_number)
-
-            event["aggregated_text"] = original_message
-            await process_aggregated_message(from_number, message_id, event, agent, injection=injection)
+        if is_new_session(user, threshold_hours=4):
+            logger.info("Nova sessao detectada para %s. Aplicando greeting injection.", from_number)
+            notifier = StatusNotifier(to_number=from_number, reply_to_message_id=message_id)
+            agent = create_agent_with_tools(from_number, notifier, user_id=from_number)
+            await process_aggregated_message(from_number, message_id, event, agent, injection=GREETING_INJECTION)
             update_last_seen(from_number)
             return
-
-        if is_new_session(user, threshold_hours=4):
-            has_previous_session = user.get("last_seen_at") is not None
-            if has_previous_session and aggregated_text.strip():
-                _set_pending_choice(from_number, aggregated_text)
-                update_last_seen(from_number)
-                logger.info("Nova sessao detectada para %s. Perguntando ao usuario.", from_number)
-                await whatsapp_client.send_text_message(
-                    from_number,
-                    "Ei, passou um tempinho desde nossa ultima conversa 👀 Quer continuar de onde a gente parou, ou prefere comecar uma conversa nova?",
-                    reply_to_message_id=message_id,
-                )
-                return
-            else:
-                label = "usuario retornando (sem texto)" if has_previous_session else "usuario novo"
-                logger.info("%s para %s. Aplicando greeting injection.", label, from_number)
-                notifier = StatusNotifier(to_number=from_number, reply_to_message_id=message_id)
-                agent = create_agent_with_tools(from_number, notifier, user_id=from_number)
-                await process_aggregated_message(from_number, message_id, event, agent, injection=GREETING_INJECTION)
-                update_last_seen(from_number)
-                return
 
         notifier = StatusNotifier(to_number=from_number, reply_to_message_id=message_id)
         agent = create_agent_with_tools(from_number, notifier, include_explore=True, user_id=from_number)
