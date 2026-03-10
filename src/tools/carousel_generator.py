@@ -21,6 +21,7 @@ async def _process_carousel_background(
     channel: str = "web",
     aspect_ratio: str = "4:3",
     reference_image: Optional[bytes] = None,
+    task_id: Optional[str] = None,
 ):
     """
     Gera imagens em paralelo, faz upload no Cloudinary e notifica o usuário
@@ -30,6 +31,7 @@ async def _process_carousel_background(
     try:
         from src.endpoints.web import ws_manager
         from src.config.system_config import get_config
+        from src.queue.task_queue import is_task_cancelled
         
         provider = get_image_provider()
         
@@ -38,6 +40,10 @@ async def _process_carousel_background(
 
         async def _generate_and_upload(slide: Dict[str, Any], index: int):
             async with sem:
+                if task_id and is_task_cancelled(task_id):
+                    logger.info("Slide %s pulado — task %s cancelada", index + 1, task_id)
+                    return None
+
                 prompt = slide.get("prompt", "")
                 style = slide.get("style", "")
                 full_prompt = f"Style: {style}. {prompt}"
@@ -77,13 +83,30 @@ async def _process_carousel_background(
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         updated_slides = []
+        cancelled_count = 0
         for i, result in enumerate(results):
-            if isinstance(result, Exception):
+            if result is None:
+                cancelled_count += 1
+                slides[i]["image_url"] = None
+                updated_slides.append(slides[i])
+            elif isinstance(result, Exception):
                 logger.info("Slide %s falhou: %s", i + 1, result)
                 slides[i]["image_url"] = None
                 updated_slides.append(slides[i])
             else:
                 updated_slides.append(result)
+
+        # Check if task was cancelled (by user or system) — don't overwrite "failed" status
+        if task_id and is_task_cancelled(task_id):
+            logger.info("Carrossel %s cancelado pelo usuario — ignorando resultado.", carousel_id)
+            emit_event_sync(user_id, "carousel_generated")
+            return
+
+        if cancelled_count == len(slides):
+            update_carousel_status(carousel_id, "failed", list(updated_slides))
+            logger.info("Carrossel %s falhou (todos os slides pulados).", carousel_id)
+            emit_event_sync(user_id, "carousel_generated")
+            return
 
         update_carousel_status(carousel_id, "done", list(updated_slides))
         logger.info("Carrossel %s finalizado com sucesso.", carousel_id)

@@ -63,9 +63,13 @@ async def process_task_queue():
                 slides=payload["slides"],
                 channel=task["channel"],
                 aspect_ratio=payload.get("aspect_ratio", "4:3"),
-                reference_image=reference_bytes
+                reference_image=reference_bytes,
+                task_id=task["id"],
             )
-            complete_task(task["id"], {"status": "success", "type": "carousel"})
+            if not is_task_cancelled(task["id"]):
+                complete_task(task["id"], {"status": "success", "type": "carousel"})
+            else:
+                logger.info("Task %s cancelada durante processamento, nao marcando como done", task["id"])
             
         elif task["task_type"] == "image_edit":
             from src.tools.image_editor import _process_edit_background
@@ -79,9 +83,13 @@ async def process_task_queue():
                 edit_prompt=payload["edit_instructions"],
                 reference_bytes=reference_bytes,
                 aspect_ratio=payload.get("aspect_ratio", "1:1"),
-                channel=task["channel"]
+                channel=task["channel"],
+                task_id=task["id"],
             )
-            complete_task(task["id"], {"status": "success", "type": "image_edit"})
+            if not is_task_cancelled(task["id"]):
+                complete_task(task["id"], {"status": "success", "type": "image_edit"})
+            else:
+                logger.info("Task %s cancelada durante processamento, nao marcando como done", task["id"])
             
     except Exception as e:
         logger.error("Erro ao processar task %s: %s", task['id'], e, exc_info=True)

@@ -97,6 +97,7 @@ async def _process_edit_background(
     reference_bytes: bytes,
     aspect_ratio: str = "1:1",
     channel: str = "web",
+    task_id: Optional[str] = None,
 ):
     try:
         provider = get_image_provider()
@@ -116,6 +117,13 @@ async def _process_edit_background(
                 await asyncio.to_thread(save_message, user_id, user_id, "agent", placeholder)
             except Exception as e:
                 logger.error("Erro ao persistir placeholder de edição: %s", e)
+
+        # Check cancellation before expensive API call
+        if task_id:
+            from src.queue.task_queue import is_task_cancelled
+            if is_task_cancelled(task_id):
+                logger.info("Edição cancelada antes de iniciar — task %s", task_id)
+                raise Exception("cancelled by user")
 
         result_bytes = await provider.edit(edit_prompt, reference_bytes, aspect_ratio=aspect_ratio)
 

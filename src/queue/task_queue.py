@@ -326,7 +326,48 @@ def is_task_cancelled(task_id: str) -> bool:
         task = session.get(BackgroundTask, task_id)
         if not task:
             return False
-        return task.status == "cancelled"
+        return task.status in ("cancelled", "failed")
+
+
+def cancel_task_by_carousel(user_id: str, carousel_id: str) -> Optional[str]:
+    """
+    Cancel a background task associated with a carousel.
+    Sets task status to 'failed' (consistent with admin cancel).
+    Also updates the carousel status to 'failed'.
+    Returns task_id if cancelled, None otherwise.
+    """
+    from src.models.carousel import update_carousel_status
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    task_id = None
+
+    with get_db() as session:
+        # Find the task by scanning payload for carousel_id
+        tasks = session.query(BackgroundTask).filter(
+            BackgroundTask.user_id == user_id,
+            BackgroundTask.task_type == "carousel",
+            BackgroundTask.status.in_(["pending", "processing"]),
+        ).all()
+
+        for task in tasks:
+            try:
+                payload = json.loads(task.payload) if isinstance(task.payload, str) else task.payload
+                if payload.get("carousel_id") == carousel_id:
+                    task.status = "failed"
+                    task.result = json.dumps({"error": "cancelled by user"})
+                    task.updated_at = now_iso
+                    task_id = task.id
+                    break
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+    # Update carousel status regardless (covers edge case where task already finished)
+    update_carousel_status(carousel_id, "failed")
+
+    if task_id:
+        logger.info("Task %s cancelada pelo usuario (carousel %s)", task_id, carousel_id)
+
+    return task_id
 
 
 def count_processing_tasks() -> int:
