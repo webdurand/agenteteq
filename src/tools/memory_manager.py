@@ -25,7 +25,7 @@ def add_memory(fato: str, user_id: str) -> str:
     )
     
     try:
-        vector_db.insert(content_hash=str(hash(fato)), documents=[doc])
+        vector_db.upsert(content_hash=str(hash(fato)), documents=[doc])
     except Exception as e:
         err = str(e).lower()
         if "unique" in err or "duplicate" in err:

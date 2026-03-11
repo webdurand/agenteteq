@@ -38,7 +38,7 @@ def convert_to_webp(image_bytes: bytes, quality: int = 85) -> bytes:
         buf = io.BytesIO()
         img.save(buf, format="WEBP", quality=quality)
         webp_bytes = buf.getvalue()
-        logger.info("WebP: %s → %s bytes (%s% menor)", len(image_bytes), len(webp_bytes), 100 - len(webp_bytes) * 100 // len(image_bytes))
+        logger.info("WebP: %s → %s bytes (%s%% menor)", len(image_bytes), len(webp_bytes), 100 - len(webp_bytes) * 100 // len(image_bytes))
         return webp_bytes
     except Exception as e:
         logger.error("Falha na conversão WebP, usando original: %s", e)
@@ -103,7 +103,7 @@ def index_user_image(user_id: str, cloudinary_url: str, description: str):
     
     try:
         content_hash = str(hash(f"{user_id}:{cloudinary_url}"))
-        vector_db.insert(content_hash=content_hash, documents=[doc])
+        vector_db.upsert(content_hash=content_hash, documents=[doc])
         logger.info("Imagem indexada para %s: %s", user_id, cloudinary_url)
     except Exception as e:
         err = str(e).lower()
