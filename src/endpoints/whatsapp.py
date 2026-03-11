@@ -393,11 +393,20 @@ async def orchestrate_message(event: dict):
 
 async def process_aggregated_message(from_number: str, message_id: str, event: dict, agent, injection: str | None = None):
     start_time = time.time()
-    log_event(user_id=from_number, channel="whatsapp", event_type="message_received", status="success")
 
     texts = event.get("aggregated_text", "")
     images = event.get("raw_message", {}).get("images", [])
     audios = event.get("raw_message", {}).get("all_audios", [])
+
+    log_event(
+        user_id=from_number, channel="whatsapp",
+        event_type="message_received", status="success",
+        extra_data={
+            "has_text": bool(texts.strip()),
+            "audio_count": len(audios),
+            "image_count": len(images),
+        },
+    )
 
     if len(images) > 10:
         try:

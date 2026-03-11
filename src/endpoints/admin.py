@@ -654,6 +654,18 @@ def get_business_analytics(days: int = 30, user: dict = Depends(require_admin)):
             "image_edit_stats": {},
         },
         "operational": {"error_rate": 0, "latency_by_tool": []},
+        "channel_metrics": {
+            "messages_by_channel": [],
+            "messages_by_day_channel": [],
+            "dau_by_channel": [],
+            "tools_by_channel": [],
+            "top_tools_per_channel": {"whatsapp": [], "web": [], "web_live": []},
+            "latency_by_channel": [],
+            "error_by_channel": [],
+            "whatsapp_media_mix": [],
+            "voice_live_stats": {"sessions": 0, "avg_duration_s": 0},
+            "cost_by_channel": [],
+        },
     }
 
     try:
@@ -835,6 +847,175 @@ def _fill_analytics_pg(session, analytics: dict, days: int) -> None:
         {"name": r[0] or "llm", "avg_ms": int(r[1] or 0)} for r in rows
     ]
 
+    # ── Channel Metrics ──────────────────────────────────────────────────
+    _fill_channel_metrics_pg(session, analytics, days)
+
+
+def _fill_channel_metrics_pg(session, analytics: dict, days: int) -> None:
+    cm = analytics["channel_metrics"]
+
+    # Messages by channel (received + sent)
+    rows = session.execute(text("""
+        SELECT channel,
+               SUM(CASE WHEN event_type = 'message_received' THEN 1 ELSE 0 END) AS received,
+               SUM(CASE WHEN event_type = 'message_sent' THEN 1 ELSE 0 END) AS sent
+        FROM usage_events
+        WHERE event_type IN ('message_received', 'message_sent')
+              AND created_at >= NOW() - make_interval(days => :d)
+        GROUP BY channel
+    """), {"d": days}).fetchall()
+    cm["messages_by_channel"] = [
+        {"channel": r[0] or "unknown", "received": r[1], "sent": r[2]} for r in rows
+    ]
+
+    # Messages by day by channel
+    rows = session.execute(text("""
+        SELECT DATE(created_at) AS d, channel,
+               SUM(CASE WHEN event_type = 'message_received' THEN 1 ELSE 0 END) AS received,
+               SUM(CASE WHEN event_type = 'message_sent' THEN 1 ELSE 0 END) AS sent
+        FROM usage_events
+        WHERE event_type IN ('message_received', 'message_sent')
+              AND created_at >= NOW() - make_interval(days => :d)
+        GROUP BY d, channel ORDER BY d
+    """), {"d": days}).fetchall()
+    day_map: dict = {}
+    for r in rows:
+        dt = str(r[0])
+        if dt not in day_map:
+            day_map[dt] = {"date": dt}
+        ch = r[1] or "unknown"
+        day_map[dt][f"{ch}_received"] = r[2]
+        day_map[dt][f"{ch}_sent"] = r[3]
+    cm["messages_by_day_channel"] = list(day_map.values())
+
+    # DAU by channel
+    rows = session.execute(text("""
+        SELECT DATE(created_at) AS d, channel, COUNT(DISTINCT user_id)
+        FROM usage_events
+        WHERE created_at >= NOW() - make_interval(days => :d)
+        GROUP BY d, channel ORDER BY d
+    """), {"d": days}).fetchall()
+    dau_map: dict = {}
+    for r in rows:
+        dt = str(r[0])
+        if dt not in dau_map:
+            dau_map[dt] = {"date": dt}
+        dau_map[dt][r[1] or "unknown"] = r[2]
+    cm["dau_by_channel"] = list(dau_map.values())
+
+    # Tool calls by channel
+    rows = session.execute(text("""
+        SELECT channel, COUNT(*)
+        FROM usage_events
+        WHERE event_type = 'tool_called'
+              AND created_at >= NOW() - make_interval(days => :d)
+        GROUP BY channel ORDER BY COUNT(*) DESC
+    """), {"d": days}).fetchall()
+    cm["tools_by_channel"] = [
+        {"channel": r[0] or "unknown", "calls": r[1]} for r in rows
+    ]
+
+    # Top 5 tools per channel
+    for ch in ("whatsapp", "web", "web_live"):
+        rows = session.execute(text("""
+            SELECT tool_name, COUNT(*)
+            FROM usage_events
+            WHERE event_type = 'tool_called' AND channel = :ch
+                  AND created_at >= NOW() - make_interval(days => :d)
+            GROUP BY tool_name ORDER BY COUNT(*) DESC LIMIT 5
+        """), {"ch": ch, "d": days}).fetchall()
+        cm["top_tools_per_channel"][ch] = [
+            {"name": r[0] or "unknown", "calls": r[1]} for r in rows
+        ]
+
+    # Latency by channel (message_sent → end-to-end)
+    rows = session.execute(text("""
+        SELECT channel, AVG(latency_ms), COUNT(*)
+        FROM usage_events
+        WHERE event_type = 'message_sent' AND latency_ms IS NOT NULL
+              AND created_at >= NOW() - make_interval(days => :d)
+        GROUP BY channel
+    """), {"d": days}).fetchall()
+    cm["latency_by_channel"] = [
+        {"channel": r[0] or "unknown", "avg_ms": int(r[1] or 0), "count": r[2]} for r in rows
+    ]
+
+    # Error rate by channel
+    rows = session.execute(text("""
+        SELECT channel,
+               SUM(CASE WHEN event_type = 'tool_failed' THEN 1 ELSE 0 END) AS failed,
+               SUM(CASE WHEN event_type IN ('tool_called', 'tool_failed') THEN 1 ELSE 0 END) AS total
+        FROM usage_events
+        WHERE event_type IN ('tool_called', 'tool_failed')
+              AND created_at >= NOW() - make_interval(days => :d)
+        GROUP BY channel
+    """), {"d": days}).fetchall()
+    cm["error_by_channel"] = [
+        {
+            "channel": r[0] or "unknown",
+            "error_rate": round((r[1] / r[2] * 100) if r[2] > 0 else 0, 2),
+            "failed": r[1],
+            "total": r[2],
+        }
+        for r in rows
+    ]
+
+    # WhatsApp media mix (from extra_data in message_received)
+    rows = session.execute(text("""
+        SELECT extra_data FROM usage_events
+        WHERE channel = 'whatsapp' AND event_type = 'message_received'
+              AND extra_data IS NOT NULL
+              AND created_at >= NOW() - make_interval(days => :d)
+    """), {"d": days}).fetchall()
+    import json as _json
+    text_count, audio_count, image_count = 0, 0, 0
+    for r in rows:
+        try:
+            data = _json.loads(r[0]) if isinstance(r[0], str) else r[0]
+            if data.get("has_text"):
+                text_count += 1
+            audio_count += data.get("audio_count", 0)
+            image_count += data.get("image_count", 0)
+        except Exception:
+            text_count += 1
+    cm["whatsapp_media_mix"] = [
+        {"name": "Texto", "value": text_count},
+        {"name": "Áudio", "value": audio_count},
+        {"name": "Imagem", "value": image_count},
+    ]
+
+    # Voice Live stats
+    vl = session.execute(text("""
+        SELECT COUNT(*), AVG(latency_ms)
+        FROM usage_events
+        WHERE event_type = 'voice_live_session'
+              AND created_at >= NOW() - make_interval(days => :d)
+    """), {"d": days}).fetchone()
+    cm["voice_live_stats"] = {
+        "sessions": int(vl[0] or 0) if vl else 0,
+        "avg_duration_s": int((vl[1] or 0) / 1000) if vl else 0,
+    }
+
+    # LLM cost by channel
+    rows = session.execute(text("""
+        SELECT channel, extra_data
+        FROM usage_events
+        WHERE event_type = 'llm_usage' AND extra_data IS NOT NULL
+              AND created_at >= NOW() - make_interval(days => :d)
+    """), {"d": days}).fetchall()
+    cost_map: dict = {}
+    for r in rows:
+        ch = r[0] or "unknown"
+        try:
+            data = _json.loads(r[1]) if isinstance(r[1], str) else r[1]
+            cost = data.get("cost_usd") or 0
+            cost_map[ch] = cost_map.get(ch, 0) + cost
+        except Exception:
+            pass
+    cm["cost_by_channel"] = [
+        {"channel": ch, "cost_usd": round(v, 4)} for ch, v in sorted(cost_map.items())
+    ]
+
 
 def _fill_analytics_sqlite(session, analytics: dict, days: int) -> None:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
@@ -986,4 +1167,148 @@ def _fill_analytics_sqlite(session, analytics: dict, days: int) -> None:
     ), {"cutoff": cutoff}).fetchall()
     analytics["operational"]["latency_by_tool"] = [
         {"name": r[0] or "llm", "avg_ms": int(r[1] or 0)} for r in rows
+    ]
+
+    # ── Channel Metrics ──────────────────────────────────────────────────
+    _fill_channel_metrics_sqlite(session, analytics, cutoff)
+
+
+def _fill_channel_metrics_sqlite(session, analytics: dict, cutoff: str) -> None:
+    cm = analytics["channel_metrics"]
+
+    rows = session.execute(text("""
+        SELECT channel,
+               SUM(CASE WHEN event_type = 'message_received' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN event_type = 'message_sent' THEN 1 ELSE 0 END)
+        FROM usage_events
+        WHERE event_type IN ('message_received', 'message_sent') AND created_at >= :cutoff
+        GROUP BY channel
+    """), {"cutoff": cutoff}).fetchall()
+    cm["messages_by_channel"] = [
+        {"channel": r[0] or "unknown", "received": r[1] or 0, "sent": r[2] or 0} for r in rows
+    ]
+
+    rows = session.execute(text("""
+        SELECT date(created_at) AS d, channel,
+               SUM(CASE WHEN event_type = 'message_received' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN event_type = 'message_sent' THEN 1 ELSE 0 END)
+        FROM usage_events
+        WHERE event_type IN ('message_received', 'message_sent') AND created_at >= :cutoff
+        GROUP BY d, channel ORDER BY d
+    """), {"cutoff": cutoff}).fetchall()
+    day_map: dict = {}
+    for r in rows:
+        dt = r[0]
+        if dt not in day_map:
+            day_map[dt] = {"date": dt}
+        ch = r[1] or "unknown"
+        day_map[dt][f"{ch}_received"] = r[2] or 0
+        day_map[dt][f"{ch}_sent"] = r[3] or 0
+    cm["messages_by_day_channel"] = list(day_map.values())
+
+    rows = session.execute(text("""
+        SELECT date(created_at) AS d, channel, COUNT(DISTINCT user_id)
+        FROM usage_events WHERE created_at >= :cutoff
+        GROUP BY d, channel ORDER BY d
+    """), {"cutoff": cutoff}).fetchall()
+    dau_map: dict = {}
+    for r in rows:
+        dt = r[0]
+        if dt not in dau_map:
+            dau_map[dt] = {"date": dt}
+        dau_map[dt][r[1] or "unknown"] = r[2]
+    cm["dau_by_channel"] = list(dau_map.values())
+
+    rows = session.execute(text("""
+        SELECT channel, COUNT(*) FROM usage_events
+        WHERE event_type = 'tool_called' AND created_at >= :cutoff
+        GROUP BY channel ORDER BY COUNT(*) DESC
+    """), {"cutoff": cutoff}).fetchall()
+    cm["tools_by_channel"] = [
+        {"channel": r[0] or "unknown", "calls": r[1]} for r in rows
+    ]
+
+    for ch in ("whatsapp", "web", "web_live"):
+        rows = session.execute(text("""
+            SELECT tool_name, COUNT(*) FROM usage_events
+            WHERE event_type = 'tool_called' AND channel = :ch AND created_at >= :cutoff
+            GROUP BY tool_name ORDER BY COUNT(*) DESC LIMIT 5
+        """), {"ch": ch, "cutoff": cutoff}).fetchall()
+        cm["top_tools_per_channel"][ch] = [
+            {"name": r[0] or "unknown", "calls": r[1]} for r in rows
+        ]
+
+    rows = session.execute(text("""
+        SELECT channel, AVG(latency_ms), COUNT(*) FROM usage_events
+        WHERE event_type = 'message_sent' AND latency_ms IS NOT NULL AND created_at >= :cutoff
+        GROUP BY channel
+    """), {"cutoff": cutoff}).fetchall()
+    cm["latency_by_channel"] = [
+        {"channel": r[0] or "unknown", "avg_ms": int(r[1] or 0), "count": r[2]} for r in rows
+    ]
+
+    rows = session.execute(text("""
+        SELECT channel,
+               SUM(CASE WHEN event_type = 'tool_failed' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN event_type IN ('tool_called', 'tool_failed') THEN 1 ELSE 0 END)
+        FROM usage_events
+        WHERE event_type IN ('tool_called', 'tool_failed') AND created_at >= :cutoff
+        GROUP BY channel
+    """), {"cutoff": cutoff}).fetchall()
+    cm["error_by_channel"] = [
+        {
+            "channel": r[0] or "unknown",
+            "error_rate": round((r[1] / r[2] * 100) if r[2] > 0 else 0, 2),
+            "failed": r[1] or 0,
+            "total": r[2] or 0,
+        }
+        for r in rows
+    ]
+
+    rows = session.execute(text("""
+        SELECT extra_data FROM usage_events
+        WHERE channel = 'whatsapp' AND event_type = 'message_received'
+              AND extra_data IS NOT NULL AND created_at >= :cutoff
+    """), {"cutoff": cutoff}).fetchall()
+    import json as _json
+    text_count, audio_count, image_count = 0, 0, 0
+    for r in rows:
+        try:
+            data = _json.loads(r[0]) if isinstance(r[0], str) else r[0]
+            if data.get("has_text"):
+                text_count += 1
+            audio_count += data.get("audio_count", 0)
+            image_count += data.get("image_count", 0)
+        except Exception:
+            text_count += 1
+    cm["whatsapp_media_mix"] = [
+        {"name": "Texto", "value": text_count},
+        {"name": "Áudio", "value": audio_count},
+        {"name": "Imagem", "value": image_count},
+    ]
+
+    vl = session.execute(text("""
+        SELECT COUNT(*), AVG(latency_ms) FROM usage_events
+        WHERE event_type = 'voice_live_session' AND created_at >= :cutoff
+    """), {"cutoff": cutoff}).fetchone()
+    cm["voice_live_stats"] = {
+        "sessions": int(vl[0] or 0) if vl else 0,
+        "avg_duration_s": int((vl[1] or 0) / 1000) if vl else 0,
+    }
+
+    rows = session.execute(text("""
+        SELECT channel, extra_data FROM usage_events
+        WHERE event_type = 'llm_usage' AND extra_data IS NOT NULL AND created_at >= :cutoff
+    """), {"cutoff": cutoff}).fetchall()
+    cost_map: dict = {}
+    for r in rows:
+        ch = r[0] or "unknown"
+        try:
+            data = _json.loads(r[1]) if isinstance(r[1], str) else r[1]
+            cost = data.get("cost_usd") or 0
+            cost_map[ch] = cost_map.get(ch, 0) + cost
+        except Exception:
+            pass
+    cm["cost_by_channel"] = [
+        {"channel": ch, "cost_usd": round(v, 4)} for ch, v in sorted(cost_map.items())
     ]

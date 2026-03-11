@@ -167,6 +167,7 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
             
             result = await execute_voice_tool(phone_number, function_name, args)
             logger.info("[VOICE LIVE] Tool result: %s", result)
+            log_event(user_id=phone_number, channel="web_live", event_type="tool_called", tool_name=function_name, status="success")
 
             # Mantem o chat web e o historico sincronizados com o resultado de tools
             # disparadas no modo voz em tempo real.
@@ -200,6 +201,7 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
                 
         except Exception as e:
             logger.error("[VOICE LIVE] Erro executando tool: %s", e)
+            log_event(user_id=phone_number, channel="web_live", event_type="tool_failed", tool_name=function_name, status="error")
             await client.send_tool_response(call_id, function_name, {"error": str(e)})
         finally:
             try:
@@ -208,7 +210,9 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
                 pass
 
     async def on_turn_complete():
+        nonlocal turn_active
         try:
+            turn_active = False
             await websocket.send_json({"type": "turn_complete"})
             update_last_seen(phone_number)
             log_event(user_id=phone_number, channel="web_live", event_type="message_sent", status="success")
@@ -220,6 +224,8 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
             await websocket.send_json({"type": "interrupted"})
         except BaseException:
             pass
+
+    turn_active = False  # flag p/ logar message_received 1x por turno de fala
 
     receive_task = asyncio.create_task(client.receive_loop(on_audio, on_tool_call, on_turn_complete, on_interrupted))
     last_activity_at = time.monotonic()
@@ -252,6 +258,9 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
                     b64_data = msg.get("data")
                     if b64_data:
                         last_activity_at = time.monotonic()
+                        if not turn_active:
+                            turn_active = True
+                            log_event(user_id=phone_number, channel="web_live", event_type="message_received", status="success")
                         pcm_bytes = base64.b64decode(b64_data)
                         await client.send_audio_chunk(pcm_bytes)
                 elif msg_type == "cancel":

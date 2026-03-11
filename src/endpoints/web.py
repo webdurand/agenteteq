@@ -92,7 +92,8 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
         images_b64 = []
         
     start_time = time.time()
-    log_event(user_id=phone_number, channel="web", event_type="message_received", status="success")
+    log_event(user_id=phone_number, channel="web", event_type="message_received", status="success",
+              extra_data={"mode": mode, "image_count": len(images_b64) if images_b64 else 0})
     
     # Decodificar imagens
     image_bytes_list = []
@@ -509,7 +510,8 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
 
             try:
                 start_time = time.time()
-                log_event(user_id=phone_number, channel="web", event_type="message_received", status="success")
+                log_event(user_id=phone_number, channel="web", event_type="message_received", status="success",
+                          extra_data={"mode": "voice"})
                 # Refresh user p/ pegar is_new_session fresquinho
                 current_user = get_user(phone_number)
                 new_session = is_new_session(current_user, threshold_hours=4)

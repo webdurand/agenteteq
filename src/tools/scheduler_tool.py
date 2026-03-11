@@ -31,7 +31,7 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
 
     def schedule_message(
         task_instructions: str,
-        trigger_type: str,
+        trigger_type: str = "",
         minutes_from_now: Optional[int] = None,
         run_date: Optional[str] = None,
         cron_expression: Optional[str] = None,
@@ -41,7 +41,11 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
     ) -> str:
         """
         Agenda uma mensagem proativa para ser enviada ao usuario.
-        SEMPRE confirme o canal de entrega (web, WhatsApp ou ambos) com o usuario antes de agendar.
+
+        IMPORTANTE — ANTES de chamar esta tool, CONFIRME com o usuario:
+        1. QUANDO: para quando agendar? (data/hora exata, daqui X minutos, frequencia)
+        2. CANAL: onde entregar? (web, WhatsApp ou ambos)
+        Se o usuario nao informou esses dados, PERGUNTE antes de chamar.
 
         Args:
             task_instructions: O que o seu 'eu do futuro' deve fazer quando o job disparar.
@@ -52,7 +56,8 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
                                Ex: "Execute list_tasks, veja as pendentes e mande um resumo para o usuario."
                                Ex: "Pesquisar com deep_research sobre Y e enviar um relatorio."
                                Ex: "Gere uma imagem aleatoria com generate_carousel (1 slide, formato 1080x1080, prompt criativo, use_reference_image=False)."
-            trigger_type: Tipo de gatilho — "date" (unico), "cron" (recorrente), "interval" (por intervalo).
+            trigger_type: OBRIGATORIO. Tipo de gatilho — "date" (unico), "cron" (recorrente), "interval" (por intervalo).
+                          Se omitido, sera inferido dos outros args (minutes_from_now/run_date -> date, cron_expression -> cron, interval_minutes -> interval).
             minutes_from_now: PREFERIDO para disparo unico relativo. Numero de minutos a partir de agora.
                               Ex: 1 para "daqui 1 minuto", 60 para "daqui 1 hora".
             run_date: Alternativo ao minutes_from_now. Data/hora absoluta ISO 8601.
@@ -72,6 +77,19 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
         Returns:
             Confirmacao com o ID do job criado ou mensagem de erro.
         """
+        # Inferir trigger_type se o LLM nao informou
+        if not trigger_type or trigger_type not in ("date", "cron", "interval"):
+            if cron_expression:
+                trigger_type = "cron"
+            elif interval_minutes:
+                trigger_type = "interval"
+            elif minutes_from_now is not None or run_date:
+                trigger_type = "date"
+            else:
+                return ("Preciso saber QUANDO agendar. Pergunte ao usuario: "
+                        "para quando? (data/hora, daqui X minutos, frequencia)")
+            logger.info("trigger_type inferido como '%s' a partir dos args", trigger_type)
+
         logger.info("schedule_message | user=%s | trigger=%s | minutes_from_now=%s | run_date=%s | cron=%s | interval=%s", user_phone, trigger_type, minutes_from_now, run_date, cron_expression, interval_minutes)
         try:
             import zoneinfo

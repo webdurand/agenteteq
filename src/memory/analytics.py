@@ -56,6 +56,10 @@ def log_run_metrics(user_id: str, channel: str, response):
         if total_tokens == 0 and input_tokens == 0:
             return
 
+        # Gemini não retorna custo — estimamos via tokens (Gemini 2.0 Flash pricing)
+        if cost is None and (input_tokens or output_tokens):
+            cost = (input_tokens * 0.10 + output_tokens * 0.40) / 1_000_000
+
         meta = {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
@@ -64,7 +68,7 @@ def log_run_metrics(user_id: str, channel: str, response):
             "audio_input_tokens": audio_in,
             "audio_output_tokens": audio_out,
             "cache_read_tokens": cache_read,
-            "cost_usd": cost,
+            "cost_usd": round(cost, 6) if cost else None,
             "duration_s": round(duration, 3) if duration else None,
             "ttft_s": round(ttft, 3) if ttft else None,
             "model": model_name,
@@ -96,12 +100,18 @@ def log_agent_tools(user_id: str, channel: str, response):
             for t in tools:
                 name = getattr(t, "tool_name", None) or "unknown_tool"
                 is_error = bool(getattr(t, "tool_call_error", False))
+                extra = None
+                if is_error:
+                    err_msg = getattr(t, "tool_call_error", None)
+                    result_str = str(getattr(t, "result", "") or "")[:500]
+                    extra = {"error": str(err_msg)[:500], "result": result_str}
                 log_event(
                     user_id=user_id,
                     channel=channel,
                     event_type="tool_failed" if is_error else "tool_called",
                     tool_name=name,
                     status="error" if is_error else "success",
+                    extra_data=extra,
                 )
             return
 
@@ -116,15 +126,20 @@ def log_agent_tools(user_id: str, channel: str, response):
                 continue
             if role == "tool" or tool_name:
                 is_error = bool(getattr(msg, "tool_call_error", False))
+                content_str = str(getattr(msg, "content", "") or "")
                 if not is_error:
-                    content_str = str(getattr(msg, "content", "") or "").lower()
-                    is_error = any(kw in content_str for kw in ("erro", "error", "falha", "failed", "exception", "traceback"))
+                    content_lower = content_str.lower()
+                    is_error = any(kw in content_lower for kw in ("erro", "error", "falha", "failed", "exception", "traceback"))
+                extra = None
+                if is_error:
+                    extra = {"error": str(getattr(msg, "tool_call_error", ""))[:500], "content": content_str[:500]}
                 log_event(
                     user_id=user_id,
                     channel=channel,
                     event_type="tool_failed" if is_error else "tool_called",
                     tool_name=tool_name,
                     status="error" if is_error else "success",
+                    extra_data=extra,
                 )
     except Exception as e:
         logger.error("Erro ao buscar tools: %s", e)
