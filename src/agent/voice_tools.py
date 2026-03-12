@@ -175,7 +175,8 @@ VOICE_TOOLS_DECLARATIONS = [
                 "num_slides": {"type": "integer", "description": "Quantidade de imagens/slides a gerar (padrao 5)"},
                 "style": {"type": "string", "description": "Estilo visual, ex: Fotorrealista, Cinematico, Clean/Mockup, Anime, Aquarela"},
                 "format": {"type": "string", "description": "Formato da imagem, ex: 1350x1080, 1080x1080, 16:9"},
-                "use_reference_image": {"type": "boolean", "description": "Usar imagem de referencia da conversa"}
+                "use_reference_image": {"type": "boolean", "description": "Usar imagem de referencia da conversa"},
+                "delivery_channel": {"type": "string", "description": "Canal onde entregar as imagens: 'whatsapp', 'web' ou 'ambos'. Se nao informado, entrega na web."}
             },
             "required": ["title", "description"]
         }
@@ -196,9 +197,51 @@ VOICE_TOOLS_DECLARATIONS = [
             "properties": {
                 "edit_instructions": {"type": "string", "description": "Instrucao detalhada de edicao"},
                 "source": {"type": "string", "description": "original, last_generated ou auto"},
-                "format": {"type": "string", "description": "Formato de saida, ex: 1:1, 4:3, 16:9"}
+                "format": {"type": "string", "description": "Formato de saida, ex: 1:1, 4:3, 16:9"},
+                "delivery_channel": {"type": "string", "description": "Canal onde entregar a imagem editada: 'whatsapp', 'web' ou 'ambos'. Se nao informado, entrega na web."}
             },
             "required": ["edit_instructions"]
+        }
+    },
+    {
+        "name": "send_to_channel",
+        "description": "Envia uma mensagem de texto para outro canal do usuario (WhatsApp, web ou ambos). Use quando o usuario pedir explicitamente para enviar algo em outro canal.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "O texto completo a ser enviado no canal de destino"},
+                "channel": {"type": "string", "description": "Canal de destino: 'whatsapp' (ou 'wpp', 'zap'), 'web', ou 'ambos'"}
+            },
+            "required": ["message", "channel"]
+        }
+    },
+    {
+        "name": "run_workflow",
+        "description": "Executa uma tarefa multi-step AGORA. Use quando o usuario pedir algo que envolve MULTIPLAS acoes sequenciais (ex: 'pesquise noticias e gere carrossel pra cada'). NAO use para pedidos simples de 1 acao. IMPORTANTE: chame esta tool diretamente SEM narrar ou comentar a complexidade. Nao diga 'que complexo' nem narre o que vai fazer. Apenas execute.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "request": {"type": "string", "description": "O pedido completo do usuario em linguagem natural"}
+            },
+            "required": ["request"]
+        }
+    },
+    {
+        "name": "schedule_workflow",
+        "description": "Agenda a execucao de uma tarefa complexa multi-step para o futuro. Use quando o usuario quer AGENDAR algo que envolve multiplas acoes (ex: 'todo dia as 7h pesquise noticias e me mande').",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "request": {"type": "string", "description": "O pedido completo do usuario (o que fazer quando disparar)"},
+                "trigger_type": {"type": "string", "description": "'date' (unico), 'cron' (recorrente), 'interval'"},
+                "minutes_from_now": {"type": "integer", "description": "Minutos a partir de agora (para date)"},
+                "run_date": {"type": "string", "description": "Data/hora ISO 8601 (alternativo a minutes_from_now)"},
+                "cron_expression": {"type": "string", "description": "Expressao cron de 5 campos (para cron)"},
+                "interval_minutes": {"type": "integer", "description": "Intervalo em minutos (para interval)"},
+                "title": {"type": "string", "description": "Titulo curto do agendamento"},
+                "notification_channel": {"type": "string", "description": "Canal de entrega: 'whatsapp', 'web', 'ambos', 'web_voice'"}
+            },
+            "required": ["request"]
         }
     }
 ]
@@ -281,6 +324,12 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
             elif function_name == "generate_carousel":
                 from src.tools.carousel_generator import create_carousel_tools, expand_slides_from_description
                 from src.queue.task_queue import pop_limit_flag
+                from src.integrations.channel_router import resolve_channel
+
+                delivery = args.pop("delivery_channel", None)
+                effective_channel = resolve_channel(delivery) if delivery else "web_voice"
+                if not effective_channel:
+                    effective_channel = "web_voice"
 
                 # Voice Live envia formato simplificado (description + num_slides)
                 # em vez do array completo de slides.
@@ -290,7 +339,7 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
                     style = args.pop("style", "Fotorrealista") or "Fotorrealista"
                     args["slides"] = expand_slides_from_description(description, num_slides, style)
 
-                generate_carousel, _ = create_carousel_tools(user_id, channel="web_voice")
+                generate_carousel, _ = create_carousel_tools(user_id, channel=effective_channel)
                 tool_result = generate_carousel(**args)
                 limit_info = pop_limit_flag(user_id)
                 if limit_info:
@@ -309,7 +358,14 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
             elif function_name == "edit_image":
                 from src.tools.image_editor import create_image_editor_tools
                 from src.queue.task_queue import pop_limit_flag
-                edit_image = create_image_editor_tools(user_id, channel="web_voice")
+                from src.integrations.channel_router import resolve_channel
+
+                delivery = args.pop("delivery_channel", None)
+                effective_channel = resolve_channel(delivery) if delivery else "web_voice"
+                if not effective_channel:
+                    effective_channel = "web_voice"
+
+                edit_image = create_image_editor_tools(user_id, channel=effective_channel)
                 tool_result = edit_image(**args)
                 limit_info = pop_limit_flag(user_id)
                 if limit_info:
@@ -320,6 +376,21 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
                     }
                 return {"result": tool_result}
                 
+            elif function_name == "send_to_channel":
+                from src.tools.channel_delivery import create_send_to_channel_tool
+                send_fn = create_send_to_channel_tool(user_id)
+                return {"result": send_fn(**args)}
+
+            elif function_name == "run_workflow":
+                from src.tools.workflow_tool import create_workflow_tools
+                run_wf, _ = create_workflow_tools(user_id, channel="web_voice")
+                return {"result": run_wf(**args)}
+
+            elif function_name == "schedule_workflow":
+                from src.tools.workflow_tool import create_workflow_tools
+                _, schedule_wf = create_workflow_tools(user_id, channel="web_voice")
+                return {"result": schedule_wf(**args)}
+
             else:
                 return {"error": f"Tool '{function_name}' not found."}
         except Exception as e:

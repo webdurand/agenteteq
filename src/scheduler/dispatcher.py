@@ -49,48 +49,57 @@ def dispatch_proactive_message(reminder_id: int):
         user_phone = reminder["user_id"]
         task_instructions = reminder["task_instructions"]
         channel = reminder["notification_channel"]
+        workflow_id = reminder.get("workflow_id")
         
-        logger.info("Reminder %s | User: %s | Channel: %s | Task: %s...", reminder_id, user_phone, channel, task_instructions[:60])
+        logger.info("Reminder %s | User: %s | Channel: %s | Workflow: %s | Task: %s...",
+                     reminder_id, user_phone, channel, workflow_id, task_instructions[:60])
 
-        # 1. Obter resposta do Agente (se o canal precisar)
-        response_content = None
-        if channel in ["whatsapp_text", "whatsapp_call", "web_voice", "web_text", "web_whatsapp"]:
-            from src.agent.factory import create_agent_with_tools
-            from src.agent.response_utils import extract_final_response
-
-            reminder_instructions = [
-                "EXECUCAO DE LEMBRETE AGENDADO: Voce esta executando um lembrete que o usuario agendou anteriormente.",
-                "NAO peca mais informacoes, NAO tente agendar nada novo, NAO faca perguntas.",
-                "Execute as instrucoes diretamente e envie o resultado pronto.",
-                "REGRA CRITICA: Se as instrucoes envolverem noticias, pesquisa, informacoes atualizadas "
-                "ou qualquer dado que mude com o tempo, voce DEVE obrigatoriamente usar web_search "
-                "(com topic='news' para noticias) ou deep_research. NUNCA responda usando apenas "
-                "seu conhecimento interno para dados que mudam.",
-                "Para noticias: faca MULTIPLAS buscas com queries especificas e variadas. "
-                "Inclua SEMPRE: titulo real da noticia, fonte, data e link.",
-            ]
-
-            agent_channel = "web" if channel in {"web_voice", "web_text"} else "whatsapp"
-            agent = create_agent_with_tools(
-                session_id=user_phone,
-                user_id=user_phone,
-                channel=agent_channel,
-                extra_instructions=reminder_instructions,
-                include_scheduler=False,
-            )
-            response = agent.run(task_instructions, knowledge_filters={"user_id": user_phone})
-
-            from src.memory.analytics import log_run_metrics
-            try:
-                log_run_metrics(user_phone, agent_channel, response)
-            except Exception:
-                pass
-            
-            if response and response.content:
-                response_content = extract_final_response(response)
-            else:
-                logger.info("Agente retornou resposta vazia para %s.", user_phone)
+        # --- Workflow path: executa steps sequencialmente ---
+        if workflow_id:
+            response_content = _execute_workflow_for_reminder(workflow_id, user_phone, channel)
+            if not response_content:
+                logger.info("Workflow %s retornou vazio para reminder %s.", workflow_id, reminder_id)
                 return
+        else:
+            # --- Legacy path: single agent.run ---
+            response_content = None
+            if channel in ["whatsapp_text", "whatsapp_call", "web_voice", "web_text", "web_whatsapp"]:
+                from src.agent.factory import create_agent_with_tools
+                from src.agent.response_utils import extract_final_response
+
+                reminder_instructions = [
+                    "EXECUCAO DE LEMBRETE AGENDADO: Voce esta executando um lembrete que o usuario agendou anteriormente.",
+                    "NAO peca mais informacoes, NAO tente agendar nada novo, NAO faca perguntas.",
+                    "Execute as instrucoes diretamente e envie o resultado pronto.",
+                    "REGRA CRITICA: Se as instrucoes envolverem noticias, pesquisa, informacoes atualizadas "
+                    "ou qualquer dado que mude com o tempo, voce DEVE obrigatoriamente usar web_search "
+                    "(com topic='news' para noticias) ou deep_research. NUNCA responda usando apenas "
+                    "seu conhecimento interno para dados que mudam.",
+                    "Para noticias: faca MULTIPLAS buscas com queries especificas e variadas. "
+                    "Inclua SEMPRE: titulo real da noticia, fonte, data e link.",
+                ]
+
+                agent_channel = "web" if channel in {"web_voice", "web_text"} else "whatsapp"
+                agent = create_agent_with_tools(
+                    session_id=user_phone,
+                    user_id=user_phone,
+                    channel=agent_channel,
+                    extra_instructions=reminder_instructions,
+                    include_scheduler=False,
+                )
+                response = agent.run(task_instructions, knowledge_filters={"user_id": user_phone})
+
+                from src.memory.analytics import log_run_metrics
+                try:
+                    log_run_metrics(user_phone, agent_channel, response)
+                except Exception:
+                    pass
+                
+                if response and response.content:
+                    response_content = extract_final_response(response)
+                else:
+                    logger.info("Agente retornou resposta vazia para %s.", user_phone)
+                    return
 
         # 2. Enviar pelo canal especifico
         if channel == "whatsapp_text":
@@ -195,3 +204,39 @@ def dispatch_proactive_message(reminder_id: int):
                     conn.commit()
             except Exception as e:
                 logger.error("Erro ao liberar lock do reminder %s: %s", reminder_id, e)
+
+
+def _execute_workflow_for_reminder(workflow_id: str, user_phone: str, channel: str) -> str | None:
+    """
+    Executa um workflow linkado a um reminder.
+    Reseta steps (para execucoes recorrentes) e roda o executor.
+
+    Returns:
+        Output do ultimo step, ou None se falhou.
+    """
+    try:
+        from src.models.workflows import get_workflow, reset_workflow_steps
+        from src.workflow.executor import execute_workflow
+
+        workflow = get_workflow(workflow_id)
+        if not workflow:
+            logger.error("[Dispatcher] Workflow %s nao encontrado.", workflow_id)
+            return None
+
+        # Reseta steps pra pending (importante pra execucoes recorrentes)
+        reset_workflow_steps(workflow_id)
+
+        logger.info("[Dispatcher] Executando workflow %s (%s steps) para %s...",
+                     workflow_id, len(workflow["steps"]), user_phone)
+
+        result = execute_workflow(workflow_id)
+
+        if result and not result.startswith("Erro"):
+            return result
+
+        logger.error("[Dispatcher] Workflow %s falhou: %s", workflow_id, result)
+        return None
+
+    except Exception as e:
+        logger.error("[Dispatcher] Erro ao executar workflow %s: %s", workflow_id, e, exc_info=True)
+        return None

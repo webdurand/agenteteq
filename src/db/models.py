@@ -182,6 +182,7 @@ class Reminder(Base):
     notification_channel = Column(String, default="whatsapp_text")
     status = Column(String, default="active")
     apscheduler_job_id = Column(String)
+    workflow_id = Column(String)
     created_at = Column(String, nullable=False)
     updated_at = Column(String)
 
@@ -197,6 +198,45 @@ class Reminder(Base):
             "notification_channel": self.notification_channel,
             "status": self.status,
             "apscheduler_job_id": self.apscheduler_job_id,
+            "workflow_id": self.workflow_id,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+# ──────────────────────────── Workflows ────────────────────────────
+
+
+class Workflow(Base):
+    __tablename__ = "workflows"
+    __table_args__ = (
+        Index("idx_workflows_user_status", "user_id", "status"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=False)
+    title = Column(String)
+    original_request = Column(Text, nullable=False)
+    steps = Column(Text, nullable=False, default="[]")
+    status = Column(String, nullable=False, default="draft")
+    current_step = Column(Integer, default=0)
+    notification_channel = Column(String)
+    last_run_at = Column(String)
+    created_at = Column(String, default=lambda: _utcnow().isoformat())
+    updated_at = Column(String, default=lambda: _utcnow().isoformat())
+
+    def to_dict(self) -> dict:
+        import json
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "title": self.title,
+            "original_request": self.original_request,
+            "steps": json.loads(self.steps) if isinstance(self.steps, str) else self.steps,
+            "status": self.status,
+            "current_step": self.current_step,
+            "notification_channel": self.notification_channel,
+            "last_run_at": self.last_run_at,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }

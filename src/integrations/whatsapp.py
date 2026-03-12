@@ -138,7 +138,7 @@ class EvolutionWhatsAppClient:
             "delay": 1200 # Um pequeno delay para parecer mais humano
         }
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(url, json=payload, headers=self._get_headers())
             response.raise_for_status()
             return response.json()

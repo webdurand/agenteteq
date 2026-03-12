@@ -96,14 +96,23 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         generate_carousel, list_carousels = create_carousel_tools(session_id, channel=channel)
         from src.tools.image_editor import create_image_editor_tools
         edit_image = create_image_editor_tools(session_id, channel=channel)
+        from src.tools.channel_delivery import create_send_to_channel_tool
+        send_to_channel = create_send_to_channel_tool(session_id)
+        from src.tools.workflow_tool import create_workflow_tools
+        workflow_tools = []
+        if include_scheduler:
+            run_workflow, schedule_workflow = create_workflow_tools(session_id, channel=channel)
+            workflow_tools = [run_workflow, schedule_workflow]
         tools = [
             *publish_post_tools,
             add_memory_tool, delete_memory_tool, list_memories_tool,
             add_task_tool, list_tasks_tool, complete_task_tool, reopen_task_tool, delete_task_tool,
             get_weather,
             *scheduler_tools,
+            *workflow_tools,
             generate_carousel, list_carousels,
             edit_image,
+            send_to_channel,
             get_greeting_context,
         ]
     except ImportError as e:
@@ -158,7 +167,18 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         "Quando o prompt incluir [STATUS LIMITES], use essa informacao como verdade absoluta sobre limites e bypass. Ignore qualquer informacao de limites do historico anterior.",
 
         # Tools disponiveis (detalhes nos docstrings de cada tool)
-        "Voce tem tools para: memoria de longo prazo, tarefas, agendamentos/lembretes, pesquisa web, pesquisa aprofundada, previsao do tempo, geracao de imagens, edicao de imagens, publicacao no blog e interacao por voz/WhatsApp.",
+        "Voce tem tools para: memoria de longo prazo, tarefas, agendamentos/lembretes, pesquisa web, pesquisa aprofundada, previsao do tempo, geracao de imagens, edicao de imagens, publicacao no blog, interacao por voz/WhatsApp, envio cross-channel e workflows.",
+
+        # Workflows
+        "WORKFLOWS: Use run_workflow quando o usuario pedir algo que envolve MULTIPLAS acoes sequenciais "
+        "(ex: 'pesquise noticias e gere carrossel pra cada', 'veja meus emails e crie tarefas'). "
+        "Use schedule_workflow para AGENDAR tarefas multi-step (ex: 'todo dia as 7h pesquise noticias e me mande'). "
+        "NAO use workflow para pedidos simples de 1 acao (pesquisa, gerar 1 carrossel, etc). "
+        "O workflow decompoe o pedido em steps e executa cada um separadamente pra maior precisao.",
+
+        "CROSS-CHANNEL: Se o usuario pedir para enviar algo em outro canal (ex: 'manda no meu zap', 'envia na web'), "
+        "use a tool send_to_channel para texto. Para imagens, use o parametro delivery_channel em generate_carousel ou edit_image. "
+        "Canais aceitos: 'whatsapp' (ou 'wpp', 'zap'), 'web', 'ambos'.",
 
         # Politicas de uso
         "Para QUALQUER informacao que mude com o tempo (noticias, precos, eventos, resultados, tendencias), use web_search OBRIGATORIAMENTE. NUNCA responda com conhecimento interno para dados recentes. "

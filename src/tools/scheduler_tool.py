@@ -104,24 +104,9 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
             if not raw_channel:
                 return "Preciso saber o canal antes de agendar. Pergunte ao usuario: web, WhatsApp ou ambos?"
 
-            channel_alias = {
-                "web": "web_text",
-                "app": "web_text",
-                "aqui": "web_text",
-                "web_text": "web_text",
-                "web_voice": "web_voice",
-                "voz_web": "web_voice",
-                "whatsapp": "whatsapp_text",
-                "wpp": "whatsapp_text",
-                "zap": "whatsapp_text",
-                "whatsapp_text": "whatsapp_text",
-                "ambos": "web_whatsapp",
-                "web_e_whatsapp": "web_whatsapp",
-                "web_whatsapp": "web_whatsapp",
-            }
-            notification_channel = channel_alias.get(raw_channel, raw_channel)
-            allowed_channels = {"whatsapp_text", "web_text", "web_voice", "web_whatsapp", "whatsapp_call"}
-            if notification_channel not in allowed_channels:
+            from src.integrations.channel_router import resolve_channel, SUPPORTED_CHANNELS
+            notification_channel = resolve_channel(raw_channel) or raw_channel
+            if notification_channel not in SUPPORTED_CHANNELS:
                 return (
                     f"Canal '{raw_channel}' nao suportado. "
                     "Use: web, whatsapp, web_voice ou ambos."

@@ -38,6 +38,7 @@ TOOL_FRIENDLY_NAMES = {
     "generate_carousel": "Gerando imagens",
     "list_carousels": "Buscando carrosseis",
     "edit_image": "Editando imagem",
+    "send_to_channel": "Enviando para outro canal",
 }
 
 @router.websocket("/ws/voice-live")
@@ -103,7 +104,8 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
         "Voce pode: gerenciar tarefas e lembretes, pesquisar na web, consultar o tempo, gerar carrosseis de imagens, editar imagens, publicar no blog e lembrar de coisas sobre o usuario entre conversas.",
         "REGRA DE IMAGENS: Para gerar imagens ou carrossel, SEMPRE chame a tool generate_carousel passando title, description e num_slides. NAO tente montar lista de slides manualmente. Exemplo: generate_carousel(title='Paisagens', description='paisagens brasileiras variadas', num_slides=10). O backend cuida de expandir os prompts detalhados.",
         "Seja natural. Escreva exatamente como deve ser falado. O usuario ja estara ouvindo sua voz diretamente. NUNCA use markdown, asteriscos, ou emojis.",
-        "Quando houver informacao de [STATUS LIMITES], trate-a como verdade absoluta sobre limites e bypass e ignore o historico antigo sobre esse tema."
+        "Quando houver informacao de [STATUS LIMITES], trate-a como verdade absoluta sobre limites e bypass e ignore o historico antigo sobre esse tema.",
+        "CROSS-CHANNEL: Se o usuario pedir para enviar algo em outro canal (ex: 'manda no meu WhatsApp', 'envia na web', 'manda nos dois'), use send_to_channel para texto ou o parametro delivery_channel em generate_carousel/edit_image para imagens. Canais aceitos: 'whatsapp' (ou 'wpp', 'zap'), 'web', 'ambos'."
     ]
     
     instruction_text = " ".join(base_instructions)

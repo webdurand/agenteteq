@@ -47,7 +47,7 @@ def expand_slides_from_description(
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents=[{"role": "user", "parts": [{"text": user_prompt}]}],
             config={"system_instruction": system_prompt, "temperature": 0.9},
         )
@@ -248,9 +248,23 @@ async def _notify_whatsapp(user_id: str, slides: List[Dict[str, Any]]):
         from src.integrations.whatsapp import whatsapp_client
 
         total = len(slides)
-        await whatsapp_client.send_text_message(
-            user_id,
-            f"✅ Seu carrossel ficou pronto! Enviando {total} slides..."
+
+        # Retry helper para lidar com timeouts da Evolution API
+        async def _send_with_retry(coro_fn, retries=2, delay=3):
+            for attempt in range(retries + 1):
+                try:
+                    return await coro_fn()
+                except Exception as e:
+                    if attempt < retries:
+                        logger.warning("WhatsApp send retry %s/%s apos erro: %s", attempt + 1, retries, e)
+                        await asyncio.sleep(delay)
+                    else:
+                        raise
+
+        await _send_with_retry(
+            lambda: whatsapp_client.send_text_message(
+                user_id, f"✅ Seu carrossel ficou pronto! Enviando {total} slides..."
+            )
         )
 
         for i, slide in enumerate(slides):
@@ -263,14 +277,16 @@ async def _notify_whatsapp(user_id: str, slides: List[Dict[str, Any]]):
             if style:
                 caption += f" — {style}"
             try:
-                await whatsapp_client.send_image(user_id, url, caption=caption)
+                await _send_with_retry(
+                    lambda u=url, c=caption: whatsapp_client.send_image(user_id, u, caption=c)
+                )
             except Exception as img_err:
                 logger.error("Erro ao enviar slide %s via WhatsApp: %s", num, img_err)
                 await whatsapp_client.send_text_message(user_id, f"Slide {num}: {url}")
 
         logger.info("%s slides enviados via WhatsApp para %s", total, user_id)
     except Exception as e:
-        logger.error("Erro ao enviar resultado via WhatsApp: %s", e)
+        logger.error("Erro ao enviar resultado via WhatsApp: %s", e, exc_info=True)
 
 def create_carousel_tools(user_id: str, channel: str = "web"):
     """
