@@ -176,6 +176,7 @@ VOICE_TOOLS_DECLARATIONS = [
                 "style": {"type": "string", "description": "Estilo visual, ex: Fotorrealista, Cinematico, Clean/Mockup, Anime, Aquarela"},
                 "format": {"type": "string", "description": "Formato da imagem, ex: 1350x1080, 1080x1080, 16:9"},
                 "use_reference_image": {"type": "boolean", "description": "Usar imagem de referencia da conversa"},
+                "sequential_slides": {"type": "boolean", "description": "Se True (padrao), gera slide 1 como referencia visual para os demais, garantindo coerencia visual. Use False para colecoes independentes."},
                 "delivery_channel": {"type": "string", "description": "Canal onde entregar as imagens: 'whatsapp', 'web' ou 'ambos'. Se nao informado, entrega na web."}
             },
             "required": ["title", "description"]
@@ -337,7 +338,8 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
                     description = args.pop("description")
                     num_slides = int(args.pop("num_slides", 5) or 5)
                     style = args.pop("style", "Fotorrealista") or "Fotorrealista"
-                    args["slides"] = expand_slides_from_description(description, num_slides, style)
+                    sequential = args.get("sequential_slides", True)
+                    args["slides"] = expand_slides_from_description(description, num_slides, style, sequential=sequential)
 
                 generate_carousel, _ = create_carousel_tools(user_id, channel=effective_channel)
                 tool_result = generate_carousel(**args)

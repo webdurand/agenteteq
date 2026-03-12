@@ -184,6 +184,13 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         "Para QUALQUER informacao que mude com o tempo (noticias, precos, eventos, resultados, tendencias), use web_search OBRIGATORIAMENTE. NUNCA responda com conhecimento interno para dados recentes. "
         "Sempre inclua titulo, fonte e link. Para noticias, faca MULTIPLAS buscas com queries variadas.",
         "Na duvida entre editar ou gerar imagem nova, PREFIRA gerar nova com generate_carousel.",
+        "COERENCIA VISUAL EM CARROSSEIS: Ao gerar carrosseis com generate_carousel, use sequential_slides=True (padrao) "
+        "para carrosseis narrativos, tematicos ou que contam uma historia — isso gera o slide 1 primeiro e usa como "
+        "referencia visual para os demais, garantindo mesma paleta, estilo e iluminacao. "
+        "Use sequential_slides=False APENAS para colecoes de imagens independentes (ex: '10 logos diferentes', "
+        "'5 paisagens sem relacao entre si'). Na duvida, mantenha True. "
+        "Inclua tambem um campo 'style_anchor' nos slides com a identidade visual compartilhada "
+        "(paleta de cores, estilo artistico, iluminacao, atmosfera) para reforcar a coerencia.",
         "Em saudacao de nova sessao, use get_greeting_context para buscar o contexto antes de responder.",
     ]
     

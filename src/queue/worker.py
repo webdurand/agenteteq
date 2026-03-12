@@ -65,6 +65,7 @@ async def process_task_queue():
                 aspect_ratio=payload.get("aspect_ratio", "4:3"),
                 reference_image=reference_bytes,
                 task_id=task["id"],
+                sequential_slides=payload.get("sequential_slides", True),
             )
             if not is_task_cancelled(task["id"]):
                 complete_task(task["id"], {"status": "success", "type": "carousel"})

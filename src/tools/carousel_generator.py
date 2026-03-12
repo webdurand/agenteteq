@@ -19,10 +19,12 @@ def expand_slides_from_description(
     description: str,
     num_slides: int = 5,
     style: str = "Fotorrealista",
+    sequential: bool = True,
 ) -> List[Dict[str, str]]:
     """
     Expande uma descrição simples (vinda do Voice Live) em N prompts detalhados
     usando Gemini Flash. Retorna lista no formato esperado por generate_carousel_tool.
+    Quando sequential=True, gera também um style_anchor compartilhado para coerência visual.
     """
     import json as _json
     from google import genai
@@ -36,30 +38,59 @@ def expand_slides_from_description(
         ]
 
     client = genai.Client(api_key=api_key)
-    system_prompt = (
-        "Voce e um gerador de prompts para imagens. "
-        "Dado um tema e quantidade, gere prompts detalhados e VARIADOS para cada imagem. "
-        "Cada prompt deve descrever uma cena, composicao e elementos visuais especificos. "
-        "Responda SOMENTE com um JSON array, sem markdown, sem explicacao. "
-        f"Formato: [{{'slide_number': 1, 'prompt': '...', 'style': '{style}'}}]"
-    )
+
+    if sequential:
+        system_prompt = (
+            "Voce e um gerador de prompts para imagens de um CARROSSEL SEQUENCIAL. "
+            "As imagens devem contar uma historia ou seguir um tema com COERENCIA VISUAL entre si. "
+            "Primeiro, defina um 'style_anchor': um bloco descritivo de identidade visual que sera "
+            "compartilhado entre todas as imagens (paleta de cores, estilo artistico, tipo de iluminacao, "
+            "textura, composicao base, atmosfera). "
+            "Depois, gere prompts detalhados para cada imagem. Cada prompt deve variar a CENA/CONTEUDO "
+            "mas manter a mesma identidade visual descrita no style_anchor. "
+            "Responda SOMENTE com um JSON object, sem markdown, sem explicacao. "
+            "Formato: {"
+            f"\"style_anchor\": \"descricao detalhada da identidade visual compartilhada\", "
+            f"\"slides\": [{{\"slide_number\": 1, \"prompt\": \"...\", \"style\": \"{style}\"}}]"
+            "}"
+        )
+        temperature = 0.7
+    else:
+        system_prompt = (
+            "Voce e um gerador de prompts para imagens. "
+            "Dado um tema e quantidade, gere prompts detalhados e VARIADOS para cada imagem. "
+            "Cada prompt deve descrever uma cena, composicao e elementos visuais especificos. "
+            "Responda SOMENTE com um JSON array, sem markdown, sem explicacao. "
+            f"Formato: [{{\"slide_number\": 1, \"prompt\": \"...\", \"style\": \"{style}\"}}]"
+        )
+        temperature = 0.9
+
     user_prompt = f"Tema: {description}\nQuantidade: {num_slides}\nEstilo: {style}"
 
     try:
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=[{"role": "user", "parts": [{"text": user_prompt}]}],
-            config={"system_instruction": system_prompt, "temperature": 0.9},
+            config={"system_instruction": system_prompt, "temperature": temperature},
         )
         raw = response.text.strip()
         # Remove possíveis delimitadores markdown
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
             raw = raw.rsplit("```", 1)[0]
-        slides = _json.loads(raw)
-        if isinstance(slides, list) and len(slides) > 0:
-            logger.info("expand_slides_from_description: %s slides expandidos via LLM", len(slides))
-            return slides[:num_slides]
+        parsed = _json.loads(raw)
+
+        if sequential and isinstance(parsed, dict):
+            style_anchor = parsed.get("style_anchor", "")
+            slides = parsed.get("slides", [])
+            if isinstance(slides, list) and len(slides) > 0:
+                for s in slides:
+                    s["style_anchor"] = style_anchor
+                logger.info("expand_slides_from_description: %s slides (sequential, anchor=%s chars)", len(slides), len(style_anchor))
+                return slides[:num_slides]
+        elif isinstance(parsed, list) and len(parsed) > 0:
+            logger.info("expand_slides_from_description: %s slides expandidos via LLM", len(parsed))
+            return parsed[:num_slides]
     except Exception as e:
         logger.warning("expand_slides_from_description fallback (erro LLM): %s", e)
 
@@ -77,11 +108,13 @@ async def _process_carousel_background(
     aspect_ratio: str = "4:3",
     reference_image: Optional[bytes] = None,
     task_id: Optional[str] = None,
+    sequential_slides: bool = True,
 ):
     """
-    Gera imagens em paralelo, faz upload no Cloudinary e notifica o usuário
-    pelo canal de origem (web via WS ou whatsapp via API).
-    Se reference_image for fornecido, usa como contexto visual para cada slide.
+    Gera imagens e faz upload no Cloudinary, notificando o usuário pelo canal de origem.
+    Quando sequential_slides=True, gera o slide 1 primeiro e usa como referência visual
+    para os demais (gerando-os em paralelo com provider.edit()), garantindo coerência visual.
+    Se reference_image for fornecido (enviada pelo usuário), usa para o slide 1.
     """
     try:
         from src.endpoints.web import ws_manager
@@ -93,36 +126,49 @@ async def _process_carousel_background(
         max_concurrent = int(get_config("max_concurrent_images", "3"))
         sem = asyncio.Semaphore(max_concurrent)
 
-        async def _generate_and_upload(slide: Dict[str, Any], index: int):
+        def _build_full_prompt(slide: Dict[str, Any]) -> str:
+            prompt = slide.get("prompt", "")
+            style = slide.get("style", "")
+            style_anchor = slide.get("style_anchor", "")
+            parts = []
+            if style:
+                parts.append(f"Style: {style}.")
+            if style_anchor:
+                parts.append(f"Visual identity: {style_anchor}.")
+            parts.append(prompt)
+            return " ".join(parts)
+
+        async def _generate_single(slide: Dict[str, Any], index: int, ref: Optional[bytes] = None) -> bytes:
+            full_prompt = _build_full_prompt(slide)
+            if ref:
+                return await provider.edit(full_prompt, ref, aspect_ratio=aspect_ratio)
+            else:
+                return await provider.generate(full_prompt, aspect_ratio=aspect_ratio)
+
+        async def _upload_slide(image_bytes: bytes, index: int) -> str:
+            loop = asyncio.get_event_loop()
+            def _upload():
+                webp_bytes = convert_to_webp(image_bytes)
+                file_obj = io.BytesIO(webp_bytes)
+                return cloudinary.uploader.upload(
+                    file_obj,
+                    folder="carousels",
+                    public_id=f"{carousel_id}_slide_{index}",
+                    overwrite=True,
+                )
+            upload_result = await loop.run_in_executor(None, _upload)
+            return upload_result.get("secure_url")
+
+        async def _generate_and_upload(slide: Dict[str, Any], index: int, ref: Optional[bytes] = None):
             async with sem:
                 if task_id and is_task_cancelled(task_id):
                     logger.info("Slide %s pulado — task %s cancelada", index + 1, task_id)
-                    return None
+                    return None, None
 
-                prompt = slide.get("prompt", "")
-                style = slide.get("style", "")
-                full_prompt = f"Style: {style}. {prompt}"
-    
-                if reference_image:
-                    image_bytes = await provider.edit(full_prompt, reference_image, aspect_ratio=aspect_ratio)
-                else:
-                    image_bytes = await provider.generate(full_prompt, aspect_ratio=aspect_ratio)
-    
-                loop = asyncio.get_event_loop()
-    
-                def _upload():
-                    webp_bytes = convert_to_webp(image_bytes)
-                    file_obj = io.BytesIO(webp_bytes)
-                    return cloudinary.uploader.upload(
-                        file_obj,
-                        folder="carousels",
-                        public_id=f"{carousel_id}_slide_{index}",
-                        overwrite=True,
-                    )
-    
-                upload_result = await loop.run_in_executor(None, _upload)
-                slide["image_url"] = upload_result.get("secure_url")
-                logger.info("Slide %s gerado: %s", index + 1, slide['image_url'])
+                image_bytes = await _generate_single(slide, index, ref)
+                url = await _upload_slide(image_bytes, index)
+                slide["image_url"] = url
+                logger.info("Slide %s gerado: %s", index + 1, url)
 
                 await ws_manager.send_personal_message(user_id, {
                     "type": "slide_done",
@@ -131,21 +177,53 @@ async def _process_carousel_background(
                     "total": len(slides),
                 })
 
-                return slide
+                return slide, image_bytes
 
-        tasks = [_generate_and_upload(slide, i) for i, slide in enumerate(slides)]
-        # return_exceptions=True garante que uma falha individual não cancela os outros slides
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # --- Sequential mode: slide 1 first, then 2..N using slide 1 as reference ---
+        if sequential_slides and len(slides) > 1:
+            logger.info("Modo sequencial: gerando slide 1 como referência para os demais")
+            slide1_result, slide1_bytes = await _generate_and_upload(slides[0], 0, ref=reference_image)
+
+            if slide1_result is None or slide1_bytes is None:
+                # Slide 1 cancelled or failed — fallback to parallel without ref
+                logger.warning("Slide 1 falhou/cancelado no modo sequencial, fazendo fallback paralelo")
+                slide1_bytes = None
+
+            # Use slide 1 bytes as the reference for remaining slides
+            visual_ref = slide1_bytes or reference_image
+            remaining_tasks = [
+                _generate_and_upload(slide, i, ref=visual_ref)
+                for i, slide in enumerate(slides) if i > 0
+            ]
+            remaining_results = await asyncio.gather(*remaining_tasks, return_exceptions=True)
+
+            # Combine results: slide 1 + remaining
+            all_results = [(slide1_result, slide1_bytes)] + list(remaining_results)
+        else:
+            # --- Parallel mode (non-sequential or single slide) ---
+            tasks = [
+                _generate_and_upload(slide, i, ref=reference_image)
+                for i, slide in enumerate(slides)
+            ]
+            all_results = await asyncio.gather(*tasks, return_exceptions=True)
 
         updated_slides = []
         cancelled_count = 0
-        for i, result in enumerate(results):
-            if result is None:
-                cancelled_count += 1
+        for i, result in enumerate(all_results):
+            if isinstance(result, Exception):
+                logger.info("Slide %s falhou: %s", i + 1, result)
                 slides[i]["image_url"] = None
                 updated_slides.append(slides[i])
-            elif isinstance(result, Exception):
-                logger.info("Slide %s falhou: %s", i + 1, result)
+            elif isinstance(result, tuple):
+                slide_data, _ = result
+                if slide_data is None:
+                    cancelled_count += 1
+                    slides[i]["image_url"] = None
+                    updated_slides.append(slides[i])
+                else:
+                    updated_slides.append(slide_data)
+            elif result is None:
+                cancelled_count += 1
                 slides[i]["image_url"] = None
                 updated_slides.append(slides[i])
             else:
@@ -298,6 +376,7 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
         slides: List[Dict[str, str]],
         format: str = "1350x1080",
         use_reference_image: bool = False,
+        sequential_slides: bool = True,
     ) -> str:
         """
         Gera imagens com IA. Pode ser um carrossel (múltiplos slides) ou uma imagem única (1 slide).
@@ -310,6 +389,7 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
                     - 'slide_number': (opcional) número do slide
                     - 'prompt': descrição detalhada da imagem
                     - 'style': estilo visual (ex: Clean/Mockup, Cinemático, Fotorrealista)
+                    - 'style_anchor': (opcional) bloco de identidade visual compartilhado
             format: Formato/dimensão das imagens. Exemplos:
                     - "1350x1080" → carrossel Instagram landscape (padrão)
                     - "1080x1080" → quadrado
@@ -323,6 +403,14 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
                                  usar uma imagem como referência (ex: "gera baseado nessa
                                  imagem", "usa essa foto como referência").
                                  NUNCA ative automaticamente. O padrão é False.
+            sequential_slides: Se True (padrão), gera o slide 1 primeiro e usa como
+                               referência visual para os demais, garantindo COERÊNCIA
+                               VISUAL entre todas as imagens (mesma paleta, estilo,
+                               iluminação). Use True para carrosseis narrativos, temáticos
+                               ou que contem uma história. Use False para coleções de
+                               imagens independentes (ex: "10 logos diferentes",
+                               "5 paisagens variadas sem relação entre si").
+                               Na dúvida, mantenha True.
 
         Returns:
             Mensagem de confirmação imediata com o formato que será usado.
@@ -366,6 +454,7 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
                 "slides": list(slides),
                 "aspect_ratio": aspect_ratio,
                 "reference_image_url": ref_url,
+                "sequential_slides": sequential_slides,
             })
             
             canal_label = "WhatsApp" if "whatsapp" in channel else "painel de Imagens na web"
