@@ -176,9 +176,11 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         "NAO use workflow para pedidos simples de 1 acao (pesquisa, gerar 1 carrossel, etc). "
         "O workflow decompoe o pedido em steps e executa cada um separadamente pra maior precisao.",
 
-        "CROSS-CHANNEL: Se o usuario pedir para enviar algo em outro canal (ex: 'manda no meu zap', 'envia na web'), "
-        "use a tool send_to_channel para texto. Para imagens, use o parametro delivery_channel em generate_carousel ou edit_image. "
-        "Canais aceitos: 'whatsapp' (ou 'wpp', 'zap'), 'web', 'ambos'.",
+        "CROSS-CHANNEL (OBRIGATORIO): Quando o usuario mencionar QUALQUER canal de destino ('manda no zap', 'envia no whatsapp', 'manda na web', 'manda nos dois'), voce DEVE passar o parametro delivery_channel na tool. "
+        "Para TEXTO use send_to_channel. Para IMAGENS use delivery_channel em generate_carousel ou edit_image. "
+        "Mapeamento: 'whatsapp'/'zap'/'wpp' -> delivery_channel='whatsapp'. 'web'/'aqui' -> delivery_channel='web'. 'ambos'/'nos dois' -> delivery_channel='ambos'. "
+        "Se o usuario NAO mencionar canal, NAO passe delivery_channel (entrega no canal atual). "
+        "NUNCA ignore um pedido explicito de canal.",
 
         # Politicas de uso
         "Para QUALQUER informacao que mude com o tempo (noticias, precos, eventos, resultados, tendencias), use web_search OBRIGATORIAMENTE. NUNCA responda com conhecimento interno para dados recentes. "

@@ -99,11 +99,14 @@ async def _process_edit_background(
     channel: str = "web",
     task_id: Optional[str] = None,
 ):
+    send_web = channel in ("web", "web_voice", "web_text", "web_whatsapp")
+    send_whatsapp = channel in ("whatsapp_text", "whatsapp", "web_whatsapp")
+
     try:
         provider = get_image_provider()
 
         # Notifica via WS apenas para canais web
-        if channel in ("web", "web_voice", "web_text"):
+        if send_web:
             from src.endpoints.web import ws_manager
             await ws_manager.send_personal_message(user_id, {
                 "type": "image_editing",
@@ -111,7 +114,7 @@ async def _process_edit_background(
             })
 
         # Persiste placeholder no DB para sobreviver a refresh (canais web)
-        if channel in ("web", "web_voice", "web_text"):
+        if send_web:
             try:
                 import json as _json
                 from src.models.chat_messages import save_message
@@ -150,7 +153,7 @@ async def _process_edit_background(
         from src.events_broadcast import emit_action_log
         await emit_action_log(user_id, "Imagem editada", edit_prompt[:100], channel)
 
-        if channel in ("web", "web_voice", "web_text"):
+        if send_web:
             await ws_manager.send_personal_message(user_id, {
                 "type": "image_edit_ready",
                 "image_url": image_url,
@@ -172,7 +175,7 @@ async def _process_edit_background(
             except Exception as e:
                 logger.error("Erro ao persistir mensagem: %s", e)
 
-        elif channel in ("whatsapp_text", "whatsapp"):
+        if send_whatsapp:
             try:
                 from src.integrations.whatsapp import whatsapp_client
                 await whatsapp_client.send_image(user_id, image_url, caption="Aqui está a imagem editada!")
@@ -196,7 +199,7 @@ async def _process_edit_background(
         import traceback
         logger.error("Erro na edição: %s\n%s", e, traceback.format_exc())
 
-        if channel in ("web", "web_voice", "web_text"):
+        if send_web:
             try:
                 from src.endpoints.web import ws_manager
                 await ws_manager.send_personal_message(user_id, {
@@ -213,7 +216,7 @@ async def _process_edit_background(
                 )
             except Exception:
                 pass
-        elif channel in ("whatsapp_text", "whatsapp"):
+        if send_whatsapp:
             try:
                 from src.integrations.whatsapp import whatsapp_client
                 await whatsapp_client.send_text_message(user_id, "❌ Eita, deu um erro ao editar a imagem. Tenta de novo!")
@@ -227,6 +230,7 @@ def create_image_editor_tools(user_id: str, channel: str = "web"):
         edit_instructions: str,
         source: str = "auto",
         format: str = "1:1",
+        delivery_channel: str = "",
     ) -> str:
         """
         Edita ou transforma uma imagem que o usuário EXPLICITAMENTE pediu para modificar.
@@ -259,6 +263,10 @@ def create_image_editor_tools(user_id: str, channel: str = "web"):
                       parecer uma recriação de estilo, usa a original. Senão, usa a última gerada.
             format: Formato/dimensão da imagem de saída.
                     Exemplos: "1:1" (quadrado), "4:3" (landscape), "9:16" (stories), "16:9" (widescreen).
+            delivery_channel: Canal de destino para entrega cross-channel.
+                              OBRIGATÓRIO quando o usuário mencionar WhatsApp/zap/wpp.
+                              Valores: 'whatsapp', 'web', 'ambos'.
+                              Se vazio, entrega no canal de origem.
 
         Returns:
             Mensagem de confirmação. A imagem editada será enviada automaticamente.
@@ -267,6 +275,14 @@ def create_image_editor_tools(user_id: str, channel: str = "web"):
         limit_msg = check_daily_limit(user_id)
         if limit_msg:
             return limit_msg
+
+        # Resolve delivery_channel override
+        effective_channel = channel
+        if delivery_channel:
+            from src.integrations.channel_router import resolve_channel
+            resolved = resolve_channel(delivery_channel)
+            if resolved:
+                effective_channel = resolved
 
         session = get_session_images(user_id)
         originals = session["originals"]
@@ -297,19 +313,23 @@ def create_image_editor_tools(user_id: str, channel: str = "web"):
         source_label = "original" if reference_url == (originals[0] if originals else None) else "última gerada"
         aspect_ratio = resolve_aspect_ratio(format)
 
-        logger.info("edit_image_tool | user=%s | channel=%s | source=%s (%s) | format=%s (%s) | prompt='%s'", user_id, channel, source, source_label, format, aspect_ratio, edit_instructions[:80])
+        logger.info("edit_image_tool | user=%s | channel=%s | effective=%s | source=%s (%s) | format=%s (%s) | prompt='%s'", user_id, channel, effective_channel, source, source_label, format, aspect_ratio, edit_instructions[:80])
 
         import httpx
         from src.queue.task_queue import enqueue_task
 
-        result = enqueue_task(user_id, "image_edit", channel, {
+        result = enqueue_task(user_id, "image_edit", effective_channel, {
             "edit_instructions": edit_instructions,
             "reference_url": reference_url,
             "aspect_ratio": aspect_ratio
         })
         
         if result["status"] == "queued":
-            if channel in ("web", "web_voice", "web_text"):
+            # Feedback no canal de destino (cross-channel)
+            from src.tools.carousel_generator import _send_destination_feedback
+            _send_destination_feedback(user_id, channel, effective_channel, 1)
+
+            if effective_channel in ("web", "web_voice", "web_text", "web_whatsapp"):
                 # UI já exibe loading bubble e entrega a imagem — agente NÃO deve falar nada
                 return (
                     "[IMAGEM EM EDICAO — NAO ESCREVA NADA SOBRE ISSO. "

@@ -105,7 +105,11 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
         "REGRA DE IMAGENS: Para gerar imagens ou carrossel, SEMPRE chame a tool generate_carousel passando title, description e num_slides. NAO tente montar lista de slides manualmente. Exemplo: generate_carousel(title='Paisagens', description='paisagens brasileiras variadas', num_slides=10). O backend cuida de expandir os prompts detalhados.",
         "Seja natural. Escreva exatamente como deve ser falado. O usuario ja estara ouvindo sua voz diretamente. NUNCA use markdown, asteriscos, ou emojis.",
         "Quando houver informacao de [STATUS LIMITES], trate-a como verdade absoluta sobre limites e bypass e ignore o historico antigo sobre esse tema.",
-        "CROSS-CHANNEL: Se o usuario pedir para enviar algo em outro canal (ex: 'manda no meu WhatsApp', 'envia na web', 'manda nos dois'), use send_to_channel para texto ou o parametro delivery_channel em generate_carousel/edit_image para imagens. Canais aceitos: 'whatsapp' (ou 'wpp', 'zap'), 'web', 'ambos'."
+        "CROSS-CHANNEL (OBRIGATORIO): Quando o usuario mencionar QUALQUER canal de destino ('manda no zap', 'envia no whatsapp', 'manda na web', 'manda nos dois'), voce DEVE passar o parametro delivery_channel na tool. "
+        "Para TEXTO use send_to_channel. Para IMAGENS use delivery_channel em generate_carousel ou edit_image. "
+        "Mapeamento: 'whatsapp'/'zap'/'wpp' -> delivery_channel='whatsapp'. 'web'/'aqui' -> delivery_channel='web'. 'ambos'/'nos dois' -> delivery_channel='ambos'. "
+        "Se o usuario NAO mencionar canal, NAO passe delivery_channel (entrega no canal atual). "
+        "NUNCA ignore um pedido explicito de canal."
     ]
     
     instruction_text = " ".join(base_instructions)

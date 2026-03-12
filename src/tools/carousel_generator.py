@@ -259,7 +259,7 @@ async def _process_carousel_background(
         emit_event_sync(user_id, "carousel_generated")
 
         # Notifica falha no chat web
-        if channel in ("web", "web_voice", "web_text"):
+        if channel in ("web", "web_voice", "web_text", "web_whatsapp"):
             try:
                 await ws_manager.send_personal_message(user_id, {
                     "type": "carousel_failed",
@@ -281,10 +281,13 @@ async def _notify_user(user_id: str, channel: str, carousel_id: str, slides: Lis
     if not done_slides:
         return
 
-    if channel in ("whatsapp_text", "whatsapp"):
+    send_whatsapp = channel in ("whatsapp_text", "whatsapp", "web_whatsapp")
+    send_web = channel in ("web", "web_voice", "web_text", "web_whatsapp")
+
+    if send_whatsapp:
         await _notify_whatsapp(user_id, done_slides)
 
-    elif channel in ("web", "web_voice", "web_text"):
+    if send_web:
         from src.endpoints.web import ws_manager
         delivered = await ws_manager.send_personal_message(user_id, {
             "type": "carousel_ready",
@@ -366,6 +369,40 @@ async def _notify_whatsapp(user_id: str, slides: List[Dict[str, Any]]):
     except Exception as e:
         logger.error("Erro ao enviar resultado via WhatsApp: %s", e, exc_info=True)
 
+def _send_destination_feedback(user_id: str, origin_channel: str, effective_channel: str, num_slides: int):
+    """Envia feedback imediato no canal de DESTINO quando é cross-channel."""
+    import asyncio as _aio
+
+    # Determina quais canais são destino mas não são origem
+    send_to_whatsapp = "whatsapp" in effective_channel and "whatsapp" not in origin_channel
+    send_to_web = effective_channel in ("web_text", "web_whatsapp") and origin_channel not in ("web", "web_voice", "web_text")
+
+    label = "imagem" if num_slides == 1 else f"{num_slides} imagens"
+    msg = f"📩 Recebi seu pedido! Gerando {label}, já te mando aqui."
+
+    if send_to_whatsapp:
+        try:
+            from src.integrations.whatsapp import whatsapp_client
+            _loop = _aio.get_event_loop()
+            _loop.create_task(whatsapp_client.send_text_message(user_id, msg))
+        except Exception as e:
+            logger.error("Erro ao enviar feedback WhatsApp destino: %s", e)
+
+    if send_to_web:
+        try:
+            from src.endpoints.web import ws_manager
+            _loop = _aio.get_event_loop()
+            _loop.create_task(ws_manager.send_personal_message(user_id, {
+                "type": "response",
+                "text": msg,
+                "audio_b64": "",
+                "mime_type": "none",
+                "needs_follow_up": False,
+            }))
+        except Exception as e:
+            logger.error("Erro ao enviar feedback web destino: %s", e)
+
+
 def create_carousel_tools(user_id: str, channel: str = "web"):
     """
     Factory que cria as tools de carrossel com user_id e canal de origem pre-injetados.
@@ -377,6 +414,7 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
         format: str = "1350x1080",
         use_reference_image: bool = False,
         sequential_slides: bool = True,
+        delivery_channel: str = "",
     ) -> str:
         """
         Gera imagens com IA. Pode ser um carrossel (múltiplos slides) ou uma imagem única (1 slide).
@@ -411,6 +449,10 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
                                imagens independentes (ex: "10 logos diferentes",
                                "5 paisagens variadas sem relação entre si").
                                Na dúvida, mantenha True.
+            delivery_channel: Canal de destino para entrega cross-channel.
+                              OBRIGATÓRIO quando o usuário mencionar WhatsApp/zap/wpp.
+                              Valores: 'whatsapp', 'web', 'ambos'.
+                              Se vazio, entrega no canal de origem.
 
         Returns:
             Mensagem de confirmação imediata com o formato que será usado.
@@ -421,6 +463,14 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
         limit_msg = check_daily_limit(user_id)
         if limit_msg:
             return limit_msg
+
+        # Resolve delivery_channel override
+        effective_channel = channel
+        if delivery_channel:
+            from src.integrations.channel_router import resolve_channel
+            resolved = resolve_channel(delivery_channel)
+            if resolved:
+                effective_channel = resolved
 
         aspect_ratio = resolve_aspect_ratio(format)
         format_label = format.strip() or "1350x1080"
@@ -442,14 +492,14 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
                     ref_url = recovered
 
         ref_label = "com referência" if ref_url else "sem referência"
-        logger.info("generate_carousel_tool | user=%s | channel=%s | format=%s (%s) | %s | title='%s' | slides=%s", user_id, channel, format_label, aspect_ratio, ref_label, title, len(slides))
+        logger.info("generate_carousel_tool | user=%s | channel=%s | effective=%s | format=%s (%s) | %s | title='%s' | slides=%s", user_id, channel, effective_channel, format_label, aspect_ratio, ref_label, title, len(slides))
 
         try:
             carousel_id = create_carousel(user_id, title, slides)
             logger.info("Registro criado no banco: %s", carousel_id)
 
             from src.queue.task_queue import enqueue_task
-            result = enqueue_task(user_id, "carousel", channel, {
+            result = enqueue_task(user_id, "carousel", effective_channel, {
                 "carousel_id": carousel_id,
                 "slides": list(slides),
                 "aspect_ratio": aspect_ratio,
@@ -457,12 +507,12 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
                 "sequential_slides": sequential_slides,
             })
             
-            canal_label = "WhatsApp" if "whatsapp" in channel else "painel de Imagens na web"
+            canal_label = "WhatsApp" if "whatsapp" in effective_channel else "painel de Imagens na web"
             ref_msg = " usando a imagem enviada como referência" if ref_url else ""
             
             if result["status"] == "queued":
                 # Envia carousel_generating via WS imediatamente para o loading bubble aparecer
-                if channel in ("web", "web_voice", "web_text"):
+                if effective_channel in ("web", "web_voice", "web_text", "web_whatsapp"):
                     emit_event_sync(user_id, "carousel_generating", {
                         "carousel_id": carousel_id,
                         "num_slides": len(slides),
@@ -481,6 +531,10 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
                     except Exception as e:
                         logger.error("Erro ao persistir placeholder de carrossel: %s", e)
 
+                # Feedback no canal de destino (cross-channel)
+                _send_destination_feedback(user_id, channel, effective_channel, len(slides))
+
+                if effective_channel in ("web", "web_voice", "web_text", "web_whatsapp"):
                     # UI já exibe loading bubble e entrega o carrossel — agente NÃO deve falar nada
                     return (
                         "[IMAGENS EM GERACAO — NAO ESCREVA NADA SOBRE ISSO. "

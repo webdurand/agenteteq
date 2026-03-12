@@ -177,7 +177,7 @@ VOICE_TOOLS_DECLARATIONS = [
                 "format": {"type": "string", "description": "Formato da imagem, ex: 1350x1080, 1080x1080, 16:9"},
                 "use_reference_image": {"type": "boolean", "description": "Usar imagem de referencia da conversa"},
                 "sequential_slides": {"type": "boolean", "description": "Se True (padrao), gera slide 1 como referencia visual para os demais, garantindo coerencia visual. Use False para colecoes independentes."},
-                "delivery_channel": {"type": "string", "description": "Canal onde entregar as imagens: 'whatsapp', 'web' ou 'ambos'. Se nao informado, entrega na web."}
+                "delivery_channel": {"type": "string", "description": "OBRIGATORIO quando o usuario mencionar WhatsApp/zap/wpp como destino. Valores: 'whatsapp', 'web', 'ambos'. Se nao informado, entrega no canal atual. Exemplos: 'manda no zap' -> delivery_channel='whatsapp'. 'envia na web' -> delivery_channel='web'."}
             },
             "required": ["title", "description"]
         }
@@ -199,7 +199,7 @@ VOICE_TOOLS_DECLARATIONS = [
                 "edit_instructions": {"type": "string", "description": "Instrucao detalhada de edicao"},
                 "source": {"type": "string", "description": "original, last_generated ou auto"},
                 "format": {"type": "string", "description": "Formato de saida, ex: 1:1, 4:3, 16:9"},
-                "delivery_channel": {"type": "string", "description": "Canal onde entregar a imagem editada: 'whatsapp', 'web' ou 'ambos'. Se nao informado, entrega na web."}
+                "delivery_channel": {"type": "string", "description": "OBRIGATORIO quando o usuario mencionar WhatsApp/zap/wpp como destino. Valores: 'whatsapp', 'web', 'ambos'. Se nao informado, entrega no canal atual. Exemplos: 'manda no zap' -> delivery_channel='whatsapp'. 'envia na web' -> delivery_channel='web'."}
             },
             "required": ["edit_instructions"]
         }
@@ -331,6 +331,9 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
                 effective_channel = resolve_channel(delivery) if delivery else "web_voice"
                 if not effective_channel:
                     effective_channel = "web_voice"
+                # Auto-upgrade: voz pedindo WhatsApp -> ambos (web + whatsapp) para manter feedback visual
+                if effective_channel == "whatsapp_text":
+                    effective_channel = "web_whatsapp"
 
                 # Voice Live envia formato simplificado (description + num_slides)
                 # em vez do array completo de slides.
@@ -366,6 +369,9 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
                 effective_channel = resolve_channel(delivery) if delivery else "web_voice"
                 if not effective_channel:
                     effective_channel = "web_voice"
+                # Auto-upgrade: voz pedindo WhatsApp -> ambos (web + whatsapp) para manter feedback visual
+                if effective_channel == "whatsapp_text":
+                    effective_channel = "web_whatsapp"
 
                 edit_image = create_image_editor_tools(user_id, channel=effective_channel)
                 tool_result = edit_image(**args)
