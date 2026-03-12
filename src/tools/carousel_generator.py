@@ -41,17 +41,29 @@ def expand_slides_from_description(
 
     if sequential:
         system_prompt = (
-            "Voce e um gerador de prompts para imagens de um CARROSSEL SEQUENCIAL. "
-            "As imagens devem contar uma historia ou seguir um tema com COERENCIA VISUAL entre si. "
-            "Primeiro, defina um 'style_anchor': um bloco descritivo de identidade visual que sera "
-            "compartilhado entre todas as imagens (paleta de cores, estilo artistico, tipo de iluminacao, "
-            "textura, composicao base, atmosfera). "
-            "Depois, gere prompts detalhados para cada imagem. Cada prompt deve variar a CENA/CONTEUDO "
-            "mas manter a mesma identidade visual descrita no style_anchor. "
-            "Responda SOMENTE com um JSON object, sem markdown, sem explicacao. "
+            "Voce e um diretor criativo de carrosseis para Instagram. "
+            "Seu trabalho e transformar um tema em um CARROSSEL que conta uma HISTORIA com arco narrativo claro. "
+            "\n\nESTRUTURA OBRIGATORIA DO CARROSSEL:"
+            "\n- SLIDE 1 (role='capa'): CAPA IMPACTANTE. Titulo bold e chamativo que gera curiosidade. "
+            "Imagem visualmente forte que prende a atencao no feed. O objetivo e fazer a pessoa parar de rolar e abrir o carrossel. "
+            "Exemplos de gancho: 'X coisas que...', 'O segredo de...', 'Pare de fazer isso...', 'Voce nao vai acreditar...'"
+            "\n- SLIDES 2 a N-1 (role='conteudo'): DESENVOLVIMENTO. Cada slide entrega UM ponto de valor. "
+            "Cada slide deve ter um tema/titulo claro e uma mensagem objetiva. "
+            "Progridem logicamente: o slide 2 complementa o 1, o 3 complementa o 2, etc. "
+            "Podem ser: dicas, passos, exemplos, comparacoes, dados, citacoes, listas."
+            "\n- SLIDE N (role='fechamento'): FECHAMENTO FORTE. CTA (call to action) que gera engajamento. "
+            "Exemplos: 'Salva pra consultar depois', 'Comenta qual foi sua favorita', 'Manda pra alguem que precisa ver isso', "
+            "'Quer o PDF completo? Comenta EU QUERO'."
+            "\n\nREGRAS:"
+            "\n1. Defina um 'style_anchor': identidade visual compartilhada (paleta de cores, estilo artistico, "
+            "iluminacao, textura, composicao base, atmosfera) para COERENCIA VISUAL entre todos os slides."
+            "\n2. Cada prompt deve ser detalhado e descrever a CENA VISUAL especifica do slide."
+            "\n3. Inclua 'role' em cada slide: 'capa', 'conteudo' ou 'fechamento'."
+            "\n4. Os prompts devem gerar imagens que FUNCIONEM JUNTAS como carrossel, nao como fotos soltas."
+            "\n\nResponda SOMENTE com um JSON object, sem markdown, sem explicacao. "
             "Formato: {"
             f"\"style_anchor\": \"descricao detalhada da identidade visual compartilhada\", "
-            f"\"slides\": [{{\"slide_number\": 1, \"prompt\": \"...\", \"style\": \"{style}\"}}]"
+            f"\"slides\": [{{\"slide_number\": 1, \"role\": \"capa\", \"prompt\": \"...\", \"style\": \"{style}\"}}]"
             "}"
         )
         temperature = 0.7
@@ -425,6 +437,7 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
             title: Título descritivo da geração.
             slides: Lista de dicionários com as chaves:
                     - 'slide_number': (opcional) número do slide
+                    - 'role': papel narrativo do slide ('capa', 'conteudo' ou 'fechamento')
                     - 'prompt': descrição detalhada da imagem
                     - 'style': estilo visual (ex: Clean/Mockup, Cinemático, Fotorrealista)
                     - 'style_anchor': (opcional) bloco de identidade visual compartilhado

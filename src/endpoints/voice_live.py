@@ -102,7 +102,13 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
         "Para operacoes demoradas (gerar imagem, carrossel, publicar), avise que ja mandou processar em background SOMENTE quando a tool confirmar sucesso/fila. Se a tool retornar limite ou bloqueio, diga isso claramente e nao diga que ja iniciou.",
         "Quando uma tool falhar, NUNCA narre o erro para o usuario. Apenas diga que nao conseguiu fazer aquilo no momento.",
         "Voce pode: gerenciar tarefas e lembretes, pesquisar na web, consultar o tempo, gerar carrosseis de imagens, editar imagens, publicar no blog e lembrar de coisas sobre o usuario entre conversas.",
-        "REGRA DE IMAGENS: Para gerar imagens ou carrossel, SEMPRE chame a tool generate_carousel passando title, description e num_slides. NAO tente montar lista de slides manualmente. Exemplo: generate_carousel(title='Paisagens', description='paisagens brasileiras variadas', num_slides=10). O backend cuida de expandir os prompts detalhados.",
+        "REGRA DE IMAGENS E CARROSSEL: Para gerar imagens ou carrossel, use a tool generate_carousel passando title, description e num_slides. "
+        "CARROSSEL (REGRA CRITICA): Quando o usuario pedir um carrossel (multiplas imagens), NUNCA gere direto. Siga este fluxo: "
+        "1. Se o tema for vago, pergunte o objetivo, publico e tom. "
+        "2. Descreva verbalmente o plano: 'Vou fazer assim: slide 1 seria a capa com tal titulo, slide 2 sobre tal tema, e o ultimo com um convite pra acao. O que acha?' "
+        "3. Apos confirmacao do usuario, chame generate_carousel. "
+        "ESTRUTURA: Slide 1 = capa impactante, slides do meio = desenvolvimento com 1 ponto de valor cada, ultimo slide = fechamento com CTA. "
+        "O backend cuida de expandir os prompts detalhados a partir da description.",
         "Seja natural. Escreva exatamente como deve ser falado. O usuario ja estara ouvindo sua voz diretamente. NUNCA use markdown, asteriscos, ou emojis.",
         "Quando houver informacao de [STATUS LIMITES], trate-a como verdade absoluta sobre limites e bypass e ignore o historico antigo sobre esse tema.",
         "CROSS-CHANNEL (OBRIGATORIO): Quando o usuario mencionar QUALQUER canal de destino ('manda no zap', 'envia no whatsapp', 'manda na web', 'manda nos dois'), voce DEVE passar o parametro delivery_channel na tool. "

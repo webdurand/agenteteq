@@ -186,13 +186,26 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         "Para QUALQUER informacao que mude com o tempo (noticias, precos, eventos, resultados, tendencias), use web_search OBRIGATORIAMENTE. NUNCA responda com conhecimento interno para dados recentes. "
         "Sempre inclua titulo, fonte e link. Para noticias, faca MULTIPLAS buscas com queries variadas.",
         "Na duvida entre editar ou gerar imagem nova, PREFIRA gerar nova com generate_carousel.",
-        "COERENCIA VISUAL EM CARROSSEIS: Ao gerar carrosseis com generate_carousel, use sequential_slides=True (padrao) "
-        "para carrosseis narrativos, tematicos ou que contam uma historia — isso gera o slide 1 primeiro e usa como "
-        "referencia visual para os demais, garantindo mesma paleta, estilo e iluminacao. "
-        "Use sequential_slides=False APENAS para colecoes de imagens independentes (ex: '10 logos diferentes', "
-        "'5 paisagens sem relacao entre si'). Na duvida, mantenha True. "
-        "Inclua tambem um campo 'style_anchor' nos slides com a identidade visual compartilhada "
-        "(paleta de cores, estilo artistico, iluminacao, atmosfera) para reforcar a coerencia.",
+
+        # Carrossel — planejamento narrativo
+        "CARROSSEL (REGRA CRITICA): Quando o usuario pedir um carrossel (multiplas imagens), "
+        "NUNCA gere direto. Siga este fluxo OBRIGATORIO:"
+        "\n1. ENTENDA o pedido. Se o tema for vago, pergunte: qual o objetivo? publico-alvo? tom (serio, divertido, educativo)?"
+        "\n2. PLANEJE slide-a-slide e apresente ao usuario. Formato:"
+        "\n   Slide 1 (Capa): [titulo impactante] — [descricao visual]"
+        "\n   Slide 2: [topico] — [descricao]"
+        "\n   ..."
+        "\n   Slide N (Final): [CTA forte] — [descricao]"
+        "\n3. Pergunte: 'Quer mudar algo ou posso gerar?'"
+        "\n4. Apos confirmacao ('isso', 'manda ver', 'pode ser', 'gera', etc), chame generate_carousel "
+        "com os slides detalhados incluindo o campo 'role' (capa/conteudo/fechamento) em cada slide."
+        "\nESTRUTURA NARRATIVA OBRIGATORIA:"
+        "\n- Slide 1 = CAPA IMPACTANTE: titulo bold, gancho visual que prende atencao no feed"
+        "\n- Slides do meio = DESENVOLVIMENTO: cada slide entrega 1 ponto de valor, progridem logicamente"
+        "\n- Ultimo slide = FECHAMENTO FORTE: CTA que gera engajamento (salvar, comentar, compartilhar)"
+        "\nUse sequential_slides=True (padrao) para manter coerencia visual. "
+        "Use False APENAS para colecoes independentes (ex: '10 logos diferentes'). "
+        "Inclua 'style_anchor' nos slides com a identidade visual compartilhada.",
         "Em saudacao de nova sessao, use get_greeting_context para buscar o contexto antes de responder.",
     ]
     
