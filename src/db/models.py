@@ -490,6 +490,57 @@ class ProcessedMessage(Base):
     created_at = Column(String, default=lambda: _utcnow().isoformat())
 
 
+# ──────────────────────────── Brand Profiles ────────────────────────────
+
+
+class BrandProfile(Base):
+    __tablename__ = "brand_profiles"
+    __table_args__ = (
+        Index("idx_brand_profiles_user", "user_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    is_default = Column(Boolean, default=False)
+    primary_color = Column(String, default="#1A1A2E")
+    secondary_color = Column(String, default="#16213E")
+    accent_color = Column(String, default="#E94560")
+    bg_color = Column(String, default="#0F0F0F")
+    text_primary_color = Column(String, default="#FFFFFF")
+    text_secondary_color = Column(String, default="#D0D0D0")
+    font_heading = Column(String, default="Inter Bold")
+    font_body = Column(String, default="Inter")
+    logo_url = Column(String)
+    style_description = Column(Text)
+    tone_of_voice = Column(String)
+    target_audience = Column(String)
+    created_at = Column(String, default=lambda: _utcnow().isoformat())
+    updated_at = Column(String, default=lambda: _utcnow().isoformat())
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "name": self.name,
+            "is_default": bool(self.is_default),
+            "primary_color": self.primary_color,
+            "secondary_color": self.secondary_color,
+            "accent_color": self.accent_color,
+            "bg_color": self.bg_color,
+            "text_primary_color": self.text_primary_color,
+            "text_secondary_color": self.text_secondary_color,
+            "font_heading": self.font_heading,
+            "font_body": self.font_body,
+            "logo_url": self.logo_url,
+            "style_description": self.style_description,
+            "tone_of_voice": self.tone_of_voice,
+            "target_audience": self.target_audience,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
 # ──────────────────────────── Image Sessions ────────────────────────────
 
 

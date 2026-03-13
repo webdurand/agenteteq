@@ -71,6 +71,27 @@ def create_agent_with_tools(
     except Exception as e:
         logger.error("Erro ao carregar Slack tools para %s: %s", phone, e)
 
+    # Injeta Branding tools
+    branding_instructions = []
+    try:
+        from src.tools.branding_tools import create_branding_tools
+        branding_tools = create_branding_tools(phone)
+        search_tools.extend(branding_tools)
+        branding_instructions.append(
+            "BRANDING/IDENTIDADE VISUAL: O usuario pode configurar perfis de marca com cores, fontes, logo e estilo. "
+            "Use get_brand_profile para consultar o branding ANTES de gerar carrosseis — assim as cores e fontes "
+            "ja saem no padrao da marca. Se o usuario nao tiver branding configurado e pedir um carrossel, "
+            "SUGIRA criar um: 'Que tal configurar sua identidade visual comigo? Assim tudo que eu gerar ja sai "
+            "com a cara da sua marca. Me conta: qual o nome da marca, suas cores principais e que estilo de fonte prefere.' "
+            "Use update_brand_profile para criar/atualizar. Use list_brand_profiles para listar os perfis. "
+            "Use extract_branding_from_image quando o usuario enviar artes existentes e quiser extrair o estilo. "
+            "O usuario pode ter MULTIPLOS perfis (ex: um para cada projeto/rede social). "
+            "Quando o usuario pedir carrossel e tiver branding, use as cores do perfil padrao automaticamente — "
+            "injete color_palette e style_anchor nos slides baseado no branding."
+        )
+    except Exception as e:
+        logger.error("Erro ao carregar Branding tools para %s: %s", phone, e)
+
     # Injeta Social Monitoring tools
     social_instructions = []
     try:
@@ -93,7 +114,7 @@ def create_agent_with_tools(
     except Exception as e:
         logger.error("Erro ao carregar Social tools para %s: %s", phone, e)
 
-    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions
+    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions
 
     return get_assistant(
         session_id=session_id,

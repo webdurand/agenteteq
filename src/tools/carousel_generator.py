@@ -539,6 +539,27 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
         if limit_msg:
             return limit_msg
 
+        # Apply brand profile colors to slides that don't have color_palette set
+        try:
+            from src.models.branding import get_default_brand_profile
+            brand = get_default_brand_profile(user_id)
+            if brand:
+                brand_palette = {
+                    "primary": brand["bg_color"] or brand["primary_color"],
+                    "accent": brand["accent_color"],
+                    "text_primary": brand["text_primary_color"],
+                    "text_secondary": brand["text_secondary_color"],
+                }
+                brand_style = brand.get("style_description", "")
+                for slide in slides:
+                    if not slide.get("color_palette"):
+                        slide["color_palette"] = brand_palette
+                    if brand_style and not slide.get("style_anchor"):
+                        slide["style_anchor"] = brand_style
+                logger.info("Branding '%s' aplicado ao carrossel", brand["name"])
+        except Exception as e:
+            logger.warning("Erro ao aplicar branding ao carrossel: %s", e)
+
         # Resolve delivery_channel override
         effective_channel = channel
         if delivery_channel:

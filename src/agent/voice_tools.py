@@ -244,6 +244,44 @@ VOICE_TOOLS_DECLARATIONS = [
             },
             "required": ["request"]
         }
+    },
+    {
+        "name": "get_brand_profile",
+        "description": "Busca o perfil de marca/identidade visual do usuario. Retorna cores, fontes, logo e estilo configurados. Use antes de gerar carrosseis.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "profile_name": {"type": "string", "description": "Nome do perfil. Vazio = perfil padrao."}
+            }
+        }
+    },
+    {
+        "name": "update_brand_profile",
+        "description": "Cria ou atualiza perfil de marca do usuario com cores, fontes, estilo e tom de voz.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Nome da marca/perfil"},
+                "primary_color": {"type": "string", "description": "Cor primaria hex"},
+                "accent_color": {"type": "string", "description": "Cor accent hex"},
+                "bg_color": {"type": "string", "description": "Cor de fundo hex"},
+                "text_primary_color": {"type": "string", "description": "Cor do texto principal hex"},
+                "font_heading": {"type": "string", "description": "Fonte para titulos"},
+                "font_body": {"type": "string", "description": "Fonte para corpo"},
+                "style_description": {"type": "string", "description": "Descricao do estilo visual"},
+                "tone_of_voice": {"type": "string", "description": "Tom de comunicacao"},
+                "target_audience": {"type": "string", "description": "Publico-alvo"}
+            },
+            "required": ["name"]
+        }
+    },
+    {
+        "name": "list_brand_profiles",
+        "description": "Lista todos os perfis de marca/identidade visual do usuario.",
+        "parameters": {
+            "type": "object",
+            "properties": {}
+        }
     }
 ]
 
@@ -388,6 +426,21 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
                 from src.tools.channel_delivery import create_send_to_channel_tool
                 send_fn = create_send_to_channel_tool(user_id)
                 return {"result": send_fn(**args)}
+
+            elif function_name == "get_brand_profile":
+                from src.tools.branding_tools import create_branding_tools
+                get_brand, _, _, _ = create_branding_tools(user_id)
+                return {"result": get_brand(**args)}
+
+            elif function_name == "update_brand_profile":
+                from src.tools.branding_tools import create_branding_tools
+                _, update_brand, _, _ = create_branding_tools(user_id)
+                return {"result": update_brand(**args)}
+
+            elif function_name == "list_brand_profiles":
+                from src.tools.branding_tools import create_branding_tools
+                _, _, list_brands, _ = create_branding_tools(user_id)
+                return {"result": list_brands()}
 
             elif function_name == "run_workflow":
                 from src.tools.workflow_tool import create_workflow_tools

@@ -39,6 +39,9 @@ TOOL_FRIENDLY_NAMES = {
     "list_carousels": "Buscando carrosseis",
     "edit_image": "Editando imagem",
     "send_to_channel": "Enviando para outro canal",
+    "get_brand_profile": "Consultando branding",
+    "update_brand_profile": "Salvando branding",
+    "list_brand_profiles": "Buscando perfis de marca",
 }
 
 @router.websocket("/ws/voice-live")

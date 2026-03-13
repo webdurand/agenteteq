@@ -41,6 +41,7 @@ from src.endpoints.billing import router as billing_router, webhook_router
 from src.endpoints.carousel import router as carousel_router
 from src.endpoints.integrations import router as integrations_router
 from src.endpoints.social import router as social_router
+from src.endpoints.branding import router as branding_router
 from src.scheduler.engine import start_scheduler, shutdown_scheduler
 from src.events import set_main_loop
 from src.db.init import ensure_tables
@@ -102,6 +103,7 @@ app.include_router(webhook_router)
 app.include_router(carousel_router)
 app.include_router(integrations_router)
 app.include_router(social_router)
+app.include_router(branding_router)
 
 
 @app.get("/")
