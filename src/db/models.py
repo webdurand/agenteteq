@@ -5,6 +5,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -683,6 +684,67 @@ class SocialContent(Base):
             "posted_at": self.posted_at,
             "fetched_at": self.fetched_at,
             "analysis_summary": self.analysis_summary,
+        }
+
+
+class ContentPlan(Base):
+    __tablename__ = "content_plans"
+    __table_args__ = (
+        Index("idx_content_plans_user", "user_id", "status"),
+        Index("idx_content_plans_schedule", "user_id", "scheduled_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    description = Column(Text)
+    content_type = Column(String, default="post")       # post, carousel, video, reels, blog
+    platforms = Column(Text, default="[]")               # JSON array
+    scheduled_at = Column(String)                        # ISO 8601
+    status = Column(String, default="idea")              # idea, planned, producing, ready, published
+    carousel_id = Column(Integer)                        # optional link to carousel
+    notes = Column(Text)
+    created_at = Column(String, nullable=False)
+    updated_at = Column(String)
+
+    def to_dict(self) -> dict:
+        import json
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "title": self.title,
+            "description": self.description,
+            "content_type": self.content_type,
+            "platforms": json.loads(self.platforms) if self.platforms else [],
+            "scheduled_at": self.scheduled_at,
+            "status": self.status,
+            "carousel_id": self.carousel_id,
+            "notes": self.notes,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+class AccountSnapshot(Base):
+    __tablename__ = "account_snapshots"
+    __table_args__ = (
+        Index("idx_snapshots_account_date", "tracked_account_id", "fetched_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tracked_account_id = Column(Integer, ForeignKey("tracked_accounts.id"), nullable=False)
+    followers_count = Column(Integer, default=0)
+    posts_count = Column(Integer, default=0)
+    avg_engagement = Column(Float, default=0.0)
+    fetched_at = Column(String, nullable=False)
+
+    def to_dict(self) -> dict:
+        return {
+            "tracked_account_id": self.tracked_account_id,
+            "followers_count": self.followers_count,
+            "posts_count": self.posts_count,
+            "avg_engagement": self.avg_engagement,
+            "fetched_at": self.fetched_at,
         }
 
 

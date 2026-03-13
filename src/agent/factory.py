@@ -140,6 +140,32 @@ def create_agent_with_tools(
     except Exception as e:
         logger.error("Erro ao carregar Social tools para %s: %s", phone, e)
 
+    # Injeta Content Planner tools
+    calendar_instructions = []
+    try:
+        from src.tools.content_planner import create_content_planner_tools
+        plan_content, list_content_plan, update_content_plan_tool, delete_content_plan_tool = create_content_planner_tools(phone)
+        search_tools.extend([plan_content, list_content_plan, update_content_plan_tool, delete_content_plan_tool])
+        calendar_instructions.append(
+            "CALENDARIO DE CONTEUDO: O usuario pode planejar publicacoes via chat. "
+            "Use plan_content para adicionar conteudo ao calendario (titulo, tipo, plataforma, data). "
+            "Use list_content_plan para listar conteudos planejados (filtro por status ou periodo). "
+            "Use update_content_plan para atualizar status, data ou titulo. "
+            "Use delete_content_plan para remover.\n\n"
+            "FLUXO: Quando o usuario disser algo como 'agenda um post pra terca', 'quero planejar um carrossel', "
+            "'planeja um conteudo sobre X pra semana que vem', use plan_content automaticamente. "
+            "Infira o content_type do contexto (post, carousel, video, reels, blog). "
+            "Infira a plataforma do contexto (instagram, youtube, blog). "
+            "Se a data nao for mencionada, deixe sem data (o usuario pode definir depois). "
+            "Se o usuario pedir pra ver o calendario, use list_content_plan.\n\n"
+            "STATUS: idea → planned → producing → ready → published. "
+            "Atualize o status conforme o progresso (ex: se o usuario gerou o carrossel, mude pra 'producing' ou 'ready'). "
+            "Apos gerar conteudo (carrossel, roteiro), OFERECA adicionar ao calendario: "
+            "'Quer que eu adicione isso ao seu calendario de conteudo?'"
+        )
+    except Exception as e:
+        logger.error("Erro ao carregar Content Planner tools para %s: %s", phone, e)
+
     # Instruções do Co-Pilot de Conteúdo (Content Intelligence Layer)
     copilot_instructions = [
         "CO-PILOT DE CONTEUDO (Content Intelligence Layer):\n"
@@ -275,7 +301,25 @@ def create_agent_with_tools(
         "Para desativar, o usuario pode pedir 'desativa meu briefing' — use cancel_schedule."
     ]
 
-    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + copilot_instructions + interactive_instructions + task_instructions + upsell_instructions + briefing_instructions
+    # Instruções de repurposing e relatório competitivo
+    repurposing_instructions = [
+        "REPURPOSING DE CONTEUDO: Quando o usuario pedir para criar conteudo em multiplos formatos "
+        "(ex: 'cria em 3 formatos', 'adapta pra instagram e youtube', 'quero carrossel e roteiro', "
+        "'faz um post e um video sobre X'), execute MULTIPLAS tools sequencialmente:\n"
+        "1. Gere o carrossel com generate_carousel_tool (se pedido)\n"
+        "2. Gere o roteiro de video com create_content_script (se pedido)\n"
+        "3. Gere o texto de blog (se pedido) diretamente na resposta\n"
+        "4. Consolide tudo numa resposta unica mostrando cada formato\n"
+        "5. OFERECA adicionar todos ao calendario de conteudo\n\n"
+        "Adapte o conteudo para cada formato — nao e so copiar. "
+        "Carrossel: visual, slides curtos. Video: roteiro com gancho, cenas, CTA. Blog: texto completo.\n\n"
+        "RELATORIO COMPETITIVO: Quando o usuario pedir um relatorio ou comparacao de perfis monitorados "
+        "(ex: 'gera um relatorio dos perfis X, Y e Z', 'compara essas contas', 'quero um panorama'), "
+        "use generate_competitive_report para gerar um relatorio visual com graficos e insights. "
+        "O relatorio compara seguidores, engajamento, crescimento e top posts entre as contas."
+    ]
+
+    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + calendar_instructions + copilot_instructions + interactive_instructions + task_instructions + upsell_instructions + briefing_instructions + repurposing_instructions
 
     return get_assistant(
         session_id=session_id,

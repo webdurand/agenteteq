@@ -50,6 +50,21 @@ class ReminderCreate(BaseModel):
     title: Optional[str] = ""
     notification_channel: Optional[str] = "whatsapp_text"
 
+class ContentPlanCreate(BaseModel):
+    title: str
+    content_type: str = "post"
+    platforms: List[str] = ["instagram"]
+    scheduled_at: Optional[str] = ""
+    description: Optional[str] = ""
+
+class ContentPlanUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    content_type: Optional[str] = None
+    platforms: Optional[List[str]] = None
+    scheduled_at: Optional[str] = None
+    status: Optional[str] = None
+
 def _parse_iso_dt(value: str | None) -> Optional[datetime]:
     if not value:
         return None
@@ -247,6 +262,74 @@ async def api_get_active_campaign(current_user: dict = Depends(get_current_user)
         return {"campaign": campaign.to_dict()}
 
     return {"campaign": None}
+
+# --- Chat History ---
+# --- Content Plans ---
+@router.get("/content-plans")
+async def api_list_content_plans(
+    status: str = Query("", description="Filter by status"),
+    from_date: str = Query("", description="ISO 8601 start date"),
+    to_date: str = Query("", description="ISO 8601 end date"),
+    limit: int = Query(30, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+):
+    from src.models.content_plans import list_content_plans
+    user_id = current_user["phone_number"]
+    plans, has_more = list_content_plans(
+        user_id=user_id, status=status, from_date=from_date, to_date=to_date, limit=limit,
+    )
+    return {"plans": plans, "has_more": has_more}
+
+@router.post("/content-plans")
+async def api_create_content_plan(
+    body: ContentPlanCreate,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+):
+    from src.models.content_plans import create_content_plan
+    user_id = current_user["phone_number"]
+    plan = create_content_plan(
+        user_id=user_id,
+        title=body.title,
+        content_type=body.content_type,
+        platforms=body.platforms,
+        scheduled_at=body.scheduled_at or "",
+        description=body.description or "",
+    )
+    background_tasks.add_task(emit_event, user_id, "content_plan_updated")
+    return {"plan": plan}
+
+@router.put("/content-plans/{plan_id}")
+async def api_update_content_plan(
+    plan_id: int,
+    body: ContentPlanUpdate,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+):
+    from src.models.content_plans import update_content_plan
+    user_id = current_user["phone_number"]
+    kwargs = body.model_dump(exclude_none=True)
+    if not kwargs:
+        raise HTTPException(status_code=400, detail="Nenhuma alteracao especificada.")
+    plan = update_content_plan(plan_id, user_id, **kwargs)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plano nao encontrado.")
+    background_tasks.add_task(emit_event, user_id, "content_plan_updated")
+    return {"plan": plan}
+
+@router.delete("/content-plans/{plan_id}")
+async def api_delete_content_plan(
+    plan_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+):
+    from src.models.content_plans import delete_content_plan
+    user_id = current_user["phone_number"]
+    ok = delete_content_plan(plan_id, user_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Plano nao encontrado.")
+    background_tasks.add_task(emit_event, user_id, "content_plan_updated")
+    return {"ok": True}
 
 # --- Chat History ---
 @router.get("/chat/history")

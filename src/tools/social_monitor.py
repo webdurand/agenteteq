@@ -716,6 +716,97 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
             )
         return f"Alertas desativados para @{username}."
 
+    def generate_competitive_report(usernames: str = "", platforms: str = "instagram") -> str:
+        """
+        Gera um relatorio visual comparando perfis monitorados.
+        Retorna um carrossel de imagens com graficos de seguidores, engajamento,
+        crescimento e insights comparativos. Envia as imagens para o usuario.
+
+        Args:
+            usernames: Usernames separados por virgula (ex: "natgeo,bbcnews,cnn").
+                       Se vazio, usa todas as contas monitoradas.
+            platforms: Plataformas separadas por virgula (ex: "instagram,youtube").
+
+        Returns:
+            Texto com resumo do relatorio e links das imagens geradas.
+        """
+        from src.social.report_generator import (
+            collect_report_data,
+            generate_insights,
+            render_report_slides,
+        )
+
+        platform_list = [p.strip().lower() for p in platforms.split(",") if p.strip()]
+
+        if usernames.strip():
+            username_list = [u.strip().lstrip("@").lower() for u in usernames.split(",") if u.strip()]
+        else:
+            accounts = db_list_tracked_accounts(user_id)
+            username_list = [a["username"] for a in accounts]
+
+        if len(username_list) < 2:
+            return "Preciso de pelo menos 2 contas para gerar um relatorio comparativo. Informe os usernames."
+
+        report_data = collect_report_data(user_id, username_list, platform_list)
+        if not report_data or not report_data.get("accounts"):
+            return (
+                "Nao consegui coletar dados para o relatorio. "
+                "Verifique se as contas estao sendo monitoradas."
+            )
+
+        # Generate LLM insights
+        insights = generate_insights(report_data)
+        report_data["insights"] = insights
+
+        # Render slides
+        slides = render_report_slides(report_data, insights=insights)
+        if not slides:
+            return "Erro ao gerar as imagens do relatorio."
+
+        # Upload to Cloudinary
+        try:
+            import cloudinary
+            import cloudinary.uploader
+
+            image_urls = []
+            for i, slide_bytes in enumerate(slides):
+                result = cloudinary.uploader.upload(
+                    slide_bytes,
+                    folder="teq/reports",
+                    public_id=f"report_{user_id}_{i}",
+                    overwrite=True,
+                    resource_type="image",
+                )
+                image_urls.append(result["secure_url"])
+        except Exception as e:
+            logger.error("Erro ao fazer upload do relatorio: %s", e)
+            return "Relatorio gerado mas houve erro ao fazer upload das imagens."
+
+        # Build response
+        accounts_list = ", ".join(f"@{a['username']}" for a in report_data["accounts"])
+        lines = [
+            f"**Relatorio Competitivo gerado!**\n",
+            f"Contas analisadas: {accounts_list}\n",
+            f"**{len(slides)} slides** com graficos de seguidores, engajamento, "
+            f"crescimento e insights.\n",
+        ]
+
+        # Summary metrics
+        for acc in report_data["accounts"]:
+            lines.append(
+                f"• @{acc['username']}: {acc['followers']:,} seg. | "
+                f"eng. {acc['engagement_rate']}% | crescimento +{acc['growth_pct']}%"
+            )
+
+        lines.append(f"\n**Insights:**\n{insights[:500]}")
+
+        if image_urls:
+            lines.append("\n**Imagens do relatorio:**")
+            for i, url in enumerate(image_urls):
+                lines.append(f"Slide {i + 1}: {url}")
+
+        return "\n".join(lines)
+
     def toggle_trend_alerts(enabled: bool = True) -> str:
         """
         Ativa ou desativa alertas de TENDENCIAS do nicho.
@@ -755,6 +846,7 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         create_content_script,
         toggle_alerts,
         toggle_trend_alerts,
+        generate_competitive_report,
     )
 
 

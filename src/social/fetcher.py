@@ -24,6 +24,7 @@ def fetch_all_tracked_accounts():
         save_content_batch,
         update_account_metadata,
         get_avg_engagement,
+        save_account_snapshot,
     )
     from src.social import get_social_provider
 
@@ -71,6 +72,18 @@ def fetch_all_tracked_accounts():
                 posts_count=profile.posts_count,
                 profile_pic_url=profile.profile_pic_url,
             )
+
+            # Save historical snapshot
+            try:
+                avg_eng = get_avg_engagement(account_id)
+                save_account_snapshot(
+                    account_id,
+                    followers_count=profile.followers_count,
+                    posts_count=profile.posts_count,
+                    avg_engagement=avg_eng,
+                )
+            except Exception as e:
+                logger.warning("Snapshot save failed for account %d: %s", account_id, e)
 
             # Fetch recent posts
             posts = loop.run_until_complete(

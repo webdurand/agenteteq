@@ -65,6 +65,7 @@ lxml==5.4.0
 lxml_html_clean==0.4.4
 markdown-it-py==4.0.0
 MarkupSafe==3.0.3
+matplotlib==3.10.3
 mdurl==0.1.2
 multidict==6.7.1
 newspaper4k==0.9.5

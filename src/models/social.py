@@ -5,7 +5,7 @@ from typing import Optional
 from sqlalchemy import func
 
 from src.db.session import get_db
-from src.db.models import TrackedAccount, SocialContent, User
+from src.db.models import TrackedAccount, SocialContent, User, AccountSnapshot
 
 
 def track_account(
@@ -325,3 +325,63 @@ def update_last_trend_alert(user_id: str) -> None:
         user = db.query(User).filter(User.phone_number == user_id).first()
         if user:
             user.last_trend_alert_at = now
+
+
+# ──────────────── Account Snapshots (historical tracking) ────────────────
+
+
+def save_account_snapshot(
+    account_id: int,
+    followers_count: int = 0,
+    posts_count: int = 0,
+    avg_engagement: float = 0.0,
+) -> None:
+    """Save a point-in-time snapshot of account metrics."""
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as db:
+        snapshot = AccountSnapshot(
+            tracked_account_id=account_id,
+            followers_count=followers_count,
+            posts_count=posts_count,
+            avg_engagement=avg_engagement,
+            fetched_at=now,
+        )
+        db.add(snapshot)
+
+
+def get_account_snapshots(account_id: int, days: int = 30) -> list[dict]:
+    """Get historical snapshots for an account within the last N days."""
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    with get_db() as db:
+        rows = (
+            db.query(AccountSnapshot)
+            .filter(
+                AccountSnapshot.tracked_account_id == account_id,
+                AccountSnapshot.fetched_at >= cutoff,
+            )
+            .order_by(AccountSnapshot.fetched_at.asc())
+            .all()
+        )
+    return [r.to_dict() for r in rows]
+
+
+def get_growth_summary(account_id: int, days: int = 30) -> dict:
+    """Calculate growth summary from snapshots."""
+    snapshots = get_account_snapshots(account_id, days=days)
+    if len(snapshots) < 2:
+        return {"followers_delta": 0, "pct": 0.0, "data_points": len(snapshots)}
+
+    first = snapshots[0]
+    last = snapshots[-1]
+    delta = last["followers_count"] - first["followers_count"]
+    pct = (delta / first["followers_count"] * 100) if first["followers_count"] > 0 else 0.0
+
+    return {
+        "followers_delta": delta,
+        "pct": round(pct, 1),
+        "data_points": len(snapshots),
+        "first_followers": first["followers_count"],
+        "last_followers": last["followers_count"],
+        "period_days": days,
+    }
