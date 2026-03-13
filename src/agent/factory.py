@@ -86,6 +86,8 @@ def create_agent_with_tools(
             "Use list_tracked_accounts para ver as contas ja monitoradas. "
             "Use get_account_insights para analises de conteudo, topicos e tendencias de uma conta JA monitorada. "
             "Use get_trending_content para ver os posts com mais engajamento de uma conta JA monitorada. "
+            "Use analyze_posts para OLHAR posts de QUALQUER conta publica (incluindo as IMAGENS) e responder perguntas — "
+            "NAO precisa estar monitorada. Ex: 'sobre o que fala o ultimo post do @fulano?', 'descreve o post mais recente'. "
             "Use create_content_script para gerar roteiros de carrossel/video inspirados em uma referencia."
         )
     except Exception as e:

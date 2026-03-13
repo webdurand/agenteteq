@@ -369,6 +369,21 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
 
         # Build analysis prompt
         posts_text = _format_posts_for_analysis(posts)
+        post_images = _download_post_images(posts, max_images=5)
+
+        visual_items = ""
+        visual_note = ""
+        if post_images:
+            visual_items = (
+                "7. Analise visual: padroes de cores, composicao, estilo fotografico, "
+                "uso de texto nas imagens, identidade visual consistente\n"
+                "8. Elementos visuais que se correlacionam com maior engajamento\n\n"
+            )
+            visual_note = (
+                f"\nAs {len(post_images)} imagens anexadas correspondem aos primeiros "
+                f"{len(post_images)} posts listados acima, na mesma ordem."
+            )
+
         analysis = _run_analysis(
             f"Analise os posts recentes da conta @{username} do Instagram.\n\n"
             f"Perfil: {account.get('display_name', '')} - {account.get('bio', '')}\n"
@@ -380,8 +395,11 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
             f"3. Padroes de engajamento (o que gera mais likes/comentarios)\n"
             f"4. Hashtags mais usadas e efetivas\n"
             f"5. Tom e estilo de comunicacao\n"
-            f"6. Sugestoes para quem quer criar conteudo similar\n\n"
+            f"6. Sugestoes para quem quer criar conteudo similar\n"
+            f"{visual_items}"
             f"Responda em portugues de forma objetiva e acionavel."
+            f"{visual_note}",
+            images=post_images,
         )
 
         return (
@@ -435,6 +453,115 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
 
         return "\n\n".join(lines)
 
+    def analyze_posts(
+        platform: str = "instagram",
+        username: str = "",
+        sort: str = "recent",
+        limit: int = 3,
+        question: str = "",
+    ) -> str:
+        """
+        Olha para os posts de uma conta (incluindo as IMAGENS) e responde perguntas
+        ou descreve o conteudo. Funciona com qualquer conta publica, mesmo que NAO
+        esteja sendo monitorada. Use quando o usuario quiser entender posts especificos,
+        saber do que trata um post, ou pedir analise visual.
+
+        Args:
+            platform: Plataforma (instagram).
+            username: Username da conta (nao precisa estar monitorada).
+            sort: Ordenacao - 'recent' para mais recentes, 'top' para mais engajamento.
+            limit: Quantidade de posts para analisar (1 a 5).
+            question: Pergunta especifica sobre os posts (opcional).
+
+        Returns:
+            Descricao e analise dos posts com base nas imagens e texto.
+        """
+        from src.social import get_social_provider
+
+        username = username.lstrip("@").lower().strip()
+        if not username:
+            return "Informe o username da conta."
+
+        limit = max(1, min(limit, 5))
+
+        # Try from tracked account first (has cached data)
+        account = get_tracked_account_by_username(user_id, platform, username)
+        posts = None
+
+        if account:
+            # Refresh if stale
+            if _is_stale(account):
+                try:
+                    _fetch_and_store(account)
+                except Exception as e:
+                    logger.warning("Erro ao atualizar @%s: %s", username, e)
+
+            if sort == "top":
+                posts = get_top_content(account["id"], sort_by="likes_count", limit=limit)
+            else:
+                posts = get_recent_content(account["id"], limit=limit)
+
+        # Not tracked or no posts — fetch on-the-fly
+        if not posts:
+            try:
+                provider = get_social_provider()
+                raw_posts = _run_async(
+                    provider.get_recent_posts(platform, username, limit=limit)
+                )
+                posts = [
+                    {
+                        "platform_post_id": p.platform_post_id,
+                        "content_type": p.content_type,
+                        "caption": p.caption,
+                        "hashtags": p.hashtags,
+                        "media_urls": p.media_urls,
+                        "thumbnail_url": p.thumbnail_url,
+                        "likes_count": p.likes_count,
+                        "comments_count": p.comments_count,
+                        "views_count": p.views_count,
+                        "posted_at": p.posted_at,
+                    }
+                    for p in raw_posts
+                ]
+            except Exception as e:
+                logger.error("Erro ao buscar posts de @%s: %s", username, e)
+                return f"Nao consegui buscar os posts de @{username}: {str(e)}"
+
+        if not posts:
+            return f"Nenhum post encontrado para @{username}."
+
+        # Sort on-the-fly posts if needed
+        if sort == "top" and not account:
+            posts = sorted(posts, key=lambda p: p.get("likes_count", 0), reverse=True)
+        posts = posts[:limit]
+
+        posts_text = _format_posts_for_analysis(posts)
+        post_images = _download_post_images(posts, max_images=limit)
+
+        user_question = question.strip() if question else "Descreva o conteudo de cada post de forma detalhada."
+
+        prompt = (
+            f"Voce esta olhando para {len(posts)} post(s) da conta @{username} no Instagram.\n\n"
+            f"Dados dos posts:\n{posts_text}\n\n"
+        )
+        if post_images:
+            prompt += (
+                f"As {len(post_images)} imagens anexadas correspondem aos posts acima.\n"
+                "Analise CADA imagem em detalhe: o que aparece, cores, texto na imagem, "
+                "composicao, estilo visual, e qualquer elemento relevante.\n\n"
+            )
+        prompt += (
+            f"Pergunta do usuario: {user_question}\n\n"
+            "Responda em portugues de forma clara e detalhada."
+        )
+
+        analysis = _run_analysis(prompt, images=post_images)
+        sort_label = "mais recente(s)" if sort == "recent" else "com mais engajamento"
+        return (
+            f"**Analise de {len(posts)} post(s) {sort_label} de @{username}:**\n\n"
+            f"{analysis}"
+        )
+
     def create_content_script(
         platform: str = "instagram",
         reference_username: str = "",
@@ -468,6 +595,7 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
             return f"Nenhum conteudo de referencia encontrado para @{reference_username}."
 
         posts_text = _format_posts_for_analysis(top_posts)
+        post_images = _download_post_images(top_posts, max_images=5)
 
         topic_instruction = ""
         if topic:
@@ -509,9 +637,18 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
                 "da referencia, com conteudo original."
             )
 
+        if post_images:
+            prompt += (
+                "\n\nIMPORTANTE: Estou anexando as imagens dos posts de maior engajamento. "
+                "Analise os padroes visuais (cores, composicao, tipografia, estilo) e "
+                "incorpore essas referencias visuais no roteiro. Na descricao visual de cada slide/cena, "
+                "indique especificamente como replicar os padroes visuais que funcionam.\n"
+                f"As {len(post_images)} imagens correspondem aos primeiros {len(post_images)} posts listados."
+            )
+
         prompt += "\nResponda em portugues de forma pratica e detalhada."
 
-        script = _run_analysis(prompt)
+        script = _run_analysis(prompt, images=post_images)
 
         return (
             f"**Roteiro de {content_type} inspirado em @{reference_username}**\n\n"
@@ -525,6 +662,7 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         list_tracked_accounts,
         get_account_insights,
         get_trending_content,
+        analyze_posts,
         create_content_script,
     )
 
@@ -545,12 +683,52 @@ def _format_posts_for_analysis(posts: list[dict]) -> str:
             f"Views: {post.get('views_count', 0):,}\n"
             f"  Caption: {caption}\n"
             f"  Hashtags: {', '.join('#' + h for h in hashtags[:10])}\n"
-            f"  Data: {post.get('posted_at', 'desconhecida')}"
+            f"  Data: {post.get('posted_at', 'desconhecida')}\n"
+            f"  Midia: {len(post.get('media_urls') or [])} imagem(ns)"
         )
     return "\n\n".join(lines)
 
 
-def _run_analysis(prompt: str) -> str:
+def _get_best_image_url(post: dict) -> str:
+    """Pick the best single image URL from a post dict."""
+    content_type = (post.get("content_type") or "").lower()
+    # For video/reel posts, prefer thumbnail
+    if content_type in ("video", "reel"):
+        thumb = post.get("thumbnail_url", "")
+        if thumb:
+            return thumb
+    # For image/carousel, use first media_url
+    media_urls = post.get("media_urls") or []
+    if media_urls:
+        return media_urls[0]
+    return post.get("thumbnail_url", "") or ""
+
+
+def _download_post_images(posts: list[dict], max_images: int = 5) -> list:
+    """Download the primary image from each post. Returns agno Image objects.
+
+    Skips posts where download fails (expired CDN URL, timeout, etc).
+    """
+    import httpx
+    from agno.media import Image
+
+    images = []
+    for post in posts[:max_images]:
+        url = _get_best_image_url(post)
+        if not url:
+            continue
+        try:
+            resp = httpx.get(url, timeout=10.0, follow_redirects=True)
+            if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("image"):
+                images.append(Image(content=resp.content))
+            else:
+                logger.debug("Skipping image for post %s: status=%s", post.get("platform_post_id"), resp.status_code)
+        except Exception as e:
+            logger.debug("Failed to download image for post %s: %s", post.get("platform_post_id"), e)
+    return images
+
+
+def _run_analysis(prompt: str, images: list | None = None) -> str:
     """Run LLM analysis using Gemini Flash."""
     try:
         from agno.agent import Agent
@@ -558,7 +736,10 @@ def _run_analysis(prompt: str) -> str:
             model=_get_light_model(),
             description="Voce e um analista de conteudo de redes sociais especializado em estrategia digital.",
         )
-        result = agent.run(prompt)
+        kwargs = {}
+        if images:
+            kwargs["images"] = images
+        result = agent.run(prompt, **kwargs)
         return result.content if hasattr(result, "content") else str(result)
     except Exception as e:
         logger.error("Erro na analise LLM: %s", e)
