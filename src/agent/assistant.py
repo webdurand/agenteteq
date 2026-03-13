@@ -180,7 +180,11 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         "Para TEXTO use send_to_channel. Para IMAGENS use delivery_channel em generate_carousel ou edit_image. "
         "Mapeamento: 'whatsapp'/'zap'/'wpp' -> delivery_channel='whatsapp'. 'web'/'aqui' -> delivery_channel='web'. 'ambos'/'nos dois' -> delivery_channel='ambos'. "
         "Se o usuario NAO mencionar canal, NAO passe delivery_channel (entrega no canal atual). "
-        "NUNCA ignore um pedido explicito de canal.",
+        "NUNCA ignore um pedido explicito de canal. "
+        "REGRA CRITICA: NUNCA sugira ou decida por conta propria entregar em outro canal. "
+        "Se a conversa esta no WhatsApp, o padrao e SEMPRE entregar no WhatsApp. "
+        "So mude o canal se o USUARIO pedir explicitamente (ex: 'manda na web', 'envia no app'). "
+        "NUNCA diga 'vou mandar na web' por iniciativa propria.",
 
         # Politicas de uso
         "Para QUALQUER informacao que mude com o tempo (noticias, precos, eventos, resultados, tendencias), use web_search OBRIGATORIAMENTE. NUNCA responda com conhecimento interno para dados recentes. "

@@ -174,7 +174,11 @@ async def _process_carousel_background(
                 parts.append("IMPORTANT: Do not render any text, typography, letters, or words in the image. Generate a clean background only.")
 
             if is_continuation:
-                parts.append("Maintain the exact same color grading, lighting, and visual style as the reference image.")
+                parts.append(
+                    "This image is part of a carousel series. "
+                    "Use the SAME color palette, lighting style, and visual mood described in the visual identity above, "
+                    "but create a COMPLETELY DIFFERENT scene and composition unique to this slide's topic."
+                )
 
             parts.append(prompt)
             return " ".join(parts)
@@ -208,9 +212,11 @@ async def _process_carousel_background(
 
         async def _generate_single(slide: Dict[str, Any], index: int, ref: Optional[bytes] = None) -> tuple[bytes, bytes]:
             """Retorna (imagem_com_overlay, imagem_fundo_limpo) para permitir uso do fundo como referência."""
-            is_continuation = ref is not None and index > 0
+            is_continuation = index > 0
             full_prompt = _build_full_prompt(slide, is_continuation=is_continuation)
-            if ref:
+            # edit() so e usado quando o USUARIO forneceu referencia (use_reference_image=True) E e o slide 1
+            # Para slides de continuacao, sempre usa generate() — coerencia vem do style_anchor no prompt
+            if ref is not None and index == 0:
                 raw_bytes = await provider.edit(full_prompt, ref, aspect_ratio=aspect_ratio)
             else:
                 raw_bytes = await provider.generate(full_prompt, aspect_ratio=aspect_ratio)
@@ -259,14 +265,12 @@ async def _process_carousel_background(
             slide1_result, slide1_overlaid, slide1_raw = await _generate_and_upload(slides[0], 0, ref=reference_image)
 
             if slide1_result is None or slide1_raw is None:
-                # Slide 1 cancelled or failed — fallback to parallel without ref
                 logger.warning("Slide 1 falhou/cancelado no modo sequencial, fazendo fallback paralelo")
-                slide1_raw = None
 
-            # Usa fundo LIMPO (sem overlay) como referência visual para manter coerência
-            visual_ref = slide1_raw or reference_image
+            # Slides 2-N usam generate() com style_anchor — nao precisam de slide1_raw como ref
+            # Apenas passam reference_image do USUARIO (se houver), nao o slide 1 gerado
             remaining_tasks = [
-                _generate_and_upload(slide, i, ref=visual_ref)
+                _generate_and_upload(slide, i, ref=reference_image)
                 for i, slide in enumerate(slides) if i > 0
             ]
             remaining_results = await asyncio.gather(*remaining_tasks, return_exceptions=True)
@@ -526,7 +530,10 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
                                "5 paisagens variadas sem relação entre si").
                                Na dúvida, mantenha True.
             delivery_channel: Canal de destino para entrega cross-channel.
-                              OBRIGATÓRIO quando o usuário mencionar WhatsApp/zap/wpp.
+                              SOMENTE preencha quando o USUARIO pedir EXPLICITAMENTE
+                              para entregar em outro canal (ex: "manda na web", "envia no zap").
+                              NUNCA preencha por iniciativa propria — se o usuario nao
+                              mencionou canal, deixe VAZIO para entregar no canal atual.
                               Valores: 'whatsapp', 'web', 'ambos'.
                               Se vazio, entrega no canal de origem.
             preset_name: Nome de um preset/template de estilo salvo pelo usuario.

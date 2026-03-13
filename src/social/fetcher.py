@@ -27,17 +27,14 @@ def fetch_all_tracked_accounts():
     )
     from src.social import get_social_provider
 
-    try:
-        provider = get_social_provider()
-    except Exception as e:
-        logger.error("Social provider nao disponivel: %s", e)
-        return
-
     accounts = list_all_active_tracked_accounts()
     if not accounts:
         return
 
     logger.info("Social fetcher: processando %d conta(s)...", len(accounts))
+
+    # Cache providers per platform to avoid re-instantiation
+    providers: dict = {}
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -48,6 +45,15 @@ def fetch_all_tracked_accounts():
         username = account["username"]
         user_id = account["user_id"]
         alerts_on = account.get("alerts_enabled", False)
+
+        # Get or create provider for this platform
+        if platform not in providers:
+            try:
+                providers[platform] = get_social_provider(platform)
+            except Exception as e:
+                logger.error("Social provider nao disponivel para %s: %s", platform, e)
+                continue
+        provider = providers[platform]
 
         try:
             # Fetch profile update
@@ -97,11 +103,12 @@ def fetch_all_tracked_accounts():
                     avg = get_avg_engagement(account_id)
                     if avg > 0:
                         for post in new_posts:
-                            likes = post.get("likes_count", 0)
-                            if likes >= avg * SPIKE_MULTIPLIER:
+                            # For YouTube, use views as primary metric; for others, likes
+                            engagement = post.get("views_count", 0) if platform == "youtube" else post.get("likes_count", 0)
+                            if engagement >= avg * SPIKE_MULTIPLIER:
                                 _send_spike_alert(
                                     loop, user_id, username, platform,
-                                    post, likes, avg,
+                                    post, engagement, avg,
                                 )
                 except Exception as e:
                     logger.error("Social fetcher: erro ao checar spikes de @%s: %s", username, e)
@@ -130,10 +137,15 @@ def _send_spike_alert(
     if len(post.get("caption", "") or "") > 120:
         caption_preview += "..."
 
+    if platform == "youtube":
+        metric_label = "Views"
+    else:
+        metric_label = "Likes"
+
     body = (
         f"Alerta: @{username} postou algo que ta bombando!\n\n"
         f'"{caption_preview}"\n\n'
-        f"Likes: {likes:,} ({multiplier:.0f}x acima da media)\n"
+        f"{metric_label}: {likes:,} ({multiplier:.0f}x acima da media)\n"
         f"Comentarios: {post.get('comments_count', 0):,}"
     )
 

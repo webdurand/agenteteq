@@ -252,7 +252,7 @@ VOICE_TOOLS_DECLARATIONS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "platform": {"type": "string", "description": "Plataforma (instagram)"},
+                "platform": {"type": "string", "description": "Plataforma (instagram, youtube)"},
                 "username": {"type": "string", "description": "Username da conta (ex: natgeo, @natgeo)"}
             },
             "required": ["platform", "username"]
@@ -264,7 +264,7 @@ VOICE_TOOLS_DECLARATIONS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "platform": {"type": "string", "description": "Plataforma (instagram)"},
+                "platform": {"type": "string", "description": "Plataforma (instagram, youtube)"},
                 "username": {"type": "string", "description": "Username da conta"}
             },
             "required": ["platform", "username"]
@@ -276,7 +276,7 @@ VOICE_TOOLS_DECLARATIONS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "platform": {"type": "string", "description": "Plataforma (instagram)"},
+                "platform": {"type": "string", "description": "Plataforma (instagram, youtube)"},
                 "username": {"type": "string", "description": "Username da conta"}
             },
             "required": ["username"]
@@ -298,7 +298,7 @@ VOICE_TOOLS_DECLARATIONS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "platform": {"type": "string", "description": "Plataforma (instagram)"},
+                "platform": {"type": "string", "description": "Plataforma (instagram, youtube)"},
                 "username": {"type": "string", "description": "Username da conta monitorada"}
             },
             "required": ["username"]
@@ -310,7 +310,7 @@ VOICE_TOOLS_DECLARATIONS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "platform": {"type": "string", "description": "Plataforma (instagram)"},
+                "platform": {"type": "string", "description": "Plataforma (instagram, youtube)"},
                 "username": {"type": "string", "description": "Username da conta"}
             },
             "required": ["username"]
@@ -322,7 +322,7 @@ VOICE_TOOLS_DECLARATIONS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "platform": {"type": "string", "description": "Plataforma (instagram)"},
+                "platform": {"type": "string", "description": "Plataforma (instagram, youtube)"},
                 "username": {"type": "string", "description": "Username da conta"},
                 "sort": {"type": "string", "description": "Ordenacao: 'recent' ou 'top'. Padrao: recent"},
                 "limit": {"type": "integer", "description": "Quantidade de posts (1 a 5). Padrao: 3"},
@@ -337,7 +337,7 @@ VOICE_TOOLS_DECLARATIONS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "platform": {"type": "string", "description": "Plataforma (instagram)"},
+                "platform": {"type": "string", "description": "Plataforma (instagram, youtube)"},
                 "reference_username": {"type": "string", "description": "Username da conta de referencia"},
                 "content_type": {"type": "string", "description": "Tipo: carousel, video, reels. Padrao: carousel"},
                 "topic": {"type": "string", "description": "Tema especifico (opcional)"}
@@ -351,7 +351,7 @@ VOICE_TOOLS_DECLARATIONS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "platform": {"type": "string", "description": "Plataforma (instagram)"},
+                "platform": {"type": "string", "description": "Plataforma (instagram, youtube)"},
                 "username": {"type": "string", "description": "Username da conta monitorada"},
                 "enabled": {"type": "boolean", "description": "True para ativar, False para desativar"}
             },

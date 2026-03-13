@@ -109,8 +109,10 @@ def create_agent_with_tools(
         search_tools.extend(social_tools_tuple)
         social_instructions.append(
             "SOCIAL MONITORING: O usuario pode monitorar contas de redes sociais como referencia de conteudo. "
+            "Plataformas suportadas: instagram e youtube. Passe platform='instagram' ou platform='youtube' conforme o contexto. "
             "FLUXO IMPORTANTE: Quando o usuario mencionar um perfil de rede social (ex: '@fulano do instagram', "
-            "'me mostra o conteudo do natgeo'), PRIMEIRO use preview_account para buscar e MOSTRAR o perfil "
+            "'me mostra o canal do MrBeast no youtube', 'me mostra o conteudo do natgeo'), "
+            "PRIMEIRO use preview_account para buscar e MOSTRAR o perfil "
             "e os posts com metricas. SO DEPOIS pergunte se ele quer salvar para monitoramento continuo. "
             "Se o usuario confirmar, use track_account para salvar. "
             "Use list_tracked_accounts para ver as contas ja monitoradas. "

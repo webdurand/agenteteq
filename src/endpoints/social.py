@@ -54,17 +54,24 @@ async def api_track_account(
     from src.social import get_social_provider
 
     platform = body.platform.lower().strip()
-    username = body.username.lstrip("@").lower().strip()
+    username = body.username.lstrip("@").strip()
+    if platform != "youtube":
+        username = username.lower()
 
     if not username:
         raise HTTPException(status_code=400, detail="Username e obrigatorio.")
 
-    provider = get_social_provider()
-    if platform not in provider.supported_platforms():
+    SUPPORTED_PLATFORMS = ["instagram", "youtube"]
+    if platform not in SUPPORTED_PLATFORMS:
         raise HTTPException(
             status_code=400,
-            detail=f"Plataforma '{platform}' nao suportada. Opcoes: {', '.join(provider.supported_platforms())}",
+            detail=f"Plataforma '{platform}' nao suportada. Opcoes: {', '.join(SUPPORTED_PLATFORMS)}",
         )
+
+    try:
+        provider = get_social_provider(platform)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Plataforma '{platform}' nao configurada: {e}")
 
     try:
         profile = await provider.get_profile(platform, username)
@@ -152,7 +159,7 @@ def _fetch_posts_background(account_id: int, user_id: str, platform: str, userna
     from src.social import get_social_provider
 
     try:
-        provider = get_social_provider()
+        provider = get_social_provider(platform)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 

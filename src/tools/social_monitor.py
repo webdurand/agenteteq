@@ -57,7 +57,7 @@ def _fetch_and_store(account: dict) -> list[dict]:
     """Fetch recent posts from provider and store in DB. Returns posts."""
     from src.social import get_social_provider
 
-    provider = get_social_provider()
+    provider = get_social_provider(account["platform"])
     platform = account["platform"]
     username = account["username"]
     account_id = account["id"]
@@ -127,8 +127,8 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         Depois de mostrar, pergunte se o usuario quer salvar para acompanhamento continuo.
 
         Args:
-            platform: Plataforma da rede social (instagram).
-            username: Nome de usuario na plataforma (ex: natgeo, @natgeo).
+            platform: Plataforma da rede social (instagram, youtube).
+            username: Nome de usuario na plataforma (ex: natgeo, @natgeo, @MrBeast).
 
         Returns:
             Dados do perfil e preview dos posts recentes com metricas.
@@ -136,14 +136,21 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         from src.social import get_social_provider
 
         platform = platform.lower().strip()
-        username = username.lstrip("@").lower().strip()
+        username = username.lstrip("@").strip()
+        if platform != "youtube":
+            username = username.lower()
 
         if not username:
             return "Informe o username da conta."
 
-        provider = get_social_provider()
-        if platform not in provider.supported_platforms():
-            return f"Plataforma '{platform}' nao suportada. Opcoes: {', '.join(provider.supported_platforms())}"
+        SUPPORTED_PLATFORMS = ["instagram", "youtube"]
+        if platform not in SUPPORTED_PLATFORMS:
+            return f"Plataforma '{platform}' nao suportada. Opcoes: {', '.join(SUPPORTED_PLATFORMS)}"
+
+        try:
+            provider = get_social_provider(platform)
+        except Exception as e:
+            return f"Plataforma '{platform}' nao esta configurada: {e}"
 
         # Check if already tracked
         existing = get_tracked_account_by_username(user_id, platform, username)
@@ -173,17 +180,21 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
             logger.warning("Erro ao buscar posts de @%s: %s", username, e)
             posts = []
 
+        followers_label = "Inscritos" if platform == "youtube" else "Seguidores"
+        content_label = "Videos" if platform == "youtube" else "Posts"
+
         lines = [
             f"**@{profile.username}** ({platform})\n",
             f"**{profile.display_name}**",
             f"{profile.bio[:200] if profile.bio else 'Sem bio'}\n",
-            f"Seguidores: {profile.followers_count:,} · Posts: {profile.posts_count:,}\n",
+            f"{followers_label}: {profile.followers_count:,} · {content_label}: {profile.posts_count:,}\n",
         ]
 
         if posts:
-            # Sort by engagement for preview
-            sorted_posts = sorted(posts, key=lambda p: p.likes_count, reverse=True)
-            lines.append(f"**Top {min(5, len(sorted_posts))} posts por engajamento:**\n")
+            # Sort by engagement for preview (views for YouTube, likes for others)
+            sort_key = (lambda p: p.views_count) if platform == "youtube" else (lambda p: p.likes_count)
+            sorted_posts = sorted(posts, key=sort_key, reverse=True)
+            lines.append(f"**Top {min(5, len(sorted_posts))} {content_label.lower()} por engajamento:**\n")
             for i, post in enumerate(sorted_posts[:5], 1):
                 caption_preview = (post.caption or "")[:80]
                 if len(post.caption or "") > 80:
@@ -208,8 +219,8 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         Use DEPOIS de preview_account, quando o usuario confirmar que quer acompanhar.
 
         Args:
-            platform: Plataforma da rede social (instagram).
-            username: Nome de usuario na plataforma (ex: natgeo, @natgeo).
+            platform: Plataforma da rede social (instagram, youtube).
+            username: Nome de usuario na plataforma (ex: natgeo, @natgeo, @MrBeast).
 
         Returns:
             Confirmacao com dados do perfil ou mensagem de erro.
@@ -217,10 +228,16 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         from src.social import get_social_provider
 
         platform = platform.lower().strip()
-        username = username.lstrip("@").lower().strip()
+        username = username.lstrip("@").strip()
+        if platform != "youtube":
+            username = username.lower()
 
         if not username:
             return "Informe o username da conta para monitorar."
+
+        SUPPORTED_PLATFORMS = ["instagram", "youtube"]
+        if platform not in SUPPORTED_PLATFORMS:
+            return f"Plataforma '{platform}' nao suportada. Opcoes: {', '.join(SUPPORTED_PLATFORMS)}"
 
         # Check feature gate
         from src.config.feature_gates import is_feature_enabled, get_plan_limit
@@ -236,9 +253,10 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
                 f"Remova uma conta existente ou faca upgrade."
             )
 
-        provider = get_social_provider()
-        if platform not in provider.supported_platforms():
-            return f"Plataforma '{platform}' nao suportada. Opcoes: {', '.join(provider.supported_platforms())}"
+        try:
+            provider = get_social_provider(platform)
+        except Exception as e:
+            return f"Plataforma '{platform}' nao esta configurada: {e}"
 
         # Check if already tracked
         existing = get_tracked_account_by_username(user_id, platform, username)
@@ -295,7 +313,7 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         Parar de monitorar uma conta de rede social.
 
         Args:
-            platform: Plataforma (instagram).
+            platform: Plataforma (instagram, youtube).
             username: Username da conta para parar de monitorar.
 
         Returns:
@@ -326,7 +344,7 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
 
         lines = [f"**{len(accounts)} conta(s) monitorada(s):**\n"]
         for acc in accounts:
-            platform_icon = {"instagram": "📸"}.get(acc["platform"], "🌐")
+            platform_icon = {"instagram": "📸", "youtube": "🎬"}.get(acc["platform"], "🌐")
             last = acc.get("last_fetched_at", "")
             last_str = _format_relative_time(last) if last else "nunca atualizado"
             lines.append(
@@ -343,7 +361,7 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         Retorna insights sobre topicos, engajamento e tendencias.
 
         Args:
-            platform: Plataforma (instagram).
+            platform: Plataforma (instagram, youtube).
             username: Username da conta para analisar.
 
         Returns:
@@ -385,14 +403,22 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
                 f"{len(post_images)} posts listados acima, na mesma ordem."
             )
 
+        platform_name = "YouTube" if platform == "youtube" else "Instagram"
+        followers_label = "Inscritos" if platform == "youtube" else "Seguidores"
+
+        if platform == "youtube":
+            format_line = "2. Formatos que mais funcionam (video longo, shorts, lives)\n"
+        else:
+            format_line = "2. Formatos que mais funcionam (carrossel, foto, video, reels)\n"
+
         analysis = _run_analysis(
-            f"Analise os posts recentes da conta @{username} do Instagram.\n\n"
+            f"Analise os posts recentes da conta @{username} do {platform_name}.\n\n"
             f"Perfil: {account.get('display_name', '')} - {account.get('bio', '')}\n"
-            f"Seguidores: {account.get('followers_count', 0):,}\n\n"
+            f"{followers_label}: {account.get('followers_count', 0):,}\n\n"
             f"Posts recentes:\n{posts_text}\n\n"
             f"Faca uma analise detalhada incluindo:\n"
             f"1. Principais topicos e tematicas abordadas\n"
-            f"2. Formatos que mais funcionam (carrossel, foto, video, reels)\n"
+            f"{format_line}"
             f"3. Padroes de engajamento (o que gera mais likes/comentarios)\n"
             f"4. Hashtags mais usadas e efetivas\n"
             f"5. Tom e estilo de comunicacao\n"
@@ -414,7 +440,7 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         Mapeia o que funciona melhor em formato, tematica e abordagem.
 
         Args:
-            platform: Plataforma (instagram).
+            platform: Plataforma (instagram, youtube).
             username: Username da conta.
 
         Returns:
@@ -468,7 +494,7 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         saber do que trata um post, ou pedir analise visual.
 
         Args:
-            platform: Plataforma (instagram).
+            platform: Plataforma (instagram, youtube).
             username: Username da conta (nao precisa estar monitorada).
             sort: Ordenacao - 'recent' para mais recentes, 'top' para mais engajamento.
             limit: Quantidade de posts para analisar (1 a 5).
@@ -505,7 +531,7 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         # Not tracked or no posts — fetch on-the-fly
         if not posts:
             try:
-                provider = get_social_provider()
+                provider = get_social_provider(platform)
                 raw_posts = _run_async(
                     provider.get_recent_posts(platform, username, limit=limit)
                 )
@@ -541,8 +567,9 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
 
         user_question = question.strip() if question else "Descreva o conteudo de cada post de forma detalhada."
 
+        platform_name = "YouTube" if platform == "youtube" else "Instagram"
         prompt = (
-            f"Voce esta olhando para {len(posts)} post(s) da conta @{username} no Instagram.\n\n"
+            f"Voce esta olhando para {len(posts)} post(s) da conta @{username} no {platform_name}.\n\n"
             f"Dados dos posts:\n{posts_text}\n\n"
         )
         if post_images:
@@ -574,7 +601,7 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         referencias de uma conta monitorada. Gera a estrutura pronta para uso.
 
         Args:
-            platform: Plataforma da referencia (instagram).
+            platform: Plataforma da referencia (instagram, youtube).
             reference_username: Username da conta de referencia.
             content_type: Tipo de conteudo a criar (carousel, video, reels).
             topic: Tema especifico (opcional).
@@ -663,7 +690,7 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         postar algo com engajamento muito acima da media.
 
         Args:
-            platform: Plataforma (instagram).
+            platform: Plataforma (instagram, youtube).
             username: Username da conta monitorada.
             enabled: True para ativar alertas, False para desativar.
 
