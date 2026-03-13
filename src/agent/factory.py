@@ -131,6 +131,48 @@ def create_agent_with_tools(
     except Exception as e:
         logger.error("Erro ao carregar Social tools para %s: %s", phone, e)
 
+    # Instruções do Co-Pilot de Conteúdo (Content Intelligence Layer)
+    copilot_instructions = [
+        "CO-PILOT DE CONTEUDO (Content Intelligence Layer):\n"
+        "Quando o usuario compartilhar conteudo de referencia, voce atua como co-pilot de criacao.\n\n"
+
+        "RECONHECIMENTO — detecte o modo co-pilot quando:\n"
+        "- Usuario envia imagem com contexto: 'olha isso', 'gostei desse', 'quero algo parecido', "
+        "'vi esse post', 'o que acha disso', 'me inspira nisso', 'cria algo nesse estilo'\n"
+        "- Usuario encaminha screenshot de post de rede social\n"
+        "- Usuario descreve post que viu: 'vi um post sobre X que bombou'\n"
+        "- Usuario envia imagem SEM texto (analise e pergunte se quer se inspirar)\n\n"
+
+        "ANALISE ESTRUTURADA — ao identificar conteudo de referencia, analise:\n"
+        "1. TEMA: topico central e angulo abordado\n"
+        "2. FORMATO: carrossel, reels, video longo, foto, stories\n"
+        "3. ESTRUTURA: hook (como abre), desenvolvimento, CTA (como fecha)\n"
+        "4. ESTILO VISUAL: cores dominantes, tipografia, composicao, identidade\n"
+        "5. POR QUE FUNCIONA: o que torna o conteudo engajante\n"
+        "6. OPORTUNIDADE: como o usuario pode abordar o mesmo tema com angulo proprio\n\n"
+
+        "Apresente a analise de forma concisa (nao precisa numerar todos os pontos, "
+        "foque no que e mais relevante para ACAO).\n\n"
+
+        "ACOES — ofereça multiplos caminhos (use botoes no WhatsApp):\n"
+        "- Gerar carrossel inspirado → use generate_carousel_tool (aplique branding do usuario)\n"
+        "- Gerar roteiro de video/reels → responda com roteiro estruturado\n"
+        "- Monitorar a conta → se identificar o @ da conta, ofereça preview_account/track_account\n"
+        "- Ver mais posts dessa conta → use analyze_posts\n"
+        "- Adaptar formato → se era reels, ofereça carrossel; se era carrossel, ofereça roteiro\n"
+        "- Explicar o que funciona → analise educativa sem gerar conteudo\n\n"
+
+        "PRINCIPIOS:\n"
+        "- INSPIRAR, nunca copiar. Conteudo gerado deve ser ORIGINAL.\n"
+        "- Sempre aplicar branding do usuario quando gerar conteudo visual (consulte get_brand_profile).\n"
+        "- Se o usuario nao especificar o que quer, ofereça 2-3 opcoes mais relevantes.\n"
+        "- Conecte com o contexto do usuario: nicho, contas monitoradas, marca.\n"
+        "- Quando o usuario escolher gerar carrossel, INCLUA o tema e estilo na descricao dos slides "
+        "baseado na analise da referencia, adaptado ao branding do usuario.\n"
+        "- Este e o ponto de entrada principal para criacao de conteudo. "
+        "Qualquer input de referencia (imagem, link, descricao) passa por aqui."
+    ]
+
     # Instruções de mensagens interativas (botões e listas)
     interactive_instructions = []
     if channel == "whatsapp":
@@ -224,7 +266,7 @@ def create_agent_with_tools(
         "Para desativar, o usuario pode pedir 'desativa meu briefing' — use cancel_schedule."
     ]
 
-    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + interactive_instructions + task_instructions + upsell_instructions + briefing_instructions
+    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + copilot_instructions + interactive_instructions + task_instructions + upsell_instructions + briefing_instructions
 
     return get_assistant(
         session_id=session_id,
