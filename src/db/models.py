@@ -48,6 +48,8 @@ class User(Base):
     stripe_customer_id = Column(String)
     terms_accepted_version = Column(String)
     terms_accepted_at = Column(DateTime(timezone=True))
+    trend_alerts_enabled = Column(String, default="false")
+    last_trend_alert_at = Column(DateTime(timezone=True))
 
     chat_messages = relationship("ChatMessage", back_populates="user")
     tasks = relationship("Task", back_populates="user")

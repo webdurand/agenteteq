@@ -716,6 +716,34 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
             )
         return f"Alertas desativados para @{username}."
 
+    def toggle_trend_alerts(enabled: bool = True) -> str:
+        """
+        Ativa ou desativa alertas de TENDENCIAS do nicho.
+        Quando ativado, voce recebe uma notificacao no WhatsApp quando o TEQ
+        detectar um tema em comum entre 2+ contas monitoradas — indicando
+        uma tendencia no seu nicho que vale criar conteudo sobre.
+        Maximo 1 alerta por dia.
+
+        Args:
+            enabled: True para ativar, False para desativar.
+
+        Returns:
+            Confirmacao.
+        """
+        from src.models.social import set_trend_alerts_enabled
+
+        ok = set_trend_alerts_enabled(user_id, enabled)
+        if not ok:
+            return "Nao consegui atualizar as configuracoes."
+
+        if enabled:
+            return (
+                "Alertas de tendencias ativados! "
+                "Vou te avisar no WhatsApp quando detectar um tema em alta "
+                "entre as contas que voce monitora (maximo 1 alerta por dia)."
+            )
+        return "Alertas de tendencias desativados."
+
     return (
         preview_account,
         track_account,
@@ -726,6 +754,7 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         analyze_posts,
         create_content_script,
         toggle_alerts,
+        toggle_trend_alerts,
     )
 
 

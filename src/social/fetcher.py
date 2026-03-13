@@ -36,6 +36,9 @@ def fetch_all_tracked_accounts():
     # Cache providers per platform to avoid re-instantiation
     providers: dict = {}
 
+    # Collect new posts per user for trend detection
+    user_new_posts: dict[str, list[dict]] = {}
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -97,6 +100,16 @@ def fetch_all_tracked_accounts():
                 platform, username, len(new_posts), len(posts_dicts) - len(new_posts),
             )
 
+            # Collect for trend detection
+            if new_posts:
+                if user_id not in user_new_posts:
+                    user_new_posts[user_id] = []
+                user_new_posts[user_id].append({
+                    "username": username,
+                    "platform": platform,
+                    "posts": new_posts,
+                })
+
             # Spike detection — only if alerts enabled and there are new posts
             if alerts_on and new_posts:
                 try:
@@ -115,6 +128,14 @@ def fetch_all_tracked_accounts():
 
         except Exception as e:
             logger.error("Social fetcher: erro em @%s/%s: %s", platform, username, e)
+
+    # Cross-account trend detection
+    if user_new_posts:
+        try:
+            from src.social.trend_detector import detect_and_send_trend_alerts
+            detect_and_send_trend_alerts(user_new_posts, loop)
+        except Exception as e:
+            logger.error("Social fetcher: erro na deteccao de tendencias: %s", e)
 
     loop.close()
     logger.info("Social fetcher: ciclo completo.")

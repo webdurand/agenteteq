@@ -126,7 +126,16 @@ def create_agent_with_tools(
             "Se o usuario aceitar, use toggle_alerts(enabled=True). "
             "O alerta dispara automaticamente quando um post novo tem engajamento 2x acima da media. "
             "Use toggle_alerts(enabled=False) para desativar. "
-            "NAO ative alertas automaticamente — SEMPRE pergunte primeiro."
+            "NAO ative alertas automaticamente — SEMPRE pergunte primeiro.\n\n"
+            "ALERTAS DE TENDENCIAS: Alem dos alertas por conta, o usuario pode ativar alertas de TENDENCIAS. "
+            "Quando ativado, o TEQ analisa automaticamente os posts novos de TODAS as contas monitoradas "
+            "e detecta temas em comum — indicando uma tendencia no nicho. "
+            "Se detectar, envia sugestao de conteudo via WhatsApp (max 1 por dia). "
+            "Use toggle_trend_alerts(enabled=True) para ativar e toggle_trend_alerts(enabled=False) para desativar. "
+            "OFERECA ativar quando o usuario tiver 2+ contas monitoradas: "
+            "'Voce tem varias contas monitoradas. Quer que eu te avise quando detectar uma tendencia "
+            "em comum entre elas? Assim voce pode surfar os temas em alta no seu nicho.' "
+            "NAO ative automaticamente — SEMPRE pergunte primeiro."
         )
     except Exception as e:
         logger.error("Erro ao carregar Social tools para %s: %s", phone, e)

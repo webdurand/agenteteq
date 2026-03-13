@@ -5,7 +5,7 @@ from typing import Optional
 from sqlalchemy import func
 
 from src.db.session import get_db
-from src.db.models import TrackedAccount, SocialContent
+from src.db.models import TrackedAccount, SocialContent, User
 
 
 def track_account(
@@ -284,3 +284,44 @@ def get_avg_engagement(account_id: int, limit: int = 50) -> float:
             .scalar()
         )
     return float(avg) if avg else 0.0
+
+
+# ──────────────── Trend alerts (user-level) ────────────────
+
+
+def get_trend_alerts_enabled(user_id: str) -> bool:
+    """Check if user has trend alerts enabled."""
+    with get_db() as db:
+        user = db.query(User).filter(User.phone_number == user_id).first()
+        if not user:
+            return False
+        return getattr(user, "trend_alerts_enabled", "false") == "true"
+
+
+def set_trend_alerts_enabled(user_id: str, enabled: bool) -> bool:
+    """Toggle trend alerts for a user. Returns True if updated."""
+    now = datetime.now(timezone.utc)
+    with get_db() as db:
+        user = db.query(User).filter(User.phone_number == user_id).first()
+        if not user:
+            return False
+        user.trend_alerts_enabled = "true" if enabled else "false"
+    return True
+
+
+def get_last_trend_alert_at(user_id: str) -> Optional[datetime]:
+    """Get timestamp of last trend alert sent to user."""
+    with get_db() as db:
+        user = db.query(User).filter(User.phone_number == user_id).first()
+        if not user:
+            return None
+        return getattr(user, "last_trend_alert_at", None)
+
+
+def update_last_trend_alert(user_id: str) -> None:
+    """Update last trend alert timestamp to now."""
+    now = datetime.now(timezone.utc)
+    with get_db() as db:
+        user = db.query(User).filter(User.phone_number == user_id).first()
+        if user:
+            user.last_trend_alert_at = now
