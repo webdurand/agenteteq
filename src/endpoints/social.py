@@ -40,7 +40,7 @@ async def api_list_accounts(
     platform: str = Query("", description="Filter by platform"),
     user=Depends(get_current_user),
 ):
-    accounts = list_tracked_accounts(user.phone_number, platform=platform or None)
+    accounts = list_tracked_accounts(user["phone_number"], platform=platform or None)
     return {"accounts": accounts}
 
 
@@ -75,7 +75,7 @@ async def api_track_account(
         raise HTTPException(status_code=400, detail="Conta privada. So contas publicas podem ser monitoradas.")
 
     account_id = db_track_account(
-        user_id=user.phone_number,
+        user_id=user["phone_number"],
         platform=platform,
         username=profile.username,
         display_name=profile.display_name,
@@ -88,7 +88,7 @@ async def api_track_account(
     )
 
     # Fetch initial posts in background
-    background_tasks.add_task(_fetch_posts_background, account_id, user.phone_number, platform, username)
+    background_tasks.add_task(_fetch_posts_background, account_id, user["phone_number"], platform, username)
 
     account = get_tracked_account(account_id)
     return {"account": account}
@@ -97,7 +97,7 @@ async def api_track_account(
 # --- Untrack account ---
 @router.delete("/accounts/{account_id}")
 async def api_untrack_account(account_id: int, user=Depends(get_current_user)):
-    ok = db_untrack_account(account_id, user.phone_number)
+    ok = db_untrack_account(account_id, user["phone_number"])
     if not ok:
         raise HTTPException(status_code=404, detail="Conta nao encontrada.")
     return {"ok": True}
@@ -112,7 +112,7 @@ async def api_get_content(
     user=Depends(get_current_user),
 ):
     account = get_tracked_account(account_id)
-    if not account or account["user_id"] != user.phone_number:
+    if not account or account["user_id"] != user["phone_number"]:
         raise HTTPException(status_code=404, detail="Conta nao encontrada.")
 
     if sort == "likes_count":
@@ -131,13 +131,13 @@ async def api_refresh_account(
     user=Depends(get_current_user),
 ):
     account = get_tracked_account(account_id)
-    if not account or account["user_id"] != user.phone_number:
+    if not account or account["user_id"] != user["phone_number"]:
         raise HTTPException(status_code=404, detail="Conta nao encontrada.")
 
     background_tasks.add_task(
         _fetch_posts_background,
         account_id,
-        user.phone_number,
+        user["phone_number"],
         account["platform"],
         account["username"],
     )

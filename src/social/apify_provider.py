@@ -148,7 +148,7 @@ class ApifyProvider(SocialProvider):
 
     async def _run_actor(self, actor_id: str, input_data: dict) -> list[dict]:
         """Run an Apify actor synchronously and return dataset items."""
-        url = f"{APIFY_BASE}/acts/{actor_id}/run-sync-get-dataset-items"
+        url = f"{APIFY_BASE}/acts/{actor_id.replace('/', '~')}/run-sync-get-dataset-items"
         params = {"token": self.token}
         headers = {"Content-Type": "application/json"}
 

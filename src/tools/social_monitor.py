@@ -6,6 +6,7 @@ following the same pattern as scheduler_tool.py and task_manager.py.
 """
 
 import asyncio
+import concurrent.futures
 import logging
 from datetime import datetime, timezone, timedelta
 
@@ -23,6 +24,17 @@ from src.models.social import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _run_async(coro):
+    """Run an async coroutine from sync context, even inside a running event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    # Already in a running event loop — run in a new thread with its own loop
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
 
 
 def _get_light_model():
@@ -51,7 +63,7 @@ def _fetch_and_store(account: dict) -> list[dict]:
     user_id = account["user_id"]
 
     # Fetch profile update
-    profile = asyncio.get_event_loop().run_until_complete(
+    profile = _run_async(
         provider.get_profile(platform, username)
     )
     update_account_metadata(
@@ -64,7 +76,7 @@ def _fetch_and_store(account: dict) -> list[dict]:
     )
 
     # Fetch recent posts
-    posts = asyncio.get_event_loop().run_until_complete(
+    posts = _run_async(
         provider.get_recent_posts(platform, username, limit=20)
     )
 
@@ -141,10 +153,11 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
             )
 
         try:
-            profile = asyncio.get_event_loop().run_until_complete(
+            profile = _run_async(
                 provider.get_profile(platform, username)
             )
         except Exception as e:
+            logger.error("preview_account erro ao buscar perfil @%s/%s: %s", platform, username, e)
             return f"Nao consegui encontrar o perfil @{username}: {str(e)}"
 
         if profile.metadata.get("is_private"):
@@ -152,7 +165,7 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
 
         # Fetch recent posts for preview (without saving)
         try:
-            posts = asyncio.get_event_loop().run_until_complete(
+            posts = _run_async(
                 provider.get_recent_posts(platform, username, limit=10)
             )
         except Exception as e:
@@ -236,10 +249,11 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
             )
 
         try:
-            profile = asyncio.get_event_loop().run_until_complete(
+            profile = _run_async(
                 provider.get_profile(platform, username)
             )
         except Exception as e:
+            logger.error("track_account erro ao buscar perfil @%s/%s: %s", platform, username, e)
             return f"Nao consegui encontrar o perfil @{username}: {str(e)}"
 
         if profile.metadata.get("is_private"):
