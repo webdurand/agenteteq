@@ -10,7 +10,7 @@ def split_into_sentences(text: str) -> list[str]:
     return [s.strip() for s in sentences if s.strip()]
 
 from src.agent.factory import create_agent_with_tools
-from src.agent.response_utils import extract_final_response
+from src.agent.response_utils import extract_final_response, parse_interactive_elements
 from src.integrations.tts import get_tts
 from src.config.feature_gates import is_feature_enabled
 from src.memory.identity import get_user, update_user_name, update_last_seen, is_new_session, is_plan_active
@@ -325,15 +325,22 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     follow_up = _needs_follow_up(final_text)
     logger.info("[WEB WS] needs_follow_up=%s", follow_up)
 
-    await websocket.send_json({
+    parsed = parse_interactive_elements(final_text)
+    response_payload: dict = {
         "type": "response",
-        "text": final_text,
+        "text": parsed["body"],
         "audio_b64": audio_b64,
         "mime_type": mime_type,
         "needs_follow_up": follow_up,
-    })
+    }
+    if parsed["buttons"]:
+        response_payload["buttons"] = parsed["buttons"]
+    if parsed["list"]:
+        response_payload["list"] = parsed["list"]
+
+    await websocket.send_json(response_payload)
     if save_to_chat and final_text:
-        asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "agent", final_text))
+        asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "agent", parsed["body"]))
     latency = int((time.time() - start_time) * 1000)
     log_event(user_id=phone_number, channel="web", event_type="message_sent", status="success", latency_ms=latency)
     await websocket.send_json({"type": "reminder_updated"})
@@ -641,13 +648,20 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                 follow_up = _needs_follow_up(response_content)
                 logger.info("[WEB WS] needs_follow_up=%s", follow_up)
 
-                await websocket.send_json({
+                parsed_voice = parse_interactive_elements(response_content)
+                voice_payload: dict = {
                     "type": "response",
-                    "text": response_content,
+                    "text": parsed_voice["body"],
                     "audio_b64": audio_b64,
                     "mime_type": mime_type,
                     "needs_follow_up": follow_up,
-                })
+                }
+                if parsed_voice["buttons"]:
+                    voice_payload["buttons"] = parsed_voice["buttons"]
+                if parsed_voice["list"]:
+                    voice_payload["list"] = parsed_voice["list"]
+
+                await websocket.send_json(voice_payload)
                 logger.info("[WEB WS] Resposta enviada ao cliente: %s", mask_phone(phone_number))
                 latency = int((time.time() - start_time) * 1000)
                 log_event(user_id=phone_number, channel="web", event_type="message_sent", status="success", latency_ms=latency)

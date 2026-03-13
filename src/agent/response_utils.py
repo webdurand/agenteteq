@@ -10,6 +10,8 @@ A solução é extrair apenas a última mensagem final do assistente.
 """
 from __future__ import annotations
 
+import re
+
 
 def extract_final_response(response) -> str:
     """
@@ -41,6 +43,75 @@ def extract_final_response(response) -> str:
     if not text:
         text = getattr(response, "reasoning_content", None) or ""
     return text
+
+
+_BUTTONS_RE = re.compile(
+    r'\[BUTTONS\]\s*\n(.*?)\n?\s*\[/BUTTONS\]',
+    re.DOTALL | re.IGNORECASE,
+)
+
+_LIST_RE = re.compile(
+    r'\[LIST(?:\s+(.+?))?\]\s*\n(.*?)\n?\s*\[/LIST\]',
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def parse_interactive_elements(text: str) -> dict:
+    """Parse [BUTTONS] and [LIST] markup from agent response.
+
+    Returns dict with:
+      - body: text with markup removed
+      - buttons: list of {"id": str, "title": str} or None
+      - list: {"button_text": str, "sections": [{"title": str, "rows": [...]}]} or None
+    """
+    result: dict = {"body": text, "buttons": None, "list": None}
+
+    btn_match = _BUTTONS_RE.search(text)
+    if btn_match:
+        body = (text[:btn_match.start()] + text[btn_match.end():]).strip()
+        result["body"] = body
+
+        lines = [ln.strip() for ln in btn_match.group(1).strip().split('\n') if ln.strip()]
+        buttons = []
+        for i, line in enumerate(lines[:3]):
+            buttons.append({"id": f"btn_{i+1}", "title": line[:20]})
+        if buttons:
+            result["buttons"] = buttons
+        return result
+
+    list_match = _LIST_RE.search(text)
+    if list_match:
+        body = (text[:list_match.start()] + text[list_match.end():]).strip()
+        result["body"] = body
+
+        button_text = (list_match.group(1) or "Menu").strip()[:20]
+        content = list_match.group(2).strip()
+
+        rows = []
+        for j, line in enumerate(content.split('\n')):
+            line = line.strip()
+            if not line:
+                continue
+            if ' — ' in line:
+                title, desc = line.split(' — ', 1)
+            elif ' - ' in line:
+                title, desc = line.split(' - ', 1)
+            else:
+                title, desc = line, ""
+            rows.append({
+                "id": f"row_{j}",
+                "title": title.strip()[:24],
+                "description": desc.strip()[:72],
+            })
+
+        if rows:
+            result["list"] = {
+                "button_text": button_text,
+                "sections": [{"title": "", "rows": rows[:10]}],
+            }
+        return result
+
+    return result
 
 
 def split_whatsapp_messages(text: str, max_length: int = 1500) -> list[str]:

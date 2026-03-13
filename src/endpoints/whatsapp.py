@@ -16,7 +16,7 @@ from src.integrations.whatsapp import whatsapp_client
 from src.integrations.transcriber import transcriber
 from src.integrations.status_notifier import StatusNotifier
 from src.agent.factory import create_agent_with_tools
-from src.agent.response_utils import extract_final_response, split_whatsapp_messages
+from src.agent.response_utils import extract_final_response, split_whatsapp_messages, parse_interactive_elements
 from src.agent.prompts import GREETING_INJECTION
 from src.memory.identity import get_user, create_user, update_user_name, update_last_seen, is_new_session, is_plan_active
 from src.memory.knowledge import get_vector_db
@@ -232,6 +232,15 @@ def parse_webhook_payload(data: dict) -> list:
                             content_str = msg.get("image", {}).get("id", "")
                         elif msg_type == "audio":
                             content_str = msg.get("audio", {}).get("id", "")
+                        elif msg_type == "interactive":
+                            interactive = msg.get("interactive", {})
+                            int_type = interactive.get("type", "")
+                            if int_type == "button_reply":
+                                content_str = interactive.get("button_reply", {}).get("title", "")
+                            elif int_type == "list_reply":
+                                content_str = interactive.get("list_reply", {}).get("title", "")
+                            msg_type = "text"
+                            msg = {**msg, "type": "text", "text": {"body": content_str}}
 
                         if msg_id:
                             # Usar somente o id da mensagem evita duplicidade por variacoes de payload.
@@ -273,7 +282,10 @@ def parse_webhook_payload(data: dict) -> list:
                     events.append({"should_process": False, "skip_reason": "Protocol message"})
                     return events
 
-                if msg_type not in ["conversation", "extendedTextMessage", "audioMessage", "imageMessage"]:
+                if msg_type not in [
+                    "conversation", "extendedTextMessage", "audioMessage", "imageMessage",
+                    "buttonsResponseMessage", "listResponseMessage",
+                ]:
                     events.append({"should_process": False, "skip_reason": f"Tipo não suportado: {msg_type}"})
                     return events
 
@@ -317,6 +329,16 @@ def parse_webhook_payload(data: dict) -> list:
                         base64_data = json.dumps({"message": {"key": key, "message": msg_content}})
                     caption = msg_content.get("imageMessage", {}).get("caption", "")
                     normalized_msg = {"image": {"id": base64_data, "caption": caption}}
+                elif msg_type == "buttonsResponseMessage":
+                    normalized_type = "text"
+                    btn_resp = msg_content.get("buttonsResponseMessage", {})
+                    content_str = btn_resp.get("selectedDisplayText", "")
+                    normalized_msg = {"text": {"body": content_str}}
+                elif msg_type == "listResponseMessage":
+                    normalized_type = "text"
+                    list_resp = msg_content.get("listResponseMessage", {})
+                    content_str = list_resp.get("title", "")
+                    normalized_msg = {"text": {"body": content_str}}
 
                 events.append({
                     "provider": "evolution",
@@ -331,6 +353,54 @@ def parse_webhook_payload(data: dict) -> list:
             events.append({"should_process": False, "skip_reason": f"Evento não processável: {event_type}"})
 
     return events
+
+
+async def _send_whatsapp_response(to_number: str, text: str, reply_to_message_id: str | None = None):
+    """Send agent response to WhatsApp, using interactive elements (buttons/lists) if present."""
+    parsed = parse_interactive_elements(text)
+
+    if parsed["buttons"]:
+        body = parsed["body"]
+        if len(body) > 1024:
+            parts = split_whatsapp_messages(body)
+            for i, part in enumerate(parts[:-1]):
+                rid = reply_to_message_id if i == 0 else None
+                await whatsapp_client.send_text_message(to_number, part, reply_to_message_id=rid)
+            try:
+                await whatsapp_client.send_button_message(to_number, parts[-1], parsed["buttons"])
+            except Exception as e:
+                logger.warning("Fallback de botoes para texto: %s", e)
+                await whatsapp_client.send_text_message(to_number, parts[-1])
+        else:
+            try:
+                await whatsapp_client.send_button_message(
+                    to_number, body or "Escolha uma opcao:", parsed["buttons"],
+                )
+            except Exception as e:
+                logger.warning("Fallback de botoes para texto: %s", e)
+                fallback = body + "\n\n" + "\n".join(f"• {b['title']}" for b in parsed["buttons"])
+                await whatsapp_client.send_text_message(to_number, fallback, reply_to_message_id=reply_to_message_id)
+    elif parsed["list"]:
+        body = parsed["body"]
+        lst = parsed["list"]
+        try:
+            await whatsapp_client.send_list_message(
+                to_number, body or "Escolha uma opcao:", lst["button_text"], lst["sections"],
+            )
+        except Exception as e:
+            logger.warning("Fallback de lista para texto: %s", e)
+            text_rows = []
+            for sec in lst["sections"]:
+                for row in sec.get("rows", []):
+                    desc = f" — {row['description']}" if row.get("description") else ""
+                    text_rows.append(f"• {row['title']}{desc}")
+            fallback = body + "\n\n" + "\n".join(text_rows)
+            await whatsapp_client.send_text_message(to_number, fallback, reply_to_message_id=reply_to_message_id)
+    else:
+        parts = split_whatsapp_messages(text)
+        for i, part in enumerate(parts):
+            rid = reply_to_message_id if i == 0 else None
+            await whatsapp_client.send_text_message(to_number, part, reply_to_message_id=rid)
 
 
 async def orchestrate_message(event: dict):
@@ -515,9 +585,6 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
 
     if not _is_test_number(from_number):
         logger.info("Enviando resposta para %s", from_number)
-        parts = split_whatsapp_messages(final_text)
-        for i, part in enumerate(parts):
-            reply_id = message_id if i == 0 else None
-            await whatsapp_client.send_text_message(from_number, part, reply_to_message_id=reply_id)
+        await _send_whatsapp_response(from_number, final_text, reply_to_message_id=message_id)
         latency = int((time.time() - start_time) * 1000)
         log_event(user_id=from_number, channel="whatsapp", event_type="message_sent", status="success", latency_ms=latency)

@@ -12,6 +12,12 @@ class WhatsAppProvider(Protocol):
     async def send_image(self, to_number: str, image_url: str, caption: Optional[str] = None) -> dict:
         ...
 
+    async def send_button_message(self, to_number: str, body: str, buttons: list[dict], footer: Optional[str] = None) -> dict:
+        ...
+
+    async def send_list_message(self, to_number: str, body: str, button_text: str, sections: list[dict], footer: Optional[str] = None) -> dict:
+        ...
+
     async def mark_message_as_read_and_typing(self, message_id: str, to_number: str, is_audio: bool = False) -> Optional[dict]:
         ...
 
@@ -71,9 +77,59 @@ class MetaWhatsAppClient:
             response.raise_for_status()
             return response.json()
 
+    async def send_button_message(self, to_number: str, body: str, buttons: list[dict], footer: Optional[str] = None) -> dict:
+        url = f"{self.base_url}/{self.phone_number_id}/messages"
+        interactive: dict = {
+            "type": "button",
+            "body": {"text": body[:1024]},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": btn["id"], "title": btn["title"][:20]}}
+                    for btn in buttons[:3]
+                ]
+            }
+        }
+        if footer:
+            interactive["footer"] = {"text": footer[:60]}
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": to_number,
+            "type": "interactive",
+            "interactive": interactive,
+        }
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, headers=self._get_headers())
+            response.raise_for_status()
+            return response.json()
+
+    async def send_list_message(self, to_number: str, body: str, button_text: str, sections: list[dict], footer: Optional[str] = None) -> dict:
+        url = f"{self.base_url}/{self.phone_number_id}/messages"
+        interactive: dict = {
+            "type": "list",
+            "body": {"text": body[:1024]},
+            "action": {
+                "button": button_text[:20],
+                "sections": sections,
+            }
+        }
+        if footer:
+            interactive["footer"] = {"text": footer[:60]}
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": to_number,
+            "type": "interactive",
+            "interactive": interactive,
+        }
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, headers=self._get_headers())
+            response.raise_for_status()
+            return response.json()
+
     async def mark_message_as_read_and_typing(self, message_id: str, to_number: str, is_audio: bool = False) -> Optional[dict]:
         """
-        Marca a mensagem como lida e exibe um indicador de "digitando..." ou "gravando áudio...".
+        Marca a mensagem como lida e exibe um indicador de "digitando...".
         """
         url = f"{self.base_url}/{self.phone_number_id}/messages"
         payload = {
@@ -81,10 +137,10 @@ class MetaWhatsAppClient:
             "status": "read",
             "message_id": message_id,
             "typing_indicator": {
-                "type": "audio" if is_audio else "text"
+                "type": "text"
             }
         }
-        
+
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(url, json=payload, headers=self._get_headers())
@@ -158,9 +214,58 @@ class EvolutionWhatsAppClient:
             response.raise_for_status()
             return response.json()
 
+    async def send_button_message(self, to_number: str, body: str, buttons: list[dict], footer: Optional[str] = None) -> dict:
+        url = f"{self.api_url}/message/sendButtons/{self.instance_name}"
+        payload: dict = {
+            "number": to_number,
+            "title": "",
+            "description": body,
+            "buttons": [
+                {"type": "reply", "displayText": btn["title"][:20], "id": btn["id"]}
+                for btn in buttons[:3]
+            ],
+        }
+        if footer:
+            payload["footer"] = footer[:60]
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(url, json=payload, headers=self._get_headers())
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            logger.warning("Botoes nao suportados na Evolution API, enviando como texto: %s", e)
+            text_buttons = "\n".join(f"• {btn['title']}" for btn in buttons)
+            return await self.send_text_message(to_number, f"{body}\n\n{text_buttons}")
+
+    async def send_list_message(self, to_number: str, body: str, button_text: str, sections: list[dict], footer: Optional[str] = None) -> dict:
+        url = f"{self.api_url}/message/sendList/{self.instance_name}"
+        payload: dict = {
+            "number": to_number,
+            "title": "",
+            "description": body,
+            "buttonText": button_text[:20],
+            "footerText": footer or "",
+            "sections": sections,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(url, json=payload, headers=self._get_headers())
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            logger.warning("Lista nao suportada na Evolution API, enviando como texto: %s", e)
+            text_rows = []
+            for sec in sections:
+                if sec.get("title"):
+                    text_rows.append(f"*{sec['title']}*")
+                for row in sec.get("rows", []):
+                    desc = f" — {row['description']}" if row.get("description") else ""
+                    text_rows.append(f"• {row['title']}{desc}")
+            return await self.send_text_message(to_number, f"{body}\n\n" + "\n".join(text_rows))
+
     async def mark_message_as_read_and_typing(self, message_id: str, to_number: str, is_audio: bool = False) -> Optional[dict]:
         """
-        Envia indicador de digitando/gravando e tenta marcar como lido na Evolution API.
+        Envia indicador de digitando e tenta marcar como lido na Evolution API.
         """
         try:
             async with httpx.AsyncClient() as client:
@@ -183,7 +288,7 @@ class EvolutionWhatsAppClient:
                 presence_payload = {
                     "number": to_number,
                     "delay": 25000,
-                    "presence": "recording" if is_audio else "composing"
+                    "presence": "composing"
                 }
                 
                 response = await client.post(presence_url, json=presence_payload, headers=self._get_headers())

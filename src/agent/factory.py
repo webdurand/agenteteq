@@ -114,7 +114,50 @@ def create_agent_with_tools(
     except Exception as e:
         logger.error("Erro ao carregar Social tools para %s: %s", phone, e)
 
-    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions
+    # Instruções de mensagens interativas (botões e listas)
+    interactive_instructions = []
+    if channel == "whatsapp":
+        interactive_instructions.append(
+            "MENSAGENS INTERATIVAS: Voce pode incluir botoes e listas nas suas respostas. "
+            "O usuario vera botoes clicaveis no WhatsApp em vez de ter que digitar. "
+            "Use o formato abaixo NO FINAL da sua resposta (apos o texto):\n\n"
+            "Para BOTOES (max 3 opcoes, max 20 caracteres cada):\n"
+            "[BUTTONS]\n"
+            "Opcao 1\n"
+            "Opcao 2\n"
+            "Opcao 3\n"
+            "[/BUTTONS]\n\n"
+            "Para LISTAS (menus com mais opcoes):\n"
+            "[LIST Menu]\n"
+            "Item 1 — descricao curta\n"
+            "Item 2 — descricao curta\n"
+            "[/LIST]\n\n"
+            "QUANDO USAR BOTOES:\n"
+            "- Confirmar acao: Sim / Nao\n"
+            "- Aprovar carrossel: Aprovado / Ajustar / Refazer\n"
+            "- Completar task: Concluida / Adiar / Ver detalhes\n"
+            "- Escolha entre 2-3 opcoes claras\n"
+            "- Apos criar lembrete com due_date: Lembrar 1 dia antes / Lembrar no dia / Ambos\n"
+            "QUANDO NAO USAR BOTOES:\n"
+            "- Respostas informativas (o usuario perguntou algo, voce respondeu)\n"
+            "- Perguntas abertas que precisam de texto livre\n"
+            "- Conversas casuais\n"
+            "NAO use botoes em TODA resposta. Use somente quando facilita a interacao com escolhas claras."
+        )
+    elif channel in ("web_text", "web_voice"):
+        interactive_instructions.append(
+            "BOTOES INTERATIVOS: Voce pode incluir botoes clicaveis nas respostas. "
+            "Use o formato no FINAL da resposta:\n"
+            "[BUTTONS]\n"
+            "Opcao 1\n"
+            "Opcao 2\n"
+            "[/BUTTONS]\n\n"
+            "Use apenas quando a resposta pede confirmacao ou escolha entre poucas opcoes (2-3). "
+            "Exemplos: aprovar carrossel, confirmar acao, escolher entre opcoes. "
+            "NAO use em respostas informativas ou conversas casuais."
+        )
+
+    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + interactive_instructions
 
     return get_assistant(
         session_id=session_id,
