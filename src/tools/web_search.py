@@ -195,7 +195,8 @@ def create_fetch_page_tool(notifier: StatusNotifier):
         if _is_blocked_url(url):
             return (
                 f"Nao consegui acessar {url} — redes sociais bloqueiam acesso de robos. "
-                "Futuramente vou ter integracao direta com essas plataformas."
+                "Use a ferramenta track_account para monitorar contas de redes sociais "
+                "e get_account_insights para analisar o conteudo."
             )
         if notifier:
             notifier.notify("Beleza, vou dar uma olhada nesse link e já te respondo!")
@@ -220,7 +221,8 @@ def create_explore_site_tool(notifier: StatusNotifier):
         if _is_blocked_url(url):
             return (
                 f"Nao consegui acessar {url} — redes sociais bloqueiam acesso de robos. "
-                "Futuramente vou ter integracao direta com essas plataformas."
+                "Use a ferramenta track_account para monitorar contas de redes sociais "
+                "e get_account_insights para analisar o conteudo."
             )
         if notifier:
             notifier.notify("Explorando as seções desse site, só um momento...")

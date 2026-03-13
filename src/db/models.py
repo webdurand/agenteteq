@@ -493,6 +493,97 @@ class ProcessedMessage(Base):
 # ──────────────────────────── Image Sessions ────────────────────────────
 
 
+# ──────────────────────────── Social Monitoring ────────────────────────────
+
+
+class TrackedAccount(Base):
+    __tablename__ = "tracked_accounts"
+    __table_args__ = (
+        Index("idx_tracked_accounts_user", "user_id", "platform"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, nullable=False)
+    platform = Column(String, nullable=False)           # "instagram", "youtube", "tiktok"
+    username = Column(String, nullable=False)
+    display_name = Column(String)
+    profile_url = Column(String)
+    profile_pic_url = Column(String)
+    bio = Column(Text)
+    followers_count = Column(Integer)
+    posts_count = Column(Integer)
+    metadata_json = Column(Text, default="{}")
+    status = Column(String, default="active")           # active, paused, error
+    last_fetched_at = Column(String)
+    created_at = Column(String, nullable=False)
+    updated_at = Column(String)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "platform": self.platform,
+            "username": self.username,
+            "display_name": self.display_name,
+            "profile_url": self.profile_url,
+            "profile_pic_url": self.profile_pic_url,
+            "bio": self.bio,
+            "followers_count": self.followers_count,
+            "posts_count": self.posts_count,
+            "status": self.status,
+            "last_fetched_at": self.last_fetched_at,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+class SocialContent(Base):
+    __tablename__ = "social_content"
+    __table_args__ = (
+        Index("idx_social_content_account", "tracked_account_id", "posted_at"),
+        Index("idx_social_content_platform_id", "platform", "platform_post_id", unique=True),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tracked_account_id = Column(Integer, ForeignKey("tracked_accounts.id"), nullable=False)
+    user_id = Column(String, nullable=False)
+    platform = Column(String, nullable=False)
+    platform_post_id = Column(String, nullable=False)
+    content_type = Column(String)                        # image, video, carousel, reel
+    caption = Column(Text)
+    hashtags_json = Column(Text, default="[]")
+    media_urls_json = Column(Text, default="[]")
+    thumbnail_url = Column(String)
+    likes_count = Column(Integer, default=0)
+    comments_count = Column(Integer, default=0)
+    views_count = Column(Integer, default=0)
+    engagement_rate = Column(String)
+    posted_at = Column(String)
+    fetched_at = Column(String, nullable=False)
+    analysis_summary = Column(Text)
+
+    def to_dict(self) -> dict:
+        import json
+        return {
+            "id": self.id,
+            "tracked_account_id": self.tracked_account_id,
+            "platform": self.platform,
+            "platform_post_id": self.platform_post_id,
+            "content_type": self.content_type,
+            "caption": self.caption,
+            "hashtags": json.loads(self.hashtags_json) if self.hashtags_json else [],
+            "media_urls": json.loads(self.media_urls_json) if self.media_urls_json else [],
+            "thumbnail_url": self.thumbnail_url,
+            "likes_count": self.likes_count,
+            "comments_count": self.comments_count,
+            "views_count": self.views_count,
+            "engagement_rate": self.engagement_rate,
+            "posted_at": self.posted_at,
+            "fetched_at": self.fetched_at,
+            "analysis_summary": self.analysis_summary,
+        }
+
+
 class ImageSession(Base):
     __tablename__ = "image_sessions"
 

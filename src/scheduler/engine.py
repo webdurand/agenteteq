@@ -96,6 +96,16 @@ def start_scheduler():
             misfire_grace_time=10
         )
         
+        from src.social.fetcher import fetch_all_tracked_accounts
+        scheduler.add_job(
+            fetch_all_tracked_accounts,
+            trigger="interval",
+            hours=int(os.getenv("SOCIAL_FETCH_INTERVAL_HOURS", "6")),
+            id="social_media_fetcher",
+            replace_existing=True,
+            misfire_grace_time=600,
+        )
+
         reconcile_reminders()
 
 

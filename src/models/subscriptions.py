@@ -15,6 +15,8 @@ FREE_LIMITS = {
     "tts_enabled": False,
     "max_searches_daily": 10,
     "max_deep_research_daily": 1,
+    "social_monitoring_enabled": True,
+    "max_tracked_accounts": 3,
 }
 
 PAID_LIMITS = {
@@ -25,6 +27,8 @@ PAID_LIMITS = {
     "tts_enabled": True,
     "max_searches_daily": 50,
     "max_deep_research_daily": 3,
+    "social_monitoring_enabled": True,
+    "max_tracked_accounts": 20,
 }
 
 

@@ -71,7 +71,27 @@ def create_agent_with_tools(
     except Exception as e:
         logger.error("Erro ao carregar Slack tools para %s: %s", phone, e)
 
-    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions
+    # Injeta Social Monitoring tools
+    social_instructions = []
+    try:
+        from src.tools.social_monitor import create_social_tools
+        social_tools_tuple = create_social_tools(phone, channel=channel)
+        search_tools.extend(social_tools_tuple)
+        social_instructions.append(
+            "SOCIAL MONITORING: O usuario pode monitorar contas de redes sociais como referencia de conteudo. "
+            "FLUXO IMPORTANTE: Quando o usuario mencionar um perfil de rede social (ex: '@fulano do instagram', "
+            "'me mostra o conteudo do natgeo'), PRIMEIRO use preview_account para buscar e MOSTRAR o perfil "
+            "e os posts com metricas. SO DEPOIS pergunte se ele quer salvar para monitoramento continuo. "
+            "Se o usuario confirmar, use track_account para salvar. "
+            "Use list_tracked_accounts para ver as contas ja monitoradas. "
+            "Use get_account_insights para analises de conteudo, topicos e tendencias de uma conta JA monitorada. "
+            "Use get_trending_content para ver os posts com mais engajamento de uma conta JA monitorada. "
+            "Use create_content_script para gerar roteiros de carrossel/video inspirados em uma referencia."
+        )
+    except Exception as e:
+        logger.error("Erro ao carregar Social tools para %s: %s", phone, e)
+
+    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions
 
     return get_assistant(
         session_id=session_id,
