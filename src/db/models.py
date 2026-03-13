@@ -149,6 +149,8 @@ class Task(Base):
     due_date = Column(String)
     location = Column(String)
     notes = Column(Text)
+    priority = Column(String)       # high, medium, low
+    category = Column(String)       # user-defined label
     status = Column(String, default="pending")
     created_at = Column(String, nullable=False)
 
@@ -162,6 +164,8 @@ class Task(Base):
             "due_date": self.due_date,
             "location": self.location,
             "notes": self.notes,
+            "priority": self.priority,
+            "category": self.category,
             "status": self.status,
             "created_at": self.created_at,
         }

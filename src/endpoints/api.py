@@ -27,10 +27,18 @@ class TaskCreate(BaseModel):
     due_date: Optional[str] = ""
     location: Optional[str] = ""
     notes: Optional[str] = ""
+    priority: Optional[str] = ""
+    category: Optional[str] = ""
 
 class TaskUpdate(BaseModel):
     status: Optional[str] = None
-    # No futuro, podemos adicionar suporte para atualizar outros campos da tarefa.
+    title: Optional[str] = None
+    description: Optional[str] = None
+    due_date: Optional[str] = None
+    location: Optional[str] = None
+    notes: Optional[str] = None
+    priority: Optional[str] = None
+    category: Optional[str] = None
 
 class ReminderCreate(BaseModel):
     task_instructions: str
@@ -73,7 +81,9 @@ async def api_create_task(task: TaskCreate, background_tasks: BackgroundTasks, c
         description=task.description,
         due_date=task.due_date,
         location=task.location,
-        notes=task.notes
+        notes=task.notes,
+        priority=task.priority,
+        category=task.category,
     )
     background_tasks.add_task(emit_event, user_id, "task_updated")
     return {"message": result}
@@ -81,13 +91,29 @@ async def api_create_task(task: TaskCreate, background_tasks: BackgroundTasks, c
 @router.put("/tasks/{task_id}")
 async def api_update_task(task_id: int, task: TaskUpdate, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     user_id = current_user["phone_number"]
-    if task.status == "done":
-        result = complete_task(user_id, task_id)
-    elif task.status == "pending":
-        result = reopen_task(user_id, task_id)
-    else:
+
+    # Handle status changes via existing functions
+    if task.status in ("done", "pending"):
+        if task.status == "done":
+            result = complete_task(user_id, task_id)
+        else:
+            result = reopen_task(user_id, task_id)
+    elif task.status is not None:
         raise HTTPException(status_code=400, detail="Invalid status")
-    
+    else:
+        result = "ok"
+
+    # Handle field updates (title, priority, category, etc.)
+    field_updates = task.model_dump(exclude_none=True, exclude={"status"})
+    if field_updates:
+        from src.db.models import Task as TaskModel
+        with get_db() as db:
+            row = db.query(TaskModel).filter(TaskModel.id == task_id, TaskModel.user_id == user_id).first()
+            if not row:
+                raise HTTPException(status_code=404, detail="Tarefa não encontrada.")
+            for key, value in field_updates.items():
+                setattr(row, key, value)
+
     background_tasks.add_task(emit_event, user_id, "task_updated")
     return {"message": result}
 

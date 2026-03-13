@@ -17,6 +17,8 @@ def add_task(
     due_date: str = "",
     location: str = "",
     notes: str = "",
+    priority: str = "",
+    category: str = "",
     channel: str = "unknown",
 ) -> str:
     """
@@ -29,12 +31,14 @@ def add_task(
         due_date: Prazo ou data/hora no formato ISO 8601 ou texto livre (ex: '2026-03-02 10:00'). Opcional.
         location: Endereço ou local relacionado à tarefa (opcional).
         notes: Informações adicionais ou observações (opcional).
+        priority: Prioridade — 'high', 'medium' ou 'low'. Opcional — infira do contexto se o usuário não especificar.
+        category: Categoria/label (ex: 'Trabalho', 'Pessoal', 'Conteúdo'). Opcional — infira do contexto.
         channel: Canal de origem (web, whatsapp, etc).
 
     Returns:
         Mensagem de confirmação com o ID da tarefa criada.
     """
-    logger.info("add_task | user=%s | titulo='%s' | prazo='%s' | local='%s'", user_id, title, due_date, location)
+    logger.info("add_task | user=%s | titulo='%s' | prazo='%s' | prioridade='%s' | categoria='%s'", user_id, title, due_date, priority, category)
     created_at = datetime.now().isoformat()
     try:
         with get_db() as db:
@@ -45,6 +49,8 @@ def add_task(
                 due_date=due_date,
                 location=location,
                 notes=notes,
+                priority=priority or None,
+                category=category or None,
                 status="pending",
                 created_at=created_at,
             )
@@ -62,7 +68,10 @@ def add_task(
         logger.error("Erro ao adicionar tarefa: %s", e)
         return f"Erro ao adicionar tarefa: {e}"
 
-def list_tasks(user_id: str, status: str = "pending") -> str:
+_PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+_PRIORITY_EMOJI = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+
+def list_tasks(user_id: str, status: str = "pending", category: str = "") -> str:
     """
     Lista as tarefas do usuário.
 
@@ -70,16 +79,19 @@ def list_tasks(user_id: str, status: str = "pending") -> str:
         user_id: Número de telefone do usuário.
         status: Filtro de status — 'pending' para tarefas abertas, 'done' para concluídas.
                 Use 'all' para listar todas. Padrão: 'pending'.
+        category: Filtrar por categoria (ex: 'Trabalho'). Opcional — se vazio lista todas.
 
     Returns:
         Lista formatada das tarefas ou mensagem informando que não há tarefas.
     """
-    logger.info("list_tasks | user=%s | status=%s", user_id, status)
+    logger.info("list_tasks | user=%s | status=%s | category=%s", user_id, status, category)
     try:
         with get_db() as db:
             q = db.query(Task).filter(Task.user_id == user_id)
             if status != "all":
                 q = q.filter(Task.status == status)
+            if category:
+                q = q.filter(Task.category == category)
             q = q.order_by(Task.created_at.asc())
             rows = q.all()
 
@@ -87,10 +99,18 @@ def list_tasks(user_id: str, status: str = "pending") -> str:
             label = {"pending": "abertas", "done": "concluídas", "all": ""}.get(status, status)
             return f"Nenhuma tarefa {label} encontrada." if label else "Nenhuma tarefa encontrada."
 
+        # Sort by priority (high first), then by created_at
+        rows.sort(key=lambda t: (_PRIORITY_ORDER.get(t.priority or "", 9), t.created_at or ""))
+
         lines = []
         for t in rows:
             emoji = "✅" if t.status == "done" else "🔲"
+            prio = _PRIORITY_EMOJI.get(t.priority or "", "")
             line = f"{emoji} #{t.id} — {t.title}"
+            if prio:
+                line += f" {prio}"
+            if t.category:
+                line += f" [{t.category}]"
             if t.due_date:
                 line += f"\n   📅 Prazo: {t.due_date}"
             if t.location:
@@ -235,6 +255,8 @@ def create_task_tools(user_id: str, channel: str = "unknown"):
         due_date: str = "",
         location: str = "",
         notes: str = "",
+        priority: str = "",
+        category: str = "",
     ) -> str:
         """
         Adiciona uma tarefa à lista do usuário.
@@ -245,24 +267,27 @@ def create_task_tools(user_id: str, channel: str = "unknown"):
             due_date: Prazo ou data/hora no formato ISO 8601 ou texto livre (ex: '2026-03-02 10:00'). Opcional.
             location: Endereço ou local relacionado à tarefa (opcional).
             notes: Informações adicionais ou observações (opcional).
+            priority: Prioridade — 'high', 'medium' ou 'low'. Opcional — infira do contexto se o usuário não especificar.
+            category: Categoria/label (ex: 'Trabalho', 'Pessoal', 'Conteúdo'). Opcional — infira do contexto.
 
         Returns:
             Mensagem de confirmação com o ID da tarefa criada.
         """
-        return add_task(user_id, title, description, due_date, location, notes, channel=channel)
+        return add_task(user_id, title, description, due_date, location, notes, priority=priority, category=category, channel=channel)
 
-    def list_tasks_tool(status: str = "pending") -> str:
+    def list_tasks_tool(status: str = "pending", category: str = "") -> str:
         """
         Lista as tarefas do usuário.
 
         Args:
             status: Filtro de status — 'pending' para tarefas abertas, 'done' para concluídas.
                     Use 'all' para listar todas. Padrão: 'pending'.
+            category: Filtrar por categoria (ex: 'Trabalho'). Opcional — se vazio lista todas.
 
         Returns:
             Lista formatada das tarefas ou mensagem informando que não há tarefas.
         """
-        return list_tasks(user_id, status)
+        return list_tasks(user_id, status, category=category)
 
     def complete_task_tool(task_id: int) -> str:
         """

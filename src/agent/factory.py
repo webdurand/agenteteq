@@ -157,7 +157,21 @@ def create_agent_with_tools(
             "NAO use em respostas informativas ou conversas casuais."
         )
 
-    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + interactive_instructions
+    # Instruções de tarefas: prioridade, categoria e auto-link com reminders
+    task_instructions = [
+        "TAREFAS — PRIORIDADE E CATEGORIA: Ao criar tarefas, INFIRA automaticamente a prioridade e categoria "
+        "do contexto quando o usuario nao especificar:\n"
+        "- Prioridade: 'high' para urgente/importante/prazo curto, 'medium' para normal, 'low' para secundario/sem pressa.\n"
+        "  Exemplos: 'entregar relatorio pro cliente sexta' → high; 'comprar cafe' → low; 'responder email do parceiro' → medium.\n"
+        "- Categoria: infira do assunto. Exemplos: 'Trabalho', 'Pessoal', 'Conteudo', 'Financeiro', 'Saude'.\n"
+        "  Se nao conseguir inferir, deixe vazio (nao invente).\n\n"
+        "TAREFAS — AUTO-LINK COM REMINDERS: Sempre que criar uma tarefa com due_date, OFERECA criar um lembrete. "
+        "Exemplo: 'Quer que eu te lembre? Posso avisar um dia antes e/ou no dia.' "
+        "Se o usuario aceitar, crie o reminder usando schedule_message com trigger_type='date' no horario adequado. "
+        "Nao crie o reminder automaticamente — SEMPRE pergunte primeiro."
+    ]
+
+    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + interactive_instructions + task_instructions
 
     return get_assistant(
         session_id=session_id,
