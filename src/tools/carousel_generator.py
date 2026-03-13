@@ -41,32 +41,43 @@ def expand_slides_from_description(
 
     if sequential:
         system_prompt = (
-            "Voce e um diretor criativo de carrosseis para Instagram. "
-            "Seu trabalho e transformar um tema em um CARROSSEL que conta uma HISTORIA com arco narrativo claro. "
+            "Voce e um diretor criativo de carrosseis PREMIUM para Instagram. "
+            "Seu trabalho e transformar um tema em um CARROSSEL profissional que conta uma HISTORIA com arco narrativo claro. "
+            "Os textos serao sobrepostos por tipografia profissional — os prompts de imagem devem gerar FUNDOS LIMPOS sem texto."
             "\n\nESTRUTURA OBRIGATORIA DO CARROSSEL:"
             "\n- SLIDE 1 (role='capa'): CAPA IMPACTANTE. Titulo bold e chamativo que gera curiosidade. "
-            "Imagem visualmente forte que prende a atencao no feed. O objetivo e fazer a pessoa parar de rolar e abrir o carrossel. "
+            "Imagem de fundo visualmente forte. O objetivo e fazer a pessoa parar de rolar e abrir o carrossel. "
             "Exemplos de gancho: 'X coisas que...', 'O segredo de...', 'Pare de fazer isso...', 'Voce nao vai acreditar...'"
             "\n- SLIDES 2 a N-1 (role='conteudo'): DESENVOLVIMENTO. Cada slide entrega UM ponto de valor. "
-            "Cada slide deve ter um tema/titulo claro e uma mensagem objetiva. "
-            "Progridem logicamente: o slide 2 complementa o 1, o 3 complementa o 2, etc. "
-            "Podem ser: dicas, passos, exemplos, comparacoes, dados, citacoes, listas."
+            "Cada slide deve ter um titulo claro e uma mensagem objetiva no body. "
+            "Progridem logicamente: o slide 2 complementa o 1, o 3 complementa o 2, etc."
             "\n- SLIDE N (role='fechamento'): FECHAMENTO FORTE. CTA (call to action) que gera engajamento. "
-            "Exemplos: 'Salva pra consultar depois', 'Comenta qual foi sua favorita', 'Manda pra alguem que precisa ver isso', "
-            "'Quer o PDF completo? Comenta EU QUERO'."
-            "\n\nREGRAS:"
-            "\n1. Defina um 'style_anchor': identidade visual compartilhada (paleta de cores, estilo artistico, "
-            "iluminacao, textura, composicao base, atmosfera) para COERENCIA VISUAL entre todos os slides."
-            "\n2. Cada prompt deve ser detalhado e descrever a CENA VISUAL especifica do slide."
-            "\n3. Inclua 'role' em cada slide: 'capa', 'conteudo' ou 'fechamento'."
-            "\n4. Os prompts devem gerar imagens que FUNCIONEM JUNTAS como carrossel, nao como fotos soltas."
+            "Exemplos de CTA: 'Salva pra consultar depois', 'Comenta qual foi sua favorita', 'Manda pra alguem que precisa ver isso'."
+            "\n\nCAMPOS OBRIGATORIOS POR SLIDE:"
+            "\n- 'prompt': descricao da IMAGEM DE FUNDO apenas. NAO inclua texto/tipografia/letras na imagem. "
+            "Inclua SEMPRE no prompt: 'sem texto, sem tipografia, sem letras, imagem de fundo limpa'. "
+            "Para capa: 'composicao com espaco livre no terco inferior para sobreposicao de texto'. "
+            "Para conteudo: 'composicao com espaco livre no topo e centro para sobreposicao de texto'. "
+            "Para fechamento: 'composicao com espaco livre no centro para sobreposicao de texto'."
+            "\n- 'title': texto do titulo que sera sobreposto via tipografia (max 50 chars)"
+            "\n- 'body': texto complementar/explicativo (max 120 chars, opcional para capa)"
+            "\n- 'cta_text': texto do CTA (APENAS no slide de fechamento, max 40 chars)"
+            "\n\nREGRAS DE DESIGN:"
+            "\n1. Defina 'style_anchor': identidade visual compartilhada DETALHADA (estilo artistico, "
+            "iluminacao, textura, composicao base, atmosfera, angulo de camera) para COERENCIA VISUAL."
+            "\n2. Defina 'color_palette' com 4 cores hex que funcionem juntas como identidade visual: "
+            "primary (fundo de overlays), accent (cor de destaque/CTA), text_primary (cor do texto principal, "
+            "geralmente branco ou preto dependendo do fundo), text_secondary (cor do texto secundario)."
+            "\n3. Os prompts de imagem devem gerar FUNDOS que funcionem juntos como set visual coeso."
+            "\n4. Cada prompt deve descrever a CENA VISUAL especifica, com mesma paleta de cores, iluminacao e estilo."
             "\n\nResponda SOMENTE com um JSON object, sem markdown, sem explicacao. "
             "Formato: {"
-            f"\"style_anchor\": \"descricao detalhada da identidade visual compartilhada\", "
-            f"\"slides\": [{{\"slide_number\": 1, \"role\": \"capa\", \"prompt\": \"...\", \"style\": \"{style}\"}}]"
+            "\"style_anchor\": \"descricao detalhada da identidade visual\", "
+            "\"color_palette\": {\"primary\": \"#hex\", \"accent\": \"#hex\", \"text_primary\": \"#hex\", \"text_secondary\": \"#hex\"}, "
+            f"\"slides\": [{{\"slide_number\": 1, \"role\": \"capa\", \"prompt\": \"...\", \"title\": \"...\", \"body\": \"...\", \"style\": \"{style}\"}}]"
             "}"
         )
-        temperature = 0.7
+        temperature = 0.5
     else:
         system_prompt = (
             "Voce e um gerador de prompts para imagens. "
@@ -94,11 +105,14 @@ def expand_slides_from_description(
 
         if sequential and isinstance(parsed, dict):
             style_anchor = parsed.get("style_anchor", "")
+            color_palette = parsed.get("color_palette", {})
             slides = parsed.get("slides", [])
             if isinstance(slides, list) and len(slides) > 0:
                 for s in slides:
                     s["style_anchor"] = style_anchor
-                logger.info("expand_slides_from_description: %s slides (sequential, anchor=%s chars)", len(slides), len(style_anchor))
+                    if color_palette:
+                        s["color_palette"] = color_palette
+                logger.info("expand_slides_from_description: %s slides (sequential, anchor=%s chars, palette=%s)", len(slides), len(style_anchor), bool(color_palette))
                 return slides[:num_slides]
         elif isinstance(parsed, list) and len(parsed) > 0:
             logger.info("expand_slides_from_description: %s slides expandidos via LLM", len(parsed))
@@ -138,24 +152,71 @@ async def _process_carousel_background(
         max_concurrent = int(get_config("max_concurrent_images", "3"))
         sem = asyncio.Semaphore(max_concurrent)
 
-        def _build_full_prompt(slide: Dict[str, Any]) -> str:
+        def _build_full_prompt(slide: Dict[str, Any], is_continuation: bool = False) -> str:
             prompt = slide.get("prompt", "")
             style = slide.get("style", "")
             style_anchor = slide.get("style_anchor", "")
+            role = slide.get("role", "conteudo")
             parts = []
             if style:
                 parts.append(f"Style: {style}.")
             if style_anchor:
                 parts.append(f"Visual identity: {style_anchor}.")
+
+            # Composição consciente de texto overlay
+            if slide.get("title") or slide.get("cta_text"):
+                if role == "capa":
+                    parts.append("Composition: leave the bottom 40% of the image clean or with soft gradient — text will be overlaid there.")
+                elif role == "conteudo":
+                    parts.append("Composition: leave the top and center area somewhat clean — text will be overlaid there.")
+                elif role == "fechamento":
+                    parts.append("Composition: leave the center of the image open and clean — call-to-action text will be overlaid.")
+                parts.append("IMPORTANT: Do not render any text, typography, letters, or words in the image. Generate a clean background only.")
+
+            if is_continuation:
+                parts.append("Maintain the exact same color grading, lighting, and visual style as the reference image.")
+
             parts.append(prompt)
             return " ".join(parts)
 
-        async def _generate_single(slide: Dict[str, Any], index: int, ref: Optional[bytes] = None) -> bytes:
-            full_prompt = _build_full_prompt(slide)
+        def _apply_overlay(slide: Dict[str, Any], index: int, image_bytes: bytes) -> bytes:
+            """Aplica text overlay se o slide tem título/body/cta."""
+            if not (slide.get("title") or slide.get("cta_text")):
+                return image_bytes
+            try:
+                from src.tools.image_generation.text_overlay import apply_text_overlay, SlideText, ColorPalette
+
+                slide_text = SlideText(
+                    role=slide.get("role", "conteudo"),
+                    title=slide.get("title", ""),
+                    body=slide.get("body", ""),
+                    slide_number=index + 1,
+                    total_slides=len(slides),
+                    cta_text=slide.get("cta_text", ""),
+                )
+                palette_data = slide.get("color_palette", {})
+                palette = ColorPalette(
+                    primary=palette_data.get("primary", "#1A1A2E"),
+                    accent=palette_data.get("accent", "#E94560"),
+                    text_primary=palette_data.get("text_primary", "#FFFFFF"),
+                    text_secondary=palette_data.get("text_secondary", "#D0D0D0"),
+                ) if palette_data else ColorPalette()
+                return apply_text_overlay(image_bytes, slide_text, palette)
+            except Exception as e:
+                logger.warning("Text overlay falhou para slide %s, usando imagem sem overlay: %s", index + 1, e)
+                return image_bytes
+
+        async def _generate_single(slide: Dict[str, Any], index: int, ref: Optional[bytes] = None) -> tuple[bytes, bytes]:
+            """Retorna (imagem_com_overlay, imagem_fundo_limpo) para permitir uso do fundo como referência."""
+            is_continuation = ref is not None and index > 0
+            full_prompt = _build_full_prompt(slide, is_continuation=is_continuation)
             if ref:
-                return await provider.edit(full_prompt, ref, aspect_ratio=aspect_ratio)
+                raw_bytes = await provider.edit(full_prompt, ref, aspect_ratio=aspect_ratio)
             else:
-                return await provider.generate(full_prompt, aspect_ratio=aspect_ratio)
+                raw_bytes = await provider.generate(full_prompt, aspect_ratio=aspect_ratio)
+
+            overlaid_bytes = _apply_overlay(slide, index, raw_bytes)
+            return overlaid_bytes, raw_bytes
 
         async def _upload_slide(image_bytes: bytes, index: int) -> str:
             loop = asyncio.get_event_loop()
@@ -171,14 +232,14 @@ async def _process_carousel_background(
             upload_result = await loop.run_in_executor(None, _upload)
             return upload_result.get("secure_url")
 
-        async def _generate_and_upload(slide: Dict[str, Any], index: int, ref: Optional[bytes] = None):
+        async def _generate_and_upload(slide: Dict[str, Any], index: int, ref: Optional[bytes] = None) -> tuple[Optional[Dict[str, Any]], Optional[bytes], Optional[bytes]]:
             async with sem:
                 if task_id and is_task_cancelled(task_id):
                     logger.info("Slide %s pulado — task %s cancelada", index + 1, task_id)
-                    return None, None
+                    return None, None, None
 
-                image_bytes = await _generate_single(slide, index, ref)
-                url = await _upload_slide(image_bytes, index)
+                overlaid_bytes, raw_bytes = await _generate_single(slide, index, ref)
+                url = await _upload_slide(overlaid_bytes, index)
                 slide["image_url"] = url
                 logger.info("Slide %s gerado: %s", index + 1, url)
 
@@ -189,20 +250,21 @@ async def _process_carousel_background(
                     "total": len(slides),
                 })
 
-                return slide, image_bytes
+                # Retorna raw_bytes (fundo limpo) para uso como referência visual
+                return slide, overlaid_bytes, raw_bytes
 
         # --- Sequential mode: slide 1 first, then 2..N using slide 1 as reference ---
         if sequential_slides and len(slides) > 1:
             logger.info("Modo sequencial: gerando slide 1 como referência para os demais")
-            slide1_result, slide1_bytes = await _generate_and_upload(slides[0], 0, ref=reference_image)
+            slide1_result, slide1_overlaid, slide1_raw = await _generate_and_upload(slides[0], 0, ref=reference_image)
 
-            if slide1_result is None or slide1_bytes is None:
+            if slide1_result is None or slide1_raw is None:
                 # Slide 1 cancelled or failed — fallback to parallel without ref
                 logger.warning("Slide 1 falhou/cancelado no modo sequencial, fazendo fallback paralelo")
-                slide1_bytes = None
+                slide1_raw = None
 
-            # Use slide 1 bytes as the reference for remaining slides
-            visual_ref = slide1_bytes or reference_image
+            # Usa fundo LIMPO (sem overlay) como referência visual para manter coerência
+            visual_ref = slide1_raw or reference_image
             remaining_tasks = [
                 _generate_and_upload(slide, i, ref=visual_ref)
                 for i, slide in enumerate(slides) if i > 0
@@ -210,7 +272,7 @@ async def _process_carousel_background(
             remaining_results = await asyncio.gather(*remaining_tasks, return_exceptions=True)
 
             # Combine results: slide 1 + remaining
-            all_results = [(slide1_result, slide1_bytes)] + list(remaining_results)
+            all_results = [(slide1_result, slide1_overlaid, slide1_raw)] + list(remaining_results)
         else:
             # --- Parallel mode (non-sequential or single slide) ---
             tasks = [
@@ -227,7 +289,7 @@ async def _process_carousel_background(
                 slides[i]["image_url"] = None
                 updated_slides.append(slides[i])
             elif isinstance(result, tuple):
-                slide_data, _ = result
+                slide_data = result[0]
                 if slide_data is None:
                     cancelled_count += 1
                     slides[i]["image_url"] = None

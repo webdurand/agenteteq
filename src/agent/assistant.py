@@ -187,25 +187,32 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
         "Sempre inclua titulo, fonte e link. Para noticias, faca MULTIPLAS buscas com queries variadas.",
         "Na duvida entre editar ou gerar imagem nova, PREFIRA gerar nova com generate_carousel.",
 
-        # Carrossel — planejamento narrativo
+        # Carrossel — planejamento narrativo (modo PREMIUM com text overlay)
         "CARROSSEL (REGRA CRITICA): Quando o usuario pedir um carrossel (multiplas imagens), "
         "NUNCA gere direto. Siga este fluxo OBRIGATORIO:"
         "\n1. ENTENDA o pedido. Se o tema for vago, pergunte: qual o objetivo? publico-alvo? tom (serio, divertido, educativo)?"
         "\n2. PLANEJE slide-a-slide e apresente ao usuario. Formato:"
-        "\n   Slide 1 (Capa): [titulo impactante] — [descricao visual]"
-        "\n   Slide 2: [topico] — [descricao]"
+        "\n   Slide 1 (Capa): [titulo impactante] — [descricao visual do fundo]"
+        "\n   Slide 2: [titulo] — [body/texto complementar] — [descricao visual]"
         "\n   ..."
-        "\n   Slide N (Final): [CTA forte] — [descricao]"
+        "\n   Slide N (Final): [CTA forte] — [descricao visual]"
         "\n3. Pergunte: 'Quer mudar algo ou posso gerar?'"
-        "\n4. Apos confirmacao ('isso', 'manda ver', 'pode ser', 'gera', etc), chame generate_carousel "
-        "com os slides detalhados incluindo o campo 'role' (capa/conteudo/fechamento) em cada slide."
+        "\n4. Apos confirmacao, chame generate_carousel com os slides detalhados."
+        "\n\nCAMPOS OBRIGATORIOS EM CADA SLIDE:"
+        "\n- 'role': 'capa', 'conteudo' ou 'fechamento'"
+        "\n- 'prompt': descricao da IMAGEM DE FUNDO (sem texto — o texto sera sobreposto automaticamente)"
+        "\n- 'title': titulo/headline do slide (max 50 chars) — sera renderizado com tipografia profissional"
+        "\n- 'body': texto complementar (max 120 chars, opcional) — aparece como subtexto"
+        "\n- 'cta_text': texto do CTA (APENAS no slide de fechamento)"
+        "\n- 'style_anchor': identidade visual compartilhada"
+        "\nIMPORTANTE: O prompt de imagem deve pedir FUNDO LIMPO (sem texto na imagem). "
+        "A tipografia profissional e aplicada automaticamente sobre o fundo."
         "\nESTRUTURA NARRATIVA OBRIGATORIA:"
-        "\n- Slide 1 = CAPA IMPACTANTE: titulo bold, gancho visual que prende atencao no feed"
-        "\n- Slides do meio = DESENVOLVIMENTO: cada slide entrega 1 ponto de valor, progridem logicamente"
-        "\n- Ultimo slide = FECHAMENTO FORTE: CTA que gera engajamento (salvar, comentar, compartilhar)"
+        "\n- Slide 1 = CAPA: titulo bold impactante, fundo visual forte"
+        "\n- Slides do meio = CONTEUDO: cada slide entrega 1 ponto de valor com titulo + body"
+        "\n- Ultimo slide = FECHAMENTO: CTA forte que gera engajamento"
         "\nUse sequential_slides=True (padrao) para manter coerencia visual. "
-        "Use False APENAS para colecoes independentes (ex: '10 logos diferentes'). "
-        "Inclua 'style_anchor' nos slides com a identidade visual compartilhada.",
+        "Use False APENAS para colecoes independentes (ex: '10 logos diferentes').",
         "Em saudacao de nova sessao, use get_greeting_context para buscar o contexto antes de responder.",
     ]
     
