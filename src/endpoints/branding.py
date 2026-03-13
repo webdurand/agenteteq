@@ -3,7 +3,7 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 
 from src.auth.deps import get_current_user
@@ -14,6 +14,7 @@ from src.models.branding import (
     list_brand_profiles,
     get_default_brand_profile,
 )
+from src.integrations.image_storage import upload_user_image
 
 logger = logging.getLogger(__name__)
 
@@ -113,3 +114,26 @@ async def api_delete_brand_profile(profile_id: int, user=Depends(get_current_use
 async def api_get_default_brand_profile(user=Depends(get_current_user)):
     profile = get_default_brand_profile(user["phone_number"])
     return {"profile": profile}
+
+
+@router.post("/upload-logo")
+async def api_upload_brand_logo(
+    file: UploadFile = File(...),
+    user=Depends(get_current_user),
+):
+    """Upload a brand logo image to Cloudinary and return the URL."""
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="O arquivo precisa ser uma imagem.")
+
+    contents = await file.read()
+    if len(contents) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Imagem muito grande. Maximo 5MB.")
+
+    try:
+        url = upload_user_image(user["phone_number"], contents)
+        return {"url": url}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Erro ao fazer upload do logo: %s", e)
+        raise HTTPException(status_code=500, detail="Erro ao fazer upload da imagem.")
