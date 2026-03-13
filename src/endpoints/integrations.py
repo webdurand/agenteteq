@@ -125,12 +125,14 @@ def _connect_google(req: ConnectIntegrationRequest, user: dict) -> dict:
     scopes = PROVIDER_SCOPES[req.provider]
 
     try:
+        os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
+
         flow = Flow.from_client_config(
             client_config,
             scopes=scopes,
-            redirect_uri="postmessage" 
+            redirect_uri="postmessage"
         )
-        
+
         flow.fetch_token(code=req.code)
         credentials = flow.credentials
 
