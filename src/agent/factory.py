@@ -109,7 +109,13 @@ def create_agent_with_tools(
             "Use get_trending_content para ver os posts com mais engajamento de uma conta JA monitorada. "
             "Use analyze_posts para OLHAR posts de QUALQUER conta publica (incluindo as IMAGENS) e responder perguntas — "
             "NAO precisa estar monitorada. Ex: 'sobre o que fala o ultimo post do @fulano?', 'descreve o post mais recente'. "
-            "Use create_content_script para gerar roteiros de carrossel/video inspirados em uma referencia."
+            "Use create_content_script para gerar roteiros de carrossel/video inspirados em uma referencia.\n\n"
+            "ALERTAS DE CONTEUDO: Apos salvar uma conta com track_account, OFERECA ativar alertas: "
+            "'Quer que eu te avise no WhatsApp quando essa conta postar algo que bombar?' "
+            "Se o usuario aceitar, use toggle_alerts(enabled=True). "
+            "O alerta dispara automaticamente quando um post novo tem engajamento 2x acima da media. "
+            "Use toggle_alerts(enabled=False) para desativar. "
+            "NAO ative alertas automaticamente — SEMPRE pergunte primeiro."
         )
     except Exception as e:
         logger.error("Erro ao carregar Social tools para %s: %s", phone, e)
@@ -188,7 +194,26 @@ def create_agent_with_tools(
         "- NUNCA invente precos ou detalhes do plano Premium. Direcione ao link de upgrade."
     ]
 
-    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + interactive_instructions + task_instructions + upsell_instructions
+    # Instruções de briefing matinal
+    briefing_instructions = [
+        "BRIEFING MATINAL: Quando o usuario pedir para ativar um resumo/briefing diario "
+        "(ex: 'ativa meu briefing', 'quero um resumo todo dia de manha', 'me manda um resumo as 7h'), "
+        "crie um reminder com schedule_message usando:\n"
+        "- trigger_type='cron'\n"
+        "- cron_expression com o horario solicitado (ex: '0 7 * * *' para 7h, '0 8 * * 1-5' para dias uteis as 8h)\n"
+        "- notification_channel='whatsapp_text'\n"
+        "- task_instructions com TODAS as instrucoes do briefing. Exemplo:\n"
+        "  'Compile um briefing matinal completo. Faca o seguinte:\n"
+        "   1. Use list_tasks(status=\"pending\") para listar tarefas pendentes, destacando as que vencem hoje.\n"
+        "   2. Se o usuario tem Google Calendar conectado, use get_calendar_events para eventos de hoje.\n"
+        "   3. Se o usuario tem contas monitoradas, use get_trending_content para destaques recentes.\n"
+        "   4. Se o usuario tem Gmail conectado, use read_emails(query=\"is:unread newer_than:1d\") para emails nao lidos.\n"
+        "   Formate tudo de forma concisa e agradavel para WhatsApp, com emojis.'\n\n"
+        "Confirme o horario e o que incluir antes de criar. "
+        "Para desativar, o usuario pode pedir 'desativa meu briefing' — use cancel_schedule."
+    ]
+
+    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + interactive_instructions + task_instructions + upsell_instructions + briefing_instructions
 
     return get_assistant(
         session_id=session_id,

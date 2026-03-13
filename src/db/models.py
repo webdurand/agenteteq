@@ -569,6 +569,7 @@ class TrackedAccount(Base):
     posts_count = Column(Integer)
     metadata_json = Column(Text, default="{}")
     status = Column(String, default="active")           # active, paused, error
+    alerts_enabled = Column(String, default="false")    # "true" / "false"
     last_fetched_at = Column(String)
     created_at = Column(String, nullable=False)
     updated_at = Column(String)
@@ -586,6 +587,7 @@ class TrackedAccount(Base):
             "followers_count": self.followers_count,
             "posts_count": self.posts_count,
             "status": self.status,
+            "alerts_enabled": self.alerts_enabled == "true",
             "last_fetched_at": self.last_fetched_at,
             "created_at": self.created_at,
             "updated_at": self.updated_at,

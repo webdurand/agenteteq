@@ -2,6 +2,8 @@ import json
 from datetime import datetime, timezone
 from typing import Optional
 
+from sqlalchemy import func
+
 from src.db.session import get_db
 from src.db.models import TrackedAccount, SocialContent
 
@@ -166,10 +168,10 @@ def save_content_batch(
     user_id: str,
     platform: str,
     posts: list[dict],
-) -> int:
-    """Upsert posts by platform_post_id. Returns count of new posts inserted."""
+) -> list[dict]:
+    """Upsert posts by platform_post_id. Returns list of NEW post dicts inserted."""
     now = datetime.now(timezone.utc).isoformat()
-    inserted = 0
+    new_posts: list[dict] = []
 
     with get_db() as db:
         for post in posts:
@@ -211,9 +213,9 @@ def save_content_batch(
                     fetched_at=now,
                 )
                 db.add(content)
-                inserted += 1
+                new_posts.append(post)
 
-    return inserted
+    return new_posts
 
 
 def get_top_content(
@@ -254,3 +256,31 @@ def list_all_active_tracked_accounts() -> list[dict]:
             .all()
         )
     return [r.to_dict() for r in rows]
+
+
+def set_alerts_enabled(account_id: int, user_id: str, enabled: bool) -> bool:
+    """Toggle alerts for a tracked account. Returns True if updated."""
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as db:
+        account = db.get(TrackedAccount, account_id)
+        if not account or account.user_id != user_id:
+            return False
+        account.alerts_enabled = "true" if enabled else "false"
+        account.updated_at = now
+    return True
+
+
+def get_avg_engagement(account_id: int, limit: int = 50) -> float:
+    """Return average likes_count for the last `limit` posts of an account."""
+    with get_db() as db:
+        avg = (
+            db.query(func.avg(SocialContent.likes_count))
+            .filter(
+                SocialContent.tracked_account_id == account_id,
+                SocialContent.likes_count > 0,
+            )
+            .order_by(SocialContent.posted_at.desc())
+            .limit(limit)
+            .scalar()
+        )
+    return float(avg) if avg else 0.0

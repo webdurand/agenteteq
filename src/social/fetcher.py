@@ -9,16 +9,21 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Engagement spike threshold: post must have >= SPIKE_MULTIPLIER * avg to trigger alert
+SPIKE_MULTIPLIER = 2.0
+
 
 def fetch_all_tracked_accounts():
     """
     Called by APScheduler every N hours.
     Iterates all active tracked accounts, fetches new content, updates metadata.
+    If a new post spikes above average engagement and alerts are enabled, notifies the user.
     """
     from src.models.social import (
         list_all_active_tracked_accounts,
         save_content_batch,
         update_account_metadata,
+        get_avg_engagement,
     )
     from src.social import get_social_provider
 
@@ -42,6 +47,7 @@ def fetch_all_tracked_accounts():
         platform = account["platform"]
         username = account["username"]
         user_id = account["user_id"]
+        alerts_on = account.get("alerts_enabled", False)
 
         try:
             # Fetch profile update
@@ -79,14 +85,83 @@ def fetch_all_tracked_accounts():
                 for p in posts
             ]
 
-            new_count = save_content_batch(account_id, user_id, platform, posts_dicts)
+            new_posts = save_content_batch(account_id, user_id, platform, posts_dicts)
             logger.info(
                 "Social fetcher: @%s/%s — %d novos posts, %d atualizados",
-                platform, username, new_count, len(posts_dicts) - new_count,
+                platform, username, len(new_posts), len(posts_dicts) - len(new_posts),
             )
+
+            # Spike detection — only if alerts enabled and there are new posts
+            if alerts_on and new_posts:
+                try:
+                    avg = get_avg_engagement(account_id)
+                    if avg > 0:
+                        for post in new_posts:
+                            likes = post.get("likes_count", 0)
+                            if likes >= avg * SPIKE_MULTIPLIER:
+                                _send_spike_alert(
+                                    loop, user_id, username, platform,
+                                    post, likes, avg,
+                                )
+                except Exception as e:
+                    logger.error("Social fetcher: erro ao checar spikes de @%s: %s", username, e)
 
         except Exception as e:
             logger.error("Social fetcher: erro em @%s/%s: %s", platform, username, e)
 
     loop.close()
     logger.info("Social fetcher: ciclo completo.")
+
+
+def _send_spike_alert(
+    loop: asyncio.AbstractEventLoop,
+    user_id: str,
+    username: str,
+    platform: str,
+    post: dict,
+    likes: int,
+    avg: float,
+):
+    """Send a proactive WhatsApp alert about a high-engagement post."""
+    from src.integrations.whatsapp import whatsapp_client
+
+    multiplier = likes / avg if avg > 0 else 0
+    caption_preview = (post.get("caption", "") or "")[:120]
+    if len(post.get("caption", "") or "") > 120:
+        caption_preview += "..."
+
+    body = (
+        f"Alerta: @{username} postou algo que ta bombando!\n\n"
+        f'"{caption_preview}"\n\n'
+        f"Likes: {likes:,} ({multiplier:.0f}x acima da media)\n"
+        f"Comentarios: {post.get('comments_count', 0):,}"
+    )
+
+    buttons = [
+        {"id": "btn_script", "title": "Criar roteiro"},
+        {"id": "btn_carousel", "title": "Criar carrossel"},
+        {"id": "btn_view", "title": "Ver detalhes"},
+    ]
+
+    try:
+        loop.run_until_complete(
+            whatsapp_client.send_button_message(user_id, body, buttons)
+        )
+        logger.info(
+            "Social alert enviado para %s: @%s post com %d likes (%.0fx avg)",
+            user_id[:8], username, likes, multiplier,
+        )
+    except Exception as e:
+        # Fallback to plain text if buttons fail
+        logger.warning("Falha ao enviar alert com botoes, tentando texto: %s", e)
+        try:
+            fallback = (
+                f"{body}\n\n"
+                "Quer que eu crie conteudo inspirado nesse post? "
+                "Responda: roteiro, carrossel ou ver detalhes."
+            )
+            loop.run_until_complete(
+                whatsapp_client.send_text_message(user_id, fallback)
+            )
+        except Exception as e2:
+            logger.error("Social alert: falha total para %s: %s", user_id[:8], e2)
