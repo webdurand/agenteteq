@@ -171,7 +171,24 @@ def create_agent_with_tools(
         "Nao crie o reminder automaticamente — SEMPRE pergunte primeiro."
     ]
 
-    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + interactive_instructions + task_instructions
+    # Instruções de comunicação de limites e upsell natural
+    upsell_instructions = [
+        "COMUNICACAO DE LIMITES E UPSELL: O bloco [STATUS LIMITES] no inicio da mensagem mostra os limites atuais. "
+        "Siga estas regras:\n"
+        "- Se alguma feature mostra '⚠️ quase no limite': mencione BREVEMENTE ao final da resposta, em tom casual. "
+        "Ex: 'Ah, so um aviso: voce ta quase no limite de buscas de hoje no plano gratuito. "
+        "Se quiser mais, da uma olhada no Premium.'\n"
+        "- Se alguma feature mostra 'LIMITE ATINGIDO' e o usuario tenta usa-la: explique que atingiu o limite "
+        "e compartilhe o link de upgrade (presente no STATUS LIMITES) se estiver no plano gratuito.\n"
+        "- Se o usuario perguntar sobre uma feature 'nao disponivel no plano': explique que esta no Premium "
+        "e compartilhe o link.\n"
+        "- NUNCA mencione limites quando o uso esta baixo (sem ⚠️ ou LIMITE ATINGIDO). Responda normalmente.\n"
+        "- Tom: amigavel e util, como um amigo dando um toque. NUNCA insistente ou repetitivo.\n"
+        "- Maximo UMA mencao de limite por resposta. Nao repita se ja mencionou na mesma conversa.\n"
+        "- NUNCA invente precos ou detalhes do plano Premium. Direcione ao link de upgrade."
+    ]
+
+    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + interactive_instructions + task_instructions + upsell_instructions
 
     return get_assistant(
         session_id=session_id,

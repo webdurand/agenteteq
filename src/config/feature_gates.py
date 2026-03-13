@@ -4,6 +4,7 @@ Feature gates e limites diários genéricos por plano.
 Limites são lidos de BillingPlan.limits_json (editável pelo admin no tab Planos).
 """
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -356,3 +357,94 @@ def get_all_usage_summary(user_id: str) -> dict:
         "resets_at": resets_at,
         "features": features,
     }
+
+
+# ---------------------------------------------------------------------------
+# Enriched limits context for agent prompt injection
+# ---------------------------------------------------------------------------
+
+def get_limits_context(user_id: str) -> str:
+    """
+    Builds an enriched [STATUS LIMITES] block with all features,
+    80% threshold warnings, and upgrade link when relevant.
+    Injected into every user message so the agent has accurate limit info.
+    """
+    plan = get_user_plan(user_id)
+    is_admin = bool(plan.get("_is_admin"))
+
+    if is_admin:
+        return (
+            "[STATUS LIMITES: Usuario admin com bypass ativo. "
+            "Limites diarios NAO se aplicam agora. "
+            "Ignore mensagens antigas sobre limite atingido.]"
+        )
+
+    plan_name = plan.get("name", "Free")
+    plan_code = plan.get("code", "free")
+
+    parts = []
+    any_near = False
+    any_hit = False
+
+    # Countable features (images, searches, deep research)
+    for config_key, meta in _COUNTABLE_FEATURES.items():
+        limit = int(_get_limit(plan, config_key, 0))
+        if limit <= 0:
+            continue
+        if meta["counter"] == "background_tasks":
+            used = _count_background_tasks(user_id)
+        else:
+            used = _count_usage_events(user_id, config_key)
+        remaining = max(0, limit - used)
+        ratio = used / limit
+
+        if remaining == 0:
+            parts.append(f"{meta['label']}: LIMITE ATINGIDO ({used}/{limit})")
+            any_hit = True
+        elif ratio >= 0.8:
+            parts.append(f"{meta['label']}: {remaining}/{limit} restantes (⚠️ quase no limite)")
+            any_near = True
+        else:
+            parts.append(f"{meta['label']}: {remaining}/{limit} restantes")
+
+    # Minute-based features (voice live)
+    for config_key, meta in _MINUTE_FEATURES.items():
+        limit = int(_get_limit(plan, config_key, 0))
+        if limit <= 0:
+            continue
+        used = round(_sum_voice_minutes(user_id), 1)
+        remaining = max(0, round(limit - used, 1))
+        ratio = used / limit if limit > 0 else 0
+
+        if remaining <= 0:
+            parts.append(f"{meta['label']}: LIMITE ATINGIDO ({used}/{limit}min)")
+            any_hit = True
+        elif ratio >= 0.8:
+            parts.append(f"{meta['label']}: {remaining}/{limit}min restantes (⚠️)")
+            any_near = True
+        else:
+            parts.append(f"{meta['label']}: {remaining}/{limit}min restantes")
+
+    # Disabled features worth mentioning
+    disabled = []
+    for config_key, meta in _TOGGLEABLE_FEATURES.items():
+        val = _get_limit(plan, config_key, False)
+        enabled = val if isinstance(val, bool) else str(val).lower() in ("true", "1", "yes")
+        if not enabled:
+            disabled.append(meta["label"])
+    if disabled:
+        parts.append(f"Nao disponivel no plano: {', '.join(disabled)}")
+
+    features_str = ". ".join(parts) if parts else "Uso normal"
+
+    # Upgrade hint
+    upgrade_hint = ""
+    if plan_code == "free":
+        frontend_url = os.getenv("FRONTEND_URL", os.getenv("FRONTEND_ORIGIN", "http://localhost:5173"))
+        upgrade_url = f"{frontend_url}/dashboard?tab=account"
+        if any_hit or any_near:
+            upgrade_hint = f" Usuario no plano gratuito perto/no limite — sugira upgrade naturalmente. Link: {upgrade_url}"
+        else:
+            upgrade_hint = f" Plano gratuito — link de upgrade disponivel: {upgrade_url}"
+
+    return f"[STATUS LIMITES: Plano {plan_name}. {features_str}.{upgrade_hint}]"

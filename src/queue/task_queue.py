@@ -12,7 +12,7 @@ from src.db.models import BackgroundTask
 
 logger = logging.getLogger(__name__)
 from src.config.system_config import get_config
-from src.config.feature_gates import get_plan_limit, is_admin_unlimited, get_user_plan_type
+from src.config.feature_gates import get_plan_limit, is_admin_unlimited, get_user_plan_type, get_limits_context
 
 _limit_flags: Dict[str, dict] = {}
 _limit_lock = threading.Lock()
@@ -48,11 +48,7 @@ def get_usage_status(user_id: str) -> dict:
     }
 
     if _is_admin:
-        status["context"] = (
-            "[STATUS LIMITES: Usuario admin com bypass ativo. "
-            "Limites diarios NAO se aplicam agora. "
-            "Ignore mensagens antigas sobre limite atingido.]"
-        )
+        status["context"] = get_limits_context(user_id)
         return status
 
     max_daily = get_plan_limit(user_id, "max_tasks_per_user_daily", 5)
@@ -79,16 +75,7 @@ def get_usage_status(user_id: str) -> dict:
         else:
             status["limit_message"] = f"Limite diário de {max_daily} gerações atingido. Tente novamente amanhã!"
 
-        status["context"] = (
-            f"[STATUS LIMITES: Plano efetivo {plan_type}. "
-            f"Limite diario de {max_daily} geracoes atingido. 0 restantes.]"
-        )
-        return status
-
-    status["context"] = (
-        f"[STATUS LIMITES: Plano efetivo {plan_type}. "
-        f"{remaining}/{max_daily} geracoes restantes nas ultimas 24h.]"
-    )
+    status["context"] = get_limits_context(user_id)
     return status
 
 
