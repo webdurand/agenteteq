@@ -9,7 +9,7 @@ from src.auth.jwt import decode_token
 from src.memory.identity import get_user, update_last_seen, is_new_session, is_plan_active
 from src.endpoints.web import ws_manager, GREETING_INJECTION
 from src.integrations.gemini_live import GeminiLiveClient
-from src.agent.voice_tools import VOICE_TOOLS_DECLARATIONS, execute_voice_tool
+from src.agent.voice_tools import get_voice_tools_for_user, execute_voice_tool
 from src.memory.analytics import log_event
 from src.models.chat_messages import save_message
 from src.config.feature_gates import is_feature_enabled, check_voice_live_minutes
@@ -42,6 +42,26 @@ TOOL_FRIENDLY_NAMES = {
     "get_brand_profile": "Consultando branding",
     "update_brand_profile": "Salvando branding",
     "list_brand_profiles": "Buscando perfis de marca",
+    # Social monitoring
+    "preview_account": "Buscando perfil social",
+    "track_account": "Salvando conta para monitoramento",
+    "untrack_account": "Removendo monitoramento",
+    "list_tracked_accounts": "Buscando contas monitoradas",
+    "get_account_insights": "Analisando conteudo",
+    "get_trending_content": "Buscando conteudo em alta",
+    "analyze_posts": "Analisando posts",
+    "create_content_script": "Criando roteiro de conteudo",
+    "toggle_alerts": "Configurando alertas",
+    # Research & Web
+    "fetch_page": "Lendo pagina web",
+    "deep_research": "Pesquisando em profundidade",
+    # Carousel presets
+    "save_carousel_preset": "Salvando preset de carrossel",
+    "list_carousel_presets": "Buscando presets",
+    # Google integrations
+    "read_emails": "Lendo emails",
+    "get_calendar_events": "Consultando agenda",
+    "create_calendar_event": "Criando evento na agenda",
 }
 
 @router.websocket("/ws/voice-live")
@@ -104,7 +124,16 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
         "Nunca invente, assuma ou improvise dados do usuario. Se perguntarem 'quais sao minhas tarefas', use list_tasks e responda com base no retorno real da tool.",
         "Para operacoes demoradas (gerar imagem, carrossel, publicar), avise que ja mandou processar em background SOMENTE quando a tool confirmar sucesso/fila. Se a tool retornar limite ou bloqueio, diga isso claramente e nao diga que ja iniciou.",
         "Quando uma tool falhar, NUNCA narre o erro para o usuario. Apenas diga que nao conseguiu fazer aquilo no momento.",
-        "Voce pode: gerenciar tarefas e lembretes, pesquisar na web, consultar o tempo, gerar carrosseis de imagens, editar imagens, publicar no blog e lembrar de coisas sobre o usuario entre conversas.",
+        "Voce pode: gerenciar tarefas e lembretes, pesquisar na web (busca rapida e pesquisa aprofundada), ler paginas web, consultar o tempo, gerar carrosseis de imagens, editar imagens, publicar no blog, monitorar contas de redes sociais, analisar posts e criar roteiros de conteudo, gerenciar presets de carrossel, configurar branding, e lembrar de coisas sobre o usuario entre conversas.",
+        "SOCIAL MONITORING POR VOZ: Quando o usuario mencionar um perfil de rede social, use preview_account para buscar e descrever o perfil. "
+        "Depois pergunte se quer salvar para monitoramento. Use track_account para salvar. "
+        "Use get_trending_content para ver o que bomba. Use get_account_insights para analises detalhadas. "
+        "Use create_content_script para gerar roteiros inspirados em referencias. "
+        "ALERTAS: Apos salvar uma conta, ofereca ativar alertas com toggle_alerts. NAO ative automaticamente, pergunte primeiro.",
+        "PESQUISA APROFUNDADA: Use deep_research quando o usuario pedir pesquisa detalhada, investigacao ou analise de um tema complexo. "
+        "Para buscas rapidas, use web_search. Use fetch_page para ler o conteudo de links especificos.",
+        "PRESETS DE CARROSSEL: Use save_carousel_preset para salvar estilos de carrossel que o usuario gostar. "
+        "Use list_carousel_presets para listar presets salvos. NAO salve presets automaticamente, pergunte primeiro.",
         "REGRA DE IMAGENS E CARROSSEL: Para gerar imagens ou carrossel, use a tool generate_carousel passando title, description e num_slides. "
         "CARROSSEL (REGRA CRITICA): Quando o usuario pedir um carrossel (multiplas imagens), NUNCA gere direto. Siga este fluxo: "
         "1. Se o tema for vago, pergunte o objetivo, publico e tom. "
@@ -147,9 +176,11 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
         except Exception as e:
             logger.error("[VOICE LIVE] Erro ao carregar memorias: %s", e)
 
+    voice_tools = get_voice_tools_for_user(phone_number)
+
     client = GeminiLiveClient(
         system_instruction=instruction_text,
-        tools=VOICE_TOOLS_DECLARATIONS
+        tools=voice_tools
     )
 
     try:

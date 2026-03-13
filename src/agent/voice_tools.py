@@ -245,6 +245,171 @@ VOICE_TOOLS_DECLARATIONS = [
             "required": ["request"]
         }
     },
+    # --- Social Monitoring ---
+    {
+        "name": "preview_account",
+        "description": "Ver o perfil e conteudo recente de uma conta de rede social SEM salvar. Use ANTES de track_account.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "platform": {"type": "string", "description": "Plataforma (instagram)"},
+                "username": {"type": "string", "description": "Username da conta (ex: natgeo, @natgeo)"}
+            },
+            "required": ["platform", "username"]
+        }
+    },
+    {
+        "name": "track_account",
+        "description": "Salvar uma conta de rede social para monitoramento continuo. Use DEPOIS de preview_account.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "platform": {"type": "string", "description": "Plataforma (instagram)"},
+                "username": {"type": "string", "description": "Username da conta"}
+            },
+            "required": ["platform", "username"]
+        }
+    },
+    {
+        "name": "untrack_account",
+        "description": "Parar de monitorar uma conta de rede social.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "platform": {"type": "string", "description": "Plataforma (instagram)"},
+                "username": {"type": "string", "description": "Username da conta"}
+            },
+            "required": ["username"]
+        }
+    },
+    {
+        "name": "list_tracked_accounts",
+        "description": "Listar todas as contas de redes sociais que estao sendo monitoradas.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "platform": {"type": "string", "description": "Filtrar por plataforma (opcional)"}
+            }
+        }
+    },
+    {
+        "name": "get_account_insights",
+        "description": "Analisa o conteudo recente de uma conta monitorada. Retorna insights sobre topicos, engajamento e tendencias.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "platform": {"type": "string", "description": "Plataforma (instagram)"},
+                "username": {"type": "string", "description": "Username da conta monitorada"}
+            },
+            "required": ["username"]
+        }
+    },
+    {
+        "name": "get_trending_content",
+        "description": "Mostra os conteudos com mais engajamento de uma conta monitorada.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "platform": {"type": "string", "description": "Plataforma (instagram)"},
+                "username": {"type": "string", "description": "Username da conta"}
+            },
+            "required": ["username"]
+        }
+    },
+    {
+        "name": "analyze_posts",
+        "description": "Olha para os posts de uma conta (incluindo as imagens) e responde perguntas. Funciona com qualquer conta publica, mesmo nao monitorada.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "platform": {"type": "string", "description": "Plataforma (instagram)"},
+                "username": {"type": "string", "description": "Username da conta"},
+                "sort": {"type": "string", "description": "Ordenacao: 'recent' ou 'top'. Padrao: recent"},
+                "limit": {"type": "integer", "description": "Quantidade de posts (1 a 5). Padrao: 3"},
+                "question": {"type": "string", "description": "Pergunta especifica sobre os posts (opcional)"}
+            },
+            "required": ["username"]
+        }
+    },
+    {
+        "name": "create_content_script",
+        "description": "Cria um roteiro de conteudo (carousel, video, reels) inspirado nas melhores referencias de uma conta monitorada.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "platform": {"type": "string", "description": "Plataforma (instagram)"},
+                "reference_username": {"type": "string", "description": "Username da conta de referencia"},
+                "content_type": {"type": "string", "description": "Tipo: carousel, video, reels. Padrao: carousel"},
+                "topic": {"type": "string", "description": "Tema especifico (opcional)"}
+            },
+            "required": ["reference_username"]
+        }
+    },
+    {
+        "name": "toggle_alerts",
+        "description": "Ativa ou desativa alertas proativos para uma conta monitorada. Quando ativo, notifica no WhatsApp quando a conta postar algo que bombar.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "platform": {"type": "string", "description": "Plataforma (instagram)"},
+                "username": {"type": "string", "description": "Username da conta monitorada"},
+                "enabled": {"type": "boolean", "description": "True para ativar, False para desativar"}
+            },
+            "required": ["username", "enabled"]
+        }
+    },
+    # --- Research & Web ---
+    {
+        "name": "fetch_page",
+        "description": "Le e extrai o conteudo completo de uma pagina web a partir de uma URL. Use para detalhar o conteudo de um link encontrado em busca.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "URL completa da pagina a ler"}
+            },
+            "required": ["url"]
+        }
+    },
+    {
+        "name": "deep_research",
+        "description": "Pesquisa aprofundada e detalhada sobre um tema na internet. Usa multiplas fontes e perspectivas. Para buscas rapidas, prefira web_search.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "Tema da pesquisa aprofundada"}
+            },
+            "required": ["topic"]
+        }
+    },
+    # --- Carousel Presets ---
+    {
+        "name": "save_carousel_preset",
+        "description": "Salva um preset/template de estilo para carrosseis. Se ja existir com o mesmo nome, atualiza. Use quando o usuario gostar de um estilo e quiser reutilizar.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Nome do preset (ex: Meu Estilo Escuro, Clean Minimal)"},
+                "style_anchor": {"type": "string", "description": "Descricao do estilo visual (ex: Fundo escuro, tipografia moderna)"},
+                "primary_color": {"type": "string", "description": "Cor de fundo principal hex"},
+                "accent_color": {"type": "string", "description": "Cor de destaque hex"},
+                "text_primary_color": {"type": "string", "description": "Cor do texto principal hex"},
+                "text_secondary_color": {"type": "string", "description": "Cor do texto secundario hex"},
+                "default_format": {"type": "string", "description": "Formato padrao (ex: 1350x1080)"},
+                "default_slide_count": {"type": "integer", "description": "Numero padrao de slides"},
+                "sequential_slides": {"type": "boolean", "description": "Se True, slides com coerencia visual"}
+            },
+            "required": ["name"]
+        }
+    },
+    {
+        "name": "list_carousel_presets",
+        "description": "Lista todos os presets/templates de carrossel salvos pelo usuario.",
+        "parameters": {
+            "type": "object",
+            "properties": {}
+        }
+    },
+    # --- Branding ---
     {
         "name": "get_brand_profile",
         "description": "Busca o perfil de marca/identidade visual do usuario. Retorna cores, fontes, logo e estilo configurados. Use antes de gerar carrosseis.",
@@ -284,6 +449,70 @@ VOICE_TOOLS_DECLARATIONS = [
         }
     }
 ]
+
+# --- Conditional tool declarations (added dynamically based on user integrations) ---
+
+VOICE_GMAIL_DECLARATIONS = [
+    {
+        "name": "read_emails",
+        "description": "Le e-mails do Gmail do usuario. Retorna assunto, remetente e resumo.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "max_results": {"type": "integer", "description": "Maximo de emails (padrao 10)"},
+                "query": {"type": "string", "description": "Query Gmail (ex: is:unread, from:pessoa@email.com, newer_than:1d). Padrao: is:unread"}
+            }
+        }
+    },
+]
+
+VOICE_CALENDAR_DECLARATIONS = [
+    {
+        "name": "get_calendar_events",
+        "description": "Busca os proximos eventos na agenda do Google do usuario.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "time_min": {"type": "string", "description": "Data/hora inicial ISO 8601 (opcional, padrao: agora)"},
+                "time_max": {"type": "string", "description": "Data/hora final ISO 8601 (opcional)"},
+                "max_results": {"type": "integer", "description": "Maximo de eventos (padrao 10)"}
+            }
+        }
+    },
+    {
+        "name": "create_calendar_event",
+        "description": "Cria um novo evento na agenda do Google do usuario.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string", "description": "Titulo do evento"},
+                "start_time": {"type": "string", "description": "Data/hora inicio ISO 8601 (ex: 2026-03-08T10:00:00-03:00)"},
+                "end_time": {"type": "string", "description": "Data/hora termino ISO 8601"},
+                "description": {"type": "string", "description": "Descricao do evento (opcional)"},
+                "location": {"type": "string", "description": "Local do evento (opcional)"}
+            },
+            "required": ["summary", "start_time", "end_time"]
+        }
+    },
+]
+
+
+def get_voice_tools_for_user(user_id: str) -> list[dict]:
+    """Build the full voice tools list, adding conditional tools based on user integrations."""
+    tools = list(VOICE_TOOLS_DECLARATIONS)
+
+    try:
+        from src.memory.integrations import get_user_integrations
+
+        if get_user_integrations(user_id, provider="gmail"):
+            tools.extend(VOICE_GMAIL_DECLARATIONS)
+        if get_user_integrations(user_id, provider="google_calendar"):
+            tools.extend(VOICE_CALENDAR_DECLARATIONS)
+    except Exception:
+        pass
+
+    return tools
+
 
 # --- Dispatcher ---
 async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> dict:
@@ -427,20 +656,118 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
                 send_fn = create_send_to_channel_tool(user_id)
                 return {"result": send_fn(**args)}
 
+            # --- Social Monitoring ---
+            elif function_name == "preview_account":
+                from src.tools.social_monitor import create_social_tools
+                tools = create_social_tools(user_id, channel="web_voice")
+                preview_fn = tools[0]
+                return {"result": preview_fn(**args)}
+
+            elif function_name == "track_account":
+                from src.tools.social_monitor import create_social_tools
+                tools = create_social_tools(user_id, channel="web_voice")
+                track_fn = tools[1]
+                return {"result": track_fn(**args)}
+
+            elif function_name == "untrack_account":
+                from src.tools.social_monitor import create_social_tools
+                tools = create_social_tools(user_id, channel="web_voice")
+                untrack_fn = tools[2]
+                return {"result": untrack_fn(**args)}
+
+            elif function_name == "list_tracked_accounts":
+                from src.tools.social_monitor import create_social_tools
+                tools = create_social_tools(user_id, channel="web_voice")
+                list_fn = tools[3]
+                return {"result": list_fn(**args)}
+
+            elif function_name == "get_account_insights":
+                from src.tools.social_monitor import create_social_tools
+                tools = create_social_tools(user_id, channel="web_voice")
+                insights_fn = tools[4]
+                return {"result": insights_fn(**args)}
+
+            elif function_name == "get_trending_content":
+                from src.tools.social_monitor import create_social_tools
+                tools = create_social_tools(user_id, channel="web_voice")
+                trending_fn = tools[5]
+                return {"result": trending_fn(**args)}
+
+            elif function_name == "analyze_posts":
+                from src.tools.social_monitor import create_social_tools
+                tools = create_social_tools(user_id, channel="web_voice")
+                analyze_fn = tools[6]
+                return {"result": analyze_fn(**args)}
+
+            elif function_name == "create_content_script":
+                from src.tools.social_monitor import create_social_tools
+                tools = create_social_tools(user_id, channel="web_voice")
+                script_fn = tools[7]
+                return {"result": script_fn(**args)}
+
+            elif function_name == "toggle_alerts":
+                from src.tools.social_monitor import create_social_tools
+                tools = create_social_tools(user_id, channel="web_voice")
+                toggle_fn = tools[8]
+                return {"result": toggle_fn(**args)}
+
+            # --- Research & Web ---
+            elif function_name == "fetch_page":
+                from src.tools.web_search import fetch_page_raw, _is_blocked_url
+                url = args.get("url", "")
+                if _is_blocked_url(url):
+                    return {"result": f"Nao consegui acessar {url} — redes sociais bloqueiam acesso de robos. Use track_account para monitorar contas."}
+                return {"result": fetch_page_raw(url)}
+
+            elif function_name == "deep_research":
+                from src.tools.deep_research import create_deep_research_tool
+                research_fn = create_deep_research_tool(notifier=None, user_id=user_id)
+                return {"result": research_fn(**args)}
+
+            # --- Carousel Presets ---
+            elif function_name == "save_carousel_preset":
+                from src.tools.branding_tools import create_branding_tools
+                branding_tools = create_branding_tools(user_id)
+                save_preset_fn = branding_tools[4]
+                return {"result": save_preset_fn(**args)}
+
+            elif function_name == "list_carousel_presets":
+                from src.tools.branding_tools import create_branding_tools
+                branding_tools = create_branding_tools(user_id)
+                list_presets_fn = branding_tools[5]
+                return {"result": list_presets_fn()}
+
+            # --- Branding ---
             elif function_name == "get_brand_profile":
                 from src.tools.branding_tools import create_branding_tools
-                get_brand, _, _, _ = create_branding_tools(user_id)
-                return {"result": get_brand(**args)}
+                branding_tools = create_branding_tools(user_id)
+                return {"result": branding_tools[0](**args)}
 
             elif function_name == "update_brand_profile":
                 from src.tools.branding_tools import create_branding_tools
-                _, update_brand, _, _ = create_branding_tools(user_id)
-                return {"result": update_brand(**args)}
+                branding_tools = create_branding_tools(user_id)
+                return {"result": branding_tools[1](**args)}
 
             elif function_name == "list_brand_profiles":
                 from src.tools.branding_tools import create_branding_tools
-                _, _, list_brands, _ = create_branding_tools(user_id)
-                return {"result": list_brands()}
+                branding_tools = create_branding_tools(user_id)
+                return {"result": branding_tools[2]()}
+
+            # --- Google Integrations (conditional) ---
+            elif function_name == "read_emails":
+                from src.tools.google_tools import create_google_tools
+                read_fn, _, _ = create_google_tools(user_id)
+                return {"result": read_fn(**args)}
+
+            elif function_name == "get_calendar_events":
+                from src.tools.google_tools import create_google_tools
+                _, calendar_fn, _ = create_google_tools(user_id)
+                return {"result": calendar_fn(**args)}
+
+            elif function_name == "create_calendar_event":
+                from src.tools.google_tools import create_google_tools
+                _, _, create_fn = create_google_tools(user_id)
+                return {"result": create_fn(**args)}
 
             elif function_name == "run_workflow":
                 from src.tools.workflow_tool import create_workflow_tools
