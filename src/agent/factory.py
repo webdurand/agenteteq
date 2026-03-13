@@ -87,7 +87,16 @@ def create_agent_with_tools(
             "Use extract_branding_from_image quando o usuario enviar artes existentes e quiser extrair o estilo. "
             "O usuario pode ter MULTIPLOS perfis (ex: um para cada projeto/rede social). "
             "Quando o usuario pedir carrossel e tiver branding, use as cores do perfil padrao automaticamente — "
-            "injete color_palette e style_anchor nos slides baseado no branding."
+            "injete color_palette e style_anchor nos slides baseado no branding.\n\n"
+            "PRESETS DE CARROSSEL: O usuario pode salvar estilos de carrossel como presets reutilizaveis. "
+            "Apos gerar um carrossel que o usuario gostar, OFERECA salvar o estilo: "
+            "'Gostou desse estilo? Posso salvar como preset pra usar de novo. Que nome quer dar?' "
+            "Use save_carousel_preset para salvar (nome, cores, style_anchor, formato). "
+            "Use list_carousel_presets para listar os presets salvos. "
+            "Quando o usuario pedir carrossel e mencionar um preset (ex: 'usa meu estilo escuro', "
+            "'usa o preset Clean'), passe preset_name no generate_carousel_tool. "
+            "O preset sobrescreve o branding padrao quando especificado. "
+            "NAO salve presets automaticamente — SEMPRE pergunte primeiro."
         )
     except Exception as e:
         logger.error("Erro ao carregar Branding tools para %s: %s", phone, e)

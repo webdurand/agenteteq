@@ -489,6 +489,7 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
         use_reference_image: bool = False,
         sequential_slides: bool = True,
         delivery_channel: str = "",
+        preset_name: str = "",
     ) -> str:
         """
         Gera imagens com IA. Pode ser um carrossel (múltiplos slides) ou uma imagem única (1 slide).
@@ -528,6 +529,10 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
                               OBRIGATÓRIO quando o usuário mencionar WhatsApp/zap/wpp.
                               Valores: 'whatsapp', 'web', 'ambos'.
                               Se vazio, entrega no canal de origem.
+            preset_name: Nome de um preset/template de estilo salvo pelo usuario.
+                         Se fornecido, aplica as cores, style_anchor e formato do preset
+                         aos slides (sobrescreve o branding padrao se houver conflito).
+                         Use list_carousel_presets para ver os disponiveis.
 
         Returns:
             Mensagem de confirmação imediata com o formato que será usado.
@@ -539,26 +544,48 @@ def create_carousel_tools(user_id: str, channel: str = "web"):
         if limit_msg:
             return limit_msg
 
-        # Apply brand profile colors to slides that don't have color_palette set
-        try:
-            from src.models.branding import get_default_brand_profile
-            brand = get_default_brand_profile(user_id)
-            if brand:
-                brand_palette = {
-                    "primary": brand["bg_color"] or brand["primary_color"],
-                    "accent": brand["accent_color"],
-                    "text_primary": brand["text_primary_color"],
-                    "text_secondary": brand["text_secondary_color"],
-                }
-                brand_style = brand.get("style_description", "")
-                for slide in slides:
-                    if not slide.get("color_palette"):
-                        slide["color_palette"] = brand_palette
-                    if brand_style and not slide.get("style_anchor"):
-                        slide["style_anchor"] = brand_style
-                logger.info("Branding '%s' aplicado ao carrossel", brand["name"])
-        except Exception as e:
-            logger.warning("Erro ao aplicar branding ao carrossel: %s", e)
+        # Apply preset or brand profile to slides
+        preset_applied = False
+        if preset_name:
+            try:
+                from src.models.carousel_presets import get_preset_by_name
+                preset = get_preset_by_name(user_id, preset_name)
+                if preset:
+                    preset_palette = preset.get("color_palette", {})
+                    preset_style = preset.get("style_anchor", "")
+                    if preset.get("default_format") and not format:
+                        format = preset["default_format"]
+                    for slide in slides:
+                        if preset_palette and not slide.get("color_palette"):
+                            slide["color_palette"] = preset_palette
+                        if preset_style and not slide.get("style_anchor"):
+                            slide["style_anchor"] = preset_style
+                    preset_applied = True
+                    logger.info("Preset '%s' aplicado ao carrossel", preset["name"])
+            except Exception as e:
+                logger.warning("Erro ao aplicar preset ao carrossel: %s", e)
+
+        # Fallback: apply brand profile colors if no preset was applied
+        if not preset_applied:
+            try:
+                from src.models.branding import get_default_brand_profile
+                brand = get_default_brand_profile(user_id)
+                if brand:
+                    brand_palette = {
+                        "primary": brand["bg_color"] or brand["primary_color"],
+                        "accent": brand["accent_color"],
+                        "text_primary": brand["text_primary_color"],
+                        "text_secondary": brand["text_secondary_color"],
+                    }
+                    brand_style = brand.get("style_description", "")
+                    for slide in slides:
+                        if not slide.get("color_palette"):
+                            slide["color_palette"] = brand_palette
+                        if brand_style and not slide.get("style_anchor"):
+                            slide["style_anchor"] = brand_style
+                    logger.info("Branding '%s' aplicado ao carrossel", brand["name"])
+            except Exception as e:
+                logger.warning("Erro ao aplicar branding ao carrossel: %s", e)
 
         # Resolve delivery_channel override
         effective_channel = channel

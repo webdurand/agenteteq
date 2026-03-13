@@ -545,6 +545,49 @@ class BrandProfile(Base):
         }
 
 
+# ──────────────────────────── Carousel Presets ────────────────────────────
+
+
+class CarouselPreset(Base):
+    __tablename__ = "carousel_presets"
+    __table_args__ = (
+        Index("idx_carousel_presets_user", "user_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    brand_profile_id = Column(Integer, nullable=True)  # optional link to brand_profiles.id
+    style_anchor = Column(Text)                        # shared visual identity descriptor
+    color_palette_json = Column(Text, default="{}")    # JSON: {primary, accent, text_primary, text_secondary}
+    default_format = Column(String, default="1350x1080")
+    default_slide_count = Column(Integer, default=5)
+    sequential_slides = Column(Boolean, default=True)
+    created_at = Column(String, default=lambda: _utcnow().isoformat())
+    updated_at = Column(String, default=lambda: _utcnow().isoformat())
+
+    def to_dict(self) -> dict:
+        import json
+        palette = {}
+        try:
+            palette = json.loads(self.color_palette_json or "{}")
+        except Exception:
+            pass
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "name": self.name,
+            "brand_profile_id": self.brand_profile_id,
+            "style_anchor": self.style_anchor,
+            "color_palette": palette,
+            "default_format": self.default_format,
+            "default_slide_count": self.default_slide_count,
+            "sequential_slides": bool(self.sequential_slides),
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
 # ──────────────────────────── Image Sessions ────────────────────────────
 
 

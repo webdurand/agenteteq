@@ -11,6 +11,12 @@ from src.models.branding import (
     get_default_brand_profile,
     get_brand_profile_by_name,
 )
+from src.models.carousel_presets import (
+    save_preset as db_save_preset,
+    list_presets as db_list_presets,
+    get_preset_by_name,
+    delete_preset as db_delete_preset,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -268,4 +274,113 @@ def create_branding_tools(user_id: str):
             logger.error("Erro ao extrair branding de imagem: %s", e)
             return f"Erro ao analisar a imagem: {e}"
 
-    return get_brand_profile, update_brand_profile_tool, list_brand_profiles_tool, extract_branding_from_image
+    def save_carousel_preset(
+        name: str,
+        style_anchor: str = "",
+        primary_color: str = "",
+        accent_color: str = "",
+        text_primary_color: str = "",
+        text_secondary_color: str = "",
+        default_format: str = "1350x1080",
+        default_slide_count: int = 5,
+        sequential_slides: bool = True,
+    ) -> str:
+        """
+        Salva um preset/template de estilo para carrosseis.
+        Se ja existir um preset com o mesmo nome, atualiza.
+
+        Use quando o usuario gostar de um estilo de carrossel e quiser reutilizar.
+        Ex: 'salva esse estilo como Meu Estilo Escuro'.
+
+        Args:
+            name: Nome do preset (ex: "Meu Estilo Escuro", "Clean Minimal", "Bold Colorido").
+            style_anchor: Descricao do estilo visual compartilhado entre slides
+                         (ex: "Fundo escuro gradiente, tipografia moderna, espaco negativo generoso").
+            primary_color: Cor de fundo principal hex (ex: "#1a1a1a").
+            accent_color: Cor de destaque hex (ex: "#00d4ff").
+            text_primary_color: Cor do texto principal hex (ex: "#ffffff").
+            text_secondary_color: Cor do texto secundario hex (ex: "#cccccc").
+            default_format: Formato padrao (ex: "1350x1080", "1080x1080", "1080x1920").
+            default_slide_count: Numero padrao de slides (ex: 5).
+            sequential_slides: Se True, slides sequenciais com coerencia visual.
+
+        Returns:
+            Confirmacao com resumo do preset salvo.
+        """
+        if not name.strip():
+            return "Informe um nome para o preset."
+
+        palette = {}
+        if primary_color:
+            palette["primary"] = primary_color
+        if accent_color:
+            palette["accent"] = accent_color
+        if text_primary_color:
+            palette["text_primary"] = text_primary_color
+        if text_secondary_color:
+            palette["text_secondary"] = text_secondary_color
+
+        # Try to link to default brand profile if no explicit palette
+        brand_id = None
+        if not palette:
+            brand = get_default_brand_profile(user_id)
+            if brand:
+                brand_id = brand["id"]
+                palette = {
+                    "primary": brand["bg_color"] or brand["primary_color"],
+                    "accent": brand["accent_color"],
+                    "text_primary": brand["text_primary_color"],
+                    "text_secondary": brand["text_secondary_color"],
+                }
+
+        preset = db_save_preset(
+            user_id=user_id,
+            name=name.strip(),
+            style_anchor=style_anchor,
+            color_palette=palette,
+            default_format=default_format,
+            default_slide_count=default_slide_count,
+            sequential_slides=sequential_slides,
+            brand_profile_id=brand_id,
+        )
+
+        parts = [f"Preset '{preset['name']}' salvo!"]
+        if preset["color_palette"]:
+            p = preset["color_palette"]
+            parts.append(f"Paleta: fundo {p.get('primary', '?')}, accent {p.get('accent', '?')}")
+        if preset.get("style_anchor"):
+            parts.append(f"Estilo: {preset['style_anchor'][:80]}")
+        parts.append(f"Formato: {preset['default_format']}, {preset['default_slide_count']} slides")
+        parts.append("Proxima vez e so falar 'usa meu preset X'.")
+
+        return "\n".join(parts)
+
+    def list_carousel_presets() -> str:
+        """
+        Lista todos os presets/templates de carrossel salvos pelo usuario.
+
+        Returns:
+            Lista dos presets com nome, cores e formato.
+        """
+        presets = db_list_presets(user_id)
+        if not presets:
+            return (
+                "O usuario nao tem nenhum preset de carrossel salvo. "
+                "Apos gerar um carrossel que o usuario gostar, ofereca salvar o estilo como preset."
+            )
+
+        lines = []
+        for p in presets:
+            palette = p.get("color_palette", {})
+            colors = ""
+            if palette:
+                colors = f" | {palette.get('primary', '?')} + {palette.get('accent', '?')}"
+            lines.append(
+                f"- {p['name']}{colors} | {p['default_format']}, {p['default_slide_count']} slides"
+            )
+        return "\n".join(lines)
+
+    return (
+        get_brand_profile, update_brand_profile_tool, list_brand_profiles_tool,
+        extract_branding_from_image, save_carousel_preset, list_carousel_presets,
+    )
