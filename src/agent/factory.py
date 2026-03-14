@@ -105,7 +105,7 @@ def create_agent_with_tools(
     social_instructions = []
     try:
         from src.tools.social_monitor import create_social_tools
-        social_tools_tuple = create_social_tools(phone, channel=channel)
+        social_tools_tuple = create_social_tools(phone, channel=channel, notifier=notifier)
         search_tools.extend(social_tools_tuple)
         social_instructions.append(
             "SOCIAL MONITORING: O usuario pode monitorar contas de redes sociais como referencia de conteudo. "
@@ -144,7 +144,7 @@ def create_agent_with_tools(
     calendar_instructions = []
     try:
         from src.tools.content_planner import create_content_planner_tools
-        plan_content, list_content_plan, update_content_plan_tool, delete_content_plan_tool = create_content_planner_tools(phone)
+        plan_content, list_content_plan, update_content_plan_tool, delete_content_plan_tool = create_content_planner_tools(phone, notifier=notifier)
         search_tools.extend([plan_content, list_content_plan, update_content_plan_tool, delete_content_plan_tool])
         calendar_instructions.append(
             "CALENDARIO DE CONTEUDO: O usuario pode planejar publicacoes via chat. "
@@ -298,7 +298,13 @@ def create_agent_with_tools(
         "   4. Se o usuario tem Gmail conectado, use read_emails(query=\"is:unread newer_than:1d\") para emails nao lidos.\n"
         "   Formate tudo de forma concisa e agradavel para WhatsApp, com emojis.'\n\n"
         "Confirme o horario e o que incluir antes de criar. "
-        "Para desativar, o usuario pode pedir 'desativa meu briefing' — use cancel_schedule."
+        "Para desativar, o usuario pode pedir 'desativa meu briefing' — use cancel_schedule.",
+
+        "REGRA CRITICA PARA AGENDAMENTOS: Quando usar schedule_message ou schedule_workflow "
+        "para agendamentos RECORRENTES (cron/interval), NUNCA inclua datas absolutas "
+        "(ex: '13/03/2026', '10 de marco') nas task_instructions ou request. "
+        "Use SEMPRE termos relativos: 'de hoje', 'mais recentes', 'ultimas 24h', 'desta semana'. "
+        "O agente que executar no futuro tera acesso a data correta automaticamente.",
     ]
 
     # Instruções de repurposing e relatório competitivo
@@ -315,8 +321,15 @@ def create_agent_with_tools(
         "Carrossel: visual, slides curtos. Video: roteiro com gancho, cenas, CTA. Blog: texto completo.\n\n"
         "RELATORIO COMPETITIVO: Quando o usuario pedir um relatorio ou comparacao de perfis monitorados "
         "(ex: 'gera um relatorio dos perfis X, Y e Z', 'compara essas contas', 'quero um panorama'), "
-        "use generate_competitive_report para gerar um relatorio visual com graficos e insights. "
-        "O relatorio compara seguidores, engajamento, crescimento e top posts entre as contas."
+        "use generate_competitive_report para gerar um relatorio com graficos e insights. "
+        "O relatorio compara seguidores, engajamento, crescimento e top posts entre as contas.\n\n"
+        "FORMATOS DE RELATORIO: O usuario pode escolher o formato do relatorio:\n"
+        "- 'me manda em texto', 'so o texto', 'resumo rapido' → format='text'\n"
+        "- 'quero com imagens', 'slides', 'graficos' → format='images' (padrao)\n"
+        "- 'texto e imagens', 'completo' → format='text_images'\n"
+        "- 'PDF', 'documento', 'quero baixar' → format='pdf'\n"
+        "Se o usuario nao especificar, use format='images' (comportamento padrao). "
+        "Infira o formato da frase do usuario naturalmente."
     ]
 
     all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + calendar_instructions + copilot_instructions + interactive_instructions + task_instructions + upsell_instructions + briefing_instructions + repurposing_instructions

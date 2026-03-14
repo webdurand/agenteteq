@@ -5,6 +5,7 @@ passa output entre eles, e atualiza estado no banco.
 Funciona tanto em execucao imediata (chat) quanto em agendamentos (dispatcher).
 """
 import logging
+import time
 from datetime import datetime, timezone
 
 from src.agent.factory import create_agent_with_tools
@@ -88,8 +89,9 @@ def execute_workflow(workflow_id: str, notifier=None) -> str:
             if raw_channel in ("web", "web_text"):
                 agent_channel = "web"
 
+            isolated_session = f"workflow_{workflow_id}_step{step_num}_{int(time.time())}"
             agent = create_agent_with_tools(
-                session_id=user_id,
+                session_id=isolated_session,
                 user_id=user_id,
                 channel=agent_channel,
                 extra_instructions=[
@@ -98,6 +100,7 @@ def execute_workflow(workflow_id: str, notifier=None) -> str:
                     "Execute as instrucoes diretamente e entregue o resultado pronto.",
                     "REGRA CRITICA: Se as instrucoes envolverem noticias, pesquisa ou informacoes atualizadas, "
                     "voce DEVE obrigatoriamente usar web_search ou deep_research.",
+                    "FRESCOR: Busque SEMPRE informacoes MAIS RECENTES. Cada execucao deve trazer dados NOVOS.",
                     "Quando as instrucoes pedirem envio via WhatsApp, use delivery_channel='whatsapp' nas tools de imagem "
                     "ou send_to_channel para texto.",
                 ],

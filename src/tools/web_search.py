@@ -131,6 +131,8 @@ def web_search_raw(query: str, max_results: int = 5, topic: str = "general", day
             )
         else:
             toolkit = get_search_toolkit()
+            if topic == "news" and hasattr(toolkit, "duckduckgo_news"):
+                return toolkit.duckduckgo_news(query=query, max_results=max_results)
             return toolkit.duckduckgo_search(query=query, max_results=max_results)
     except Exception as e:
         return f"Erro na busca: {e}"

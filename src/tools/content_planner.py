@@ -17,8 +17,12 @@ from src.models.content_plans import (
 logger = logging.getLogger(__name__)
 
 
-def create_content_planner_tools(user_id: str):
+def create_content_planner_tools(user_id: str, notifier=None):
     """Factory that creates content planner tools with user_id pre-injected."""
+
+    def _notify(msg: str) -> None:
+        if notifier:
+            notifier.notify(msg)
 
     def plan_content(
         title: str,
@@ -41,6 +45,7 @@ def create_content_planner_tools(user_id: str):
         Returns:
             Confirmacao com detalhes do plano criado.
         """
+        _notify("Adicionando ao calendario...")
         platforms = [p.strip().lower() for p in platform.split(",") if p.strip()]
 
         plan = db_create(

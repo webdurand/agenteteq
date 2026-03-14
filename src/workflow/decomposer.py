@@ -36,6 +36,7 @@ REGRAS:
 7. Seja especifico nas instrucoes — diga exatamente o que pesquisar, quantos itens, etc.
 8. Se o usuario mencionar envio por WhatsApp (zap, wpp), inclua delivery_channel='whatsapp' explicitamente nas instrucoes do step relevante.
 9. Se o usuario mencionar envio pela web, inclua delivery_channel='web'. Se nao mencionar canal, use delivery_channel='whatsapp'.
+10. NUNCA inclua datas absolutas (ex: '13/03/2026', 'dia 10 de marco') nos instructions dos steps. Use SEMPRE termos relativos como 'de hoje', 'mais recentes', 'ultimas 24h'. O agente que executar esses steps tera acesso a data/hora correta automaticamente.
 
 FORMATO DE RESPOSTA (JSON puro, sem markdown):
 {

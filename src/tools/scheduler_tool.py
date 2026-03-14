@@ -56,6 +56,11 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
                                Ex: "Execute list_tasks, veja as pendentes e mande um resumo para o usuario."
                                Ex: "Pesquisar com deep_research sobre Y e enviar um relatorio."
                                Ex: "Gere uma imagem aleatoria com generate_carousel (1 slide, formato 1080x1080, prompt criativo, use_reference_image=False)."
+                               REGRA CRITICA PARA AGENDAMENTOS RECORRENTES (cron/interval):
+                               NUNCA inclua datas absolutas (ex: '13/03/2026') nas task_instructions.
+                               Use SEMPRE termos relativos como 'de hoje', 'mais recentes', 'ultimas 24h'.
+                               O agente que executar essas instrucoes no futuro tera acesso a data correta automaticamente.
+                               Datas absolutas fariam a busca ficar presa no passado.
             trigger_type: OBRIGATORIO. Tipo de gatilho — "date" (unico), "cron" (recorrente), "interval" (por intervalo).
                           Se omitido, sera inferido dos outros args (minutes_from_now/run_date -> date, cron_expression -> cron, interval_minutes -> interval).
             minutes_from_now: PREFERIDO para disparo unico relativo. Numero de minutos a partir de agora.

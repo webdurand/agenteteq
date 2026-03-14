@@ -215,6 +215,153 @@ def render_report_slides(report_data: dict, insights: str = "") -> list[bytes]:
     return slides
 
 
+# ──────────────── Step 3b: Render Text ────────────────
+
+
+def render_report_text(report_data: dict, insights: str = "") -> str:
+    """Render report as structured markdown text."""
+    if not report_data or not report_data.get("accounts"):
+        return ""
+
+    lines = []
+    date_str = datetime.fromisoformat(report_data["generated_at"]).strftime("%d/%m/%Y")
+    lines.append(f"## Relatorio Competitivo\n*Gerado em {date_str}*\n")
+
+    # Overview per account
+    lines.append("### Visao Geral\n")
+    for acc in report_data["accounts"]:
+        lines.append(
+            f"**@{acc['username']}** ({acc['platform']})\n"
+            f"- Seguidores: {acc['followers']:,}\n"
+            f"- Posts: {acc['posts']:,}\n"
+            f"- Taxa de engajamento: {acc['engagement_rate']}%\n"
+            f"- Media de likes: {acc['avg_likes']:,}\n"
+            f"- Crescimento 30d: +{acc['growth_pct']}%\n"
+        )
+
+    # Rankings
+    comp = report_data.get("comparison", {})
+    if comp.get("followers_ranking"):
+        lines.append("### Ranking de Seguidores\n")
+        for i, (username, followers) in enumerate(comp["followers_ranking"], 1):
+            lines.append(f"{i}. @{username}: {followers:,}")
+
+    if comp.get("engagement_ranking"):
+        lines.append("\n### Ranking de Engajamento\n")
+        for i, (username, rate) in enumerate(comp["engagement_ranking"], 1):
+            lines.append(f"{i}. @{username}: {rate}%")
+
+    if comp.get("growth_ranking"):
+        lines.append("\n### Ranking de Crescimento (30d)\n")
+        for i, (username, growth) in enumerate(comp["growth_ranking"], 1):
+            lines.append(f"{i}. @{username}: {growth}")
+
+    # Top posts
+    lines.append("\n### Top Posts\n")
+    for acc in report_data["accounts"]:
+        caption = (acc.get("top_post_caption", "") or "")[:100]
+        if len(acc.get("top_post_caption", "") or "") > 100:
+            caption += "..."
+        lines.append(f"**@{acc['username']}**: {acc.get('top_post_likes', 0):,} likes — {caption}")
+
+    # Insights
+    if insights:
+        lines.append(f"\n### Insights\n\n{insights}")
+
+    return "\n".join(lines)
+
+
+# ──────────────── Step 3c: Render PDF ────────────────
+
+
+def render_report_pdf(report_data: dict, insights: str = "") -> bytes:
+    """Render report as a PDF document. Returns PDF bytes."""
+    try:
+        from fpdf import FPDF
+    except ImportError:
+        logger.error("fpdf2 nao instalado. Execute: pip install fpdf2")
+        return b""
+
+    if not report_data or not report_data.get("accounts"):
+        return b""
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+
+    # ── Cover page ──
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 24)
+    pdf.cell(0, 15, "Relatorio Competitivo", ln=True, align="C")
+    pdf.ln(5)
+    date_str = datetime.fromisoformat(report_data["generated_at"]).strftime("%d/%m/%Y")
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(0, 8, f"Gerado em {date_str}", ln=True, align="C")
+    pdf.ln(5)
+
+    usernames = ", ".join(f"@{a['username']}" for a in report_data["accounts"])
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 8, f"Contas: {usernames}", ln=True, align="C")
+    pdf.ln(15)
+
+    # ── Overview table ──
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 10, "Visao Geral", ln=True)
+    pdf.ln(3)
+
+    for acc in report_data["accounts"]:
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, f"@{acc['username']} ({acc['platform']})", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.cell(0, 6, f"Seguidores: {acc['followers']:,}  |  Posts: {acc['posts']:,}", ln=True)
+        pdf.cell(0, 6, f"Engajamento: {acc['engagement_rate']}%  |  Media likes: {acc['avg_likes']:,}", ln=True)
+        pdf.cell(0, 6, f"Crescimento 30d: +{acc['growth_pct']}%", ln=True)
+        if acc.get("top_post_caption"):
+            caption = acc["top_post_caption"][:100]
+            pdf.set_font("Helvetica", "I", 9)
+            pdf.cell(0, 6, f"Top post ({acc.get('top_post_likes', 0):,} likes): {caption}", ln=True)
+        pdf.ln(5)
+
+    # ── Rankings ──
+    comp = report_data.get("comparison", {})
+
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 12, "Rankings", ln=True)
+    pdf.ln(2)
+
+    for title, ranking in [
+        ("Seguidores", comp.get("followers_ranking", [])),
+        ("Engajamento", comp.get("engagement_ranking", [])),
+        ("Crescimento 30d", comp.get("growth_ranking", [])),
+    ]:
+        if not ranking:
+            continue
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(0, 8, title, ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        for i, (username, value) in enumerate(ranking, 1):
+            if isinstance(value, float):
+                val_str = f"{value}%"
+            elif isinstance(value, int) and value >= 1000:
+                val_str = f"{value:,}"
+            else:
+                val_str = str(value)
+            pdf.cell(0, 6, f"  {i}. @{username}: {val_str}", ln=True)
+        pdf.ln(3)
+
+    # ── Insights ──
+    if insights:
+        pdf.add_page()
+        pdf.set_font("Helvetica", "B", 16)
+        pdf.cell(0, 12, "Insights e Oportunidades", ln=True)
+        pdf.ln(3)
+        pdf.set_font("Helvetica", "", 10)
+        # fpdf2 multi_cell handles line wrapping
+        safe_insights = insights.encode("latin-1", errors="replace").decode("latin-1")
+        pdf.multi_cell(0, 6, safe_insights)
+
+    return bytes(pdf.output())
+
+
 def _new_slide() -> tuple[Image.Image, ImageDraw.Draw]:
     img = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(img)

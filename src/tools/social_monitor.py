@@ -117,8 +117,12 @@ def _is_stale(account: dict, hours: int = 6) -> bool:
         return True
 
 
-def create_social_tools(user_id: str, channel: str = "unknown"):
+def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
     """Factory that creates social monitoring tools with user_id pre-injected."""
+
+    def _notify(msg: str) -> None:
+        if notifier:
+            notifier.notify(msg)
 
     def preview_account(platform: str, username: str) -> str:
         """
@@ -146,6 +150,8 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         SUPPORTED_PLATFORMS = ["instagram", "youtube"]
         if platform not in SUPPORTED_PLATFORMS:
             return f"Plataforma '{platform}' nao suportada. Opcoes: {', '.join(SUPPORTED_PLATFORMS)}"
+
+        _notify(f"Buscando perfil @{username}...")
 
         try:
             provider = get_social_provider(platform)
@@ -371,6 +377,8 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         if not username:
             return "Informe o username da conta para analisar."
 
+        _notify(f"Analisando conteudo de @{username}...")
+
         account = get_tracked_account_by_username(user_id, platform, username)
         if not account:
             return f"@{username} nao esta sendo monitorada. Use track_account primeiro."
@@ -509,6 +517,8 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         if not username:
             return "Informe o username da conta."
 
+        _notify(f"Analisando posts de @{username}...")
+
         limit = max(1, min(limit, 5))
 
         # Try from tracked account first (has cached data)
@@ -613,6 +623,8 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         if not reference_username:
             return "Informe o username da conta de referencia."
 
+        _notify(f"Criando roteiro inspirado em @{reference_username}...")
+
         account = get_tracked_account_by_username(user_id, platform, reference_username)
         if not account:
             return f"@{reference_username} nao esta sendo monitorada. Use track_account primeiro."
@@ -716,25 +728,35 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
             )
         return f"Alertas desativados para @{username}."
 
-    def generate_competitive_report(usernames: str = "", platforms: str = "instagram") -> str:
+    def generate_competitive_report(usernames: str = "", platforms: str = "instagram", format: str = "images") -> str:
         """
-        Gera um relatorio visual comparando perfis monitorados.
-        Retorna um carrossel de imagens com graficos de seguidores, engajamento,
-        crescimento e insights comparativos. Envia as imagens para o usuario.
+        Gera um relatorio comparando perfis monitorados.
+        Pode gerar em diferentes formatos conforme a preferencia do usuario.
 
         Args:
             usernames: Usernames separados por virgula (ex: "natgeo,bbcnews,cnn").
                        Se vazio, usa todas as contas monitoradas.
             platforms: Plataformas separadas por virgula (ex: "instagram,youtube").
+            format: Formato do relatorio:
+                    - "text": apenas texto estruturado (rapido)
+                    - "images": carrossel de imagens com graficos (padrao)
+                    - "text_images": texto + imagens
+                    - "pdf": documento PDF para download
 
         Returns:
-            Texto com resumo do relatorio e links das imagens geradas.
+            Texto com resumo do relatorio e links se aplicavel.
         """
         from src.social.report_generator import (
             collect_report_data,
             generate_insights,
             render_report_slides,
+            render_report_text,
+            render_report_pdf,
         )
+
+        format = format.strip().lower()
+        if format not in ("text", "images", "text_images", "pdf"):
+            format = "images"
 
         platform_list = [p.strip().lower() for p in platforms.split(",") if p.strip()]
 
@@ -747,6 +769,7 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
         if len(username_list) < 2:
             return "Preciso de pelo menos 2 contas para gerar um relatorio comparativo. Informe os usernames."
 
+        _notify("Coletando dados dos perfis...")
         report_data = collect_report_data(user_id, username_list, platform_list)
         if not report_data or not report_data.get("accounts"):
             return (
@@ -755,15 +778,44 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
             )
 
         # Generate LLM insights
+        _notify("Gerando insights comparativos...")
         insights = generate_insights(report_data)
         report_data["insights"] = insights
 
-        # Render slides
+        # ── Text-only format ──
+        if format == "text":
+            return render_report_text(report_data, insights)
+
+        # ── PDF format ──
+        if format == "pdf":
+            _notify("Gerando PDF do relatorio...")
+            pdf_bytes = render_report_pdf(report_data, insights)
+            if not pdf_bytes:
+                return "Erro ao gerar o PDF do relatorio."
+            try:
+                import cloudinary.uploader
+                result = cloudinary.uploader.upload(
+                    pdf_bytes,
+                    folder="teq/reports",
+                    public_id=f"report_{user_id}_pdf",
+                    overwrite=True,
+                    resource_type="raw",
+                )
+                pdf_url = result["secure_url"]
+                text_summary = render_report_text(report_data, insights)
+                return f"{text_summary}\n\n**Download do PDF:** {pdf_url}"
+            except Exception as e:
+                logger.error("Erro upload PDF: %s", e)
+                return "Relatorio gerado mas houve erro ao fazer upload do PDF."
+
+        # ── Images or text_images format ──
+        _notify("Renderizando slides do relatorio...")
         slides = render_report_slides(report_data, insights=insights)
         if not slides:
             return "Erro ao gerar as imagens do relatorio."
 
         # Upload to Cloudinary
+        _notify("Fazendo upload das imagens...")
         try:
             import cloudinary
             import cloudinary.uploader
@@ -784,12 +836,19 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
 
         # Build response
         accounts_list = ", ".join(f"@{a['username']}" for a in report_data["accounts"])
-        lines = [
+        lines = []
+
+        # Prepend text report for text_images format
+        if format == "text_images":
+            lines.append(render_report_text(report_data, insights))
+            lines.append("")
+
+        lines.extend([
             f"**Relatorio Competitivo gerado!**\n",
             f"Contas analisadas: {accounts_list}\n",
             f"**{len(slides)} slides** com graficos de seguidores, engajamento, "
             f"crescimento e insights.\n",
-        ]
+        ])
 
         # Summary metrics
         for acc in report_data["accounts"]:
@@ -798,7 +857,8 @@ def create_social_tools(user_id: str, channel: str = "unknown"):
                 f"eng. {acc['engagement_rate']}% | crescimento +{acc['growth_pct']}%"
             )
 
-        lines.append(f"\n**Insights:**\n{insights[:500]}")
+        if format != "text_images":
+            lines.append(f"\n**Insights:**\n{insights[:500]}")
 
         if image_urls:
             lines.append("\n**Imagens do relatorio:**")

@@ -8,6 +8,7 @@ Nota: APScheduler executa jobs em threads, por isso usamos asyncio.run()
 para chamar o cliente async do WhatsApp a partir de um contexto sincrono.
 """
 import asyncio
+import time
 import traceback
 import logging
 
@@ -77,11 +78,17 @@ def dispatch_proactive_message(reminder_id: int):
                     "seu conhecimento interno para dados que mudam.",
                     "Para noticias: faca MULTIPLAS buscas com queries especificas e variadas. "
                     "Inclua SEMPRE: titulo real da noticia, fonte, data e link.",
+                    "FRESCOR OBRIGATORIO: Busque SEMPRE as noticias e informacoes MAIS RECENTES (de HOJE). "
+                    "NUNCA repita conteudo de execucoes anteriores. Cada execucao deste lembrete deve trazer "
+                    "informacoes NOVAS e DIFERENTES. Inclua a data de publicacao de cada noticia.",
+                    "DICA: Varie suas queries de busca. Use termos diferentes, angulos diferentes, "
+                    "e adicione qualificadores temporais como 'hoje', 'ultimas horas' ou a data atual nas queries.",
                 ]
 
                 agent_channel = "web" if channel in {"web_voice", "web_text"} else "whatsapp"
+                isolated_session = f"reminder_{reminder_id}_{int(time.time())}"
                 agent = create_agent_with_tools(
-                    session_id=user_phone,
+                    session_id=isolated_session,
                     user_id=user_phone,
                     channel=agent_channel,
                     extra_instructions=reminder_instructions,
