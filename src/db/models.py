@@ -265,6 +265,8 @@ class Carousel(Base):
     reference_images = Column(Text, default="[]")
     created_at = Column(String, nullable=False)
     updated_at = Column(String)
+    type = Column(String, default="carousel")
+    file_url = Column(String)
 
     def to_dict(self) -> dict:
         import json
@@ -279,6 +281,8 @@ class Carousel(Base):
             "reference_images": json.loads(refs) if isinstance(refs, str) else refs,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "type": self.type or "carousel",
+            "file_url": self.file_url or "",
         }
 
 

@@ -81,3 +81,25 @@ def list_user_carousels(user_id: str, limit: int = 0, offset: int = 0) -> dict:
         carousels = carousels[:limit]
 
     return {"carousels": carousels, "has_more": has_more}
+
+
+def create_pdf_entry(user_id: str, title: str, file_url: str) -> str:
+    """Create a gallery entry for a PDF file (already uploaded)."""
+    carousel_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+
+    with get_db() as db:
+        carousel = Carousel(
+            id=carousel_id,
+            user_id=user_id,
+            title=title,
+            type="pdf",
+            status="done",
+            file_url=file_url,
+            slides="[]",
+            reference_images="[]",
+            created_at=now,
+        )
+        db.add(carousel)
+
+    return carousel_id

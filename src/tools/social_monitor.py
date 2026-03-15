@@ -728,7 +728,7 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
             )
         return f"Alertas desativados para @{username}."
 
-    def generate_competitive_report(usernames: str = "", platforms: str = "instagram", format: str = "images") -> str:
+    def generate_competitive_report(usernames: str = "", platforms: str = "instagram", format: str = "images", theme: str = "dark") -> str:
         """
         Gera um relatorio comparando perfis monitorados.
         Pode gerar em diferentes formatos conforme a preferencia do usuario.
@@ -741,7 +741,8 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
                     - "text": apenas texto estruturado (rapido)
                     - "images": carrossel de imagens com graficos (padrao)
                     - "text_images": texto + imagens
-                    - "pdf": documento PDF para download
+                    - "pdf": documento PDF dashboard visual para download
+            theme: Tema visual do PDF: "dark" (padrao, fundo escuro) ou "light" (fundo branco).
 
         Returns:
             Texto com resumo do relatorio e links se aplicavel.
@@ -752,11 +753,16 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
             render_report_slides,
             render_report_text,
             render_report_pdf,
+            render_dashboard_pdf,
         )
 
         format = format.strip().lower()
         if format not in ("text", "images", "text_images", "pdf"):
             format = "images"
+
+        theme = theme.strip().lower()
+        if theme not in ("dark", "light"):
+            theme = "dark"
 
         platform_list = [p.strip().lower() for p in platforms.split(",") if p.strip()]
 
@@ -766,8 +772,8 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
             accounts = db_list_tracked_accounts(user_id)
             username_list = [a["username"] for a in accounts]
 
-        if len(username_list) < 2:
-            return "Preciso de pelo menos 2 contas para gerar um relatorio comparativo. Informe os usernames."
+        if not username_list:
+            return "Preciso de pelo menos 1 conta para gerar o relatorio. Informe os usernames."
 
         _notify("Coletando dados dos perfis...")
         report_data = collect_report_data(user_id, username_list, platform_list)
@@ -788,8 +794,8 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
 
         # ── PDF format ──
         if format == "pdf":
-            _notify("Gerando PDF do relatorio...")
-            pdf_bytes = render_report_pdf(report_data, insights)
+            _notify("Gerando dashboard PDF...")
+            pdf_bytes = render_dashboard_pdf(report_data, insights, theme=theme)
             if not pdf_bytes:
                 return "Erro ao gerar o PDF do relatorio."
             try:
@@ -802,6 +808,18 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
                     resource_type="raw",
                 )
                 pdf_url = result["secure_url"]
+
+                # Save to gallery
+                try:
+                    from src.models.carousel import create_pdf_entry
+                    from src.events import emit_event_sync
+                    accounts_label = ", ".join(f"@{u}" for u in username_list[:3])
+                    pdf_title = f"Relatorio - {accounts_label}"
+                    create_pdf_entry(user_id, pdf_title, pdf_url)
+                    emit_event_sync(user_id, "carousel_generated")
+                except Exception as e:
+                    logger.error("Erro ao salvar PDF na galeria: %s", e)
+
                 text_summary = render_report_text(report_data, insights)
                 return f"{text_summary}\n\n**Download do PDF:** {pdf_url}"
             except Exception as e:

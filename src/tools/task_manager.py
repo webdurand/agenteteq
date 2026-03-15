@@ -129,11 +129,30 @@ def list_tasks(user_id: str, status: str = "pending", category: str = "") -> str
 def get_tasks(user_id: str, status: str = "pending", limit: int = 0, offset: int = 0) -> dict:
     """
     Lista as tarefas do usuário. Se limit > 0, pagina com has_more.
+    Quando status="all" com paginação, retorna TODAS as pendentes + done paginado,
+    garantindo que tarefas pendentes recentes nunca fiquem escondidas.
     """
     try:
-        fetch_limit = limit + 1 if limit > 0 else None
-
         with get_db() as db:
+            if status == "all" and limit > 0:
+                pending = db.query(Task).filter(
+                    Task.user_id == user_id, Task.status == "pending"
+                ).order_by(Task.created_at.asc()).all()
+
+                done_q = db.query(Task).filter(
+                    Task.user_id == user_id, Task.status == "done"
+                ).order_by(Task.created_at.asc())
+                done_q = done_q.limit(limit + 1).offset(offset)
+                done_rows = done_q.all()
+
+                has_more = len(done_rows) > limit
+                if has_more:
+                    done_rows = done_rows[:limit]
+
+                tasks = [t.to_dict() for t in pending] + [t.to_dict() for t in done_rows]
+                return {"tasks": tasks, "has_more": has_more}
+
+            fetch_limit = limit + 1 if limit > 0 else None
             q = db.query(Task).filter(Task.user_id == user_id)
             if status != "all":
                 q = q.filter(Task.status == status)

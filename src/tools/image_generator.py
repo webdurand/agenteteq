@@ -704,9 +704,10 @@ def create_image_tools(user_id: str, channel: str = "web"):
                     SOMENTE preencha quando o usuário EXPLICITAMENTE pedir para editar/modificar uma imagem.
             sequential_slides: Se True (padrão), gera o slide 1 primeiro e mantém
                                coerência visual nos demais. Use False para coleções independentes.
-            delivery_channel: Canal de destino para entrega cross-channel.
-                              SOMENTE preencha quando o USUARIO pedir EXPLICITAMENTE.
-                              Valores: 'whatsapp', 'web', 'ambos'.
+            delivery_channel: DEIXE VAZIO ("") na maioria dos casos — o sistema ja sabe o canal correto.
+                              Preencha APENAS se o USUARIO disser EXPLICITAMENTE 'manda na web',
+                              'envia no zap', 'manda nos dois'. Se nao mencionou, DEIXE VAZIO.
+                              Valores quando necessario: 'whatsapp', 'web', 'ambos'.
             preset_name: Nome de um preset/template de estilo salvo pelo usuario.
 
         Returns:
@@ -766,6 +767,17 @@ def create_image_tools(user_id: str, channel: str = "web"):
         if delivery_channel:
             from src.integrations.channel_router import resolve_channel
             resolved = resolve_channel(delivery_channel)
+            if resolved and resolved != channel:
+                logger.warning(
+                    "generate_image_tool | CROSS-CHANNEL OVERRIDE | user=%s | origin=%s | requested=%s | resolved=%s",
+                    user_id, channel, delivery_channel, resolved,
+                )
+                from src.memory.analytics import log_event
+                log_event(
+                    user_id=user_id, channel=channel,
+                    event_type="cross_channel_image_delivery", status="warning",
+                    extra_data={"origin": channel, "effective": resolved, "delivery_param": delivery_channel, "title": title},
+                )
             if resolved:
                 effective_channel = resolved
 
