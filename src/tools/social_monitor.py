@@ -807,13 +807,15 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
             if not pdf_bytes:
                 return "Erro ao gerar o PDF do relatorio."
             try:
+                import io as _io
                 import cloudinary.uploader
                 result = cloudinary.uploader.upload(
-                    pdf_bytes,
+                    _io.BytesIO(pdf_bytes),
                     folder="teq/reports",
-                    public_id=f"report_{user_id}.pdf",
+                    public_id=f"report_{user_id}",
                     overwrite=True,
                     resource_type="raw",
+                    format="pdf",
                 )
                 pdf_url = result["secure_url"]
 
@@ -829,6 +831,7 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
                     logger.error("Erro ao salvar PDF na galeria: %s", e)
 
                 # Send PDF as document on WhatsApp
+                doc_sent = False
                 if effective_channel in ("whatsapp", "whatsapp_text", "web_whatsapp"):
                     try:
                         import asyncio as _aio
@@ -846,10 +849,13 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
                             loop.create_task(coro)
                         except RuntimeError:
                             _aio.run(coro)
+                        doc_sent = True
                     except Exception as e:
                         logger.error("Erro ao enviar PDF via WhatsApp: %s", e)
 
                 text_summary = render_report_text(report_data, insights)
+                if doc_sent:
+                    return text_summary
                 return f"{text_summary}\n\n**Download do PDF:** {pdf_url}"
             except Exception as e:
                 logger.error("Erro upload PDF: %s", e)
