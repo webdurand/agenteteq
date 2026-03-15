@@ -803,7 +803,7 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
                 result = cloudinary.uploader.upload(
                     pdf_bytes,
                     folder="teq/reports",
-                    public_id=f"report_{user_id}_pdf",
+                    public_id=f"report_{user_id}.pdf",
                     overwrite=True,
                     resource_type="raw",
                 )

@@ -234,12 +234,13 @@ class EvolutionWhatsAppClient:
             response.raise_for_status()
             return response.json()
 
-    async def send_document(self, to_number: str, document_url: str, filename: str, caption: Optional[str] = None) -> dict:
+    async def send_document(self, to_number: str, document_url: str, filename: str, caption: Optional[str] = None, mimetype: Optional[str] = None) -> dict:
         url = f"{self.api_url}/message/sendMedia/{self.instance_name}"
         payload: dict = {
             "number": to_number,
             "mediatype": "document",
             "media": document_url,
+            "mimetype": mimetype or "application/pdf",
             "fileName": filename,
             "delay": 1200,
         }
