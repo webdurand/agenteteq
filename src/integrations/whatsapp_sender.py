@@ -23,44 +23,27 @@ async def send_whatsapp_with_interactive(
     """
     parsed = parse_interactive_elements(text)
 
+    # TODO: reabilitar botoes/listas interativos quando Evolution API suportar corretamente
     if parsed["buttons"]:
         body = parsed["body"]
-        if len(body) > 1024:
-            parts = split_whatsapp_messages(body)
-            for i, part in enumerate(parts[:-1]):
-                rid = reply_to_message_id if i == 0 else None
-                await whatsapp_client.send_text_message(to_number, part, reply_to_message_id=rid)
-            try:
-                await whatsapp_client.send_button_message(to_number, parts[-1], parsed["buttons"])
-            except Exception as e:
-                logger.warning("Fallback de botoes para texto: %s", e)
-                await whatsapp_client.send_text_message(to_number, parts[-1])
-        else:
-            try:
-                await whatsapp_client.send_button_message(
-                    to_number, body or "Escolha uma opcao:", parsed["buttons"],
-                )
-            except Exception as e:
-                logger.warning("Fallback de botoes para texto: %s", e)
-                fallback = body + "\n\n" + "\n".join(f"• {b['title']}" for b in parsed["buttons"])
-                await whatsapp_client.send_text_message(to_number, fallback, reply_to_message_id=reply_to_message_id)
+        fallback = body + "\n\n" + "\n".join(f"• {b['title']}" for b in parsed["buttons"])
+        parts = split_whatsapp_messages(fallback)
+        for i, part in enumerate(parts):
+            rid = reply_to_message_id if i == 0 else None
+            await whatsapp_client.send_text_message(to_number, part, reply_to_message_id=rid)
 
     elif parsed["list"]:
         body = parsed["body"]
-        lst = parsed["list"]
-        try:
-            await whatsapp_client.send_list_message(
-                to_number, body or "Escolha uma opcao:", lst["button_text"], lst["sections"],
-            )
-        except Exception as e:
-            logger.warning("Fallback de lista para texto: %s", e)
-            text_rows = []
-            for sec in lst["sections"]:
-                for row in sec.get("rows", []):
-                    desc = f" — {row['description']}" if row.get("description") else ""
-                    text_rows.append(f"• {row['title']}{desc}")
-            fallback = body + "\n\n" + "\n".join(text_rows)
-            await whatsapp_client.send_text_message(to_number, fallback, reply_to_message_id=reply_to_message_id)
+        text_rows = []
+        for sec in parsed["list"]["sections"]:
+            for row in sec.get("rows", []):
+                desc = f" — {row['description']}" if row.get("description") else ""
+                text_rows.append(f"• {row['title']}{desc}")
+        fallback = body + "\n\n" + "\n".join(text_rows)
+        parts = split_whatsapp_messages(fallback)
+        for i, part in enumerate(parts):
+            rid = reply_to_message_id if i == 0 else None
+            await whatsapp_client.send_text_message(to_number, part, reply_to_message_id=rid)
 
     else:
         parts = split_whatsapp_messages(text)
