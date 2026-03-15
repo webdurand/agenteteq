@@ -23,6 +23,7 @@ FREE_LIMITS = {
     "max_whatsapp_messages_daily": 20,
     "max_audio_transcriptions_daily": 5,
     "max_llm_cost_monthly_usd": 0.50,
+    "canvas_editor_enabled": False,
 }
 
 PAID_LIMITS = {
@@ -41,6 +42,7 @@ PAID_LIMITS = {
     "max_whatsapp_messages_daily": 150,
     "max_audio_transcriptions_daily": 30,
     "max_llm_cost_monthly_usd": 8.00,
+    "canvas_editor_enabled": False,
 }
 
 

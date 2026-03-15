@@ -762,3 +762,79 @@ class ImageSession(Base):
     image_index = Column(Integer, primary_key=True, default=0)
     image_url = Column(String, nullable=False)
     created_at = Column(String, default=lambda: _utcnow().isoformat())
+
+
+# ──────────────────────────── Canvas Sessions ────────────────────────────
+
+
+class SharedAsset(Base):
+    __tablename__ = "shared_assets"
+    __table_args__ = (
+        Index("idx_shared_assets_category", "category", "asset_type"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String, nullable=False)
+    tags = Column(String, nullable=False, default="")          # comma-separated
+    category = Column(String, default="icon")                  # icon, image, pattern
+    asset_type = Column(String, default="svg")                 # svg, png, webp
+    source = Column(String, default="seed")                    # seed, generated, uploaded
+    url = Column(String, nullable=False)                       # Cloudinary URL
+    thumbnail_url = Column(String)
+    metadata_json = Column(Text, default="{}")                 # svg_content, etc.
+    created_by = Column(String)                                # user_id or null for seed
+    usage_count = Column(Integer, default=0)
+    created_at = Column(String, default=lambda: _utcnow().isoformat())
+
+    def to_dict(self) -> dict:
+        import json
+        meta = {}
+        try:
+            meta = json.loads(self.metadata_json or "{}")
+        except Exception:
+            pass
+        return {
+            "id": self.id,
+            "name": self.name,
+            "tags": [t.strip() for t in (self.tags or "").split(",") if t.strip()],
+            "category": self.category,
+            "asset_type": self.asset_type,
+            "source": self.source,
+            "url": self.url,
+            "thumbnail_url": self.thumbnail_url,
+            "metadata": meta,
+            "created_by": self.created_by,
+            "usage_count": self.usage_count,
+            "created_at": self.created_at,
+        }
+
+
+class CanvasSession(Base):
+    __tablename__ = "canvas_sessions"
+    __table_args__ = (
+        Index("idx_canvas_sessions_user", "user_id", "status"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=False)
+    title = Column(String, default="")
+    canvas_json = Column(Text, nullable=False)
+    thumbnail_url = Column(String)
+    status = Column(String, default="active")       # active, archived
+    format = Column(String, default="1080x1080")
+    created_at = Column(String, default=lambda: _utcnow().isoformat())
+    updated_at = Column(String, default=lambda: _utcnow().isoformat())
+
+    def to_dict(self) -> dict:
+        import json
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "title": self.title,
+            "canvas_json": json.loads(self.canvas_json) if isinstance(self.canvas_json, str) else self.canvas_json,
+            "thumbnail_url": self.thumbnail_url,
+            "status": self.status,
+            "format": self.format,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }

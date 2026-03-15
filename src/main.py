@@ -46,6 +46,7 @@ from src.scheduler.engine import start_scheduler, shutdown_scheduler
 from src.events import set_main_loop
 from src.db.init import ensure_tables
 from src.models.subscriptions import ensure_default_plans
+from src.tools.image_generation.seed_icons import seed_shared_icons
 from src.queue.task_queue import recover_stale_tasks
 from src.events_broadcast import listen_ws_events
 
@@ -55,6 +56,7 @@ async def _deferred_startup():
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, ensure_tables)
     await loop.run_in_executor(None, ensure_default_plans)
+    await loop.run_in_executor(None, seed_shared_icons)
     await loop.run_in_executor(None, recover_stale_tasks)
     await loop.run_in_executor(None, start_scheduler)
     logger.info("Startup em background finalizado.")

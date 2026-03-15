@@ -102,6 +102,44 @@ def create_agent_with_tools(
     except Exception as e:
         logger.error("Erro ao carregar Branding tools para %s: %s", phone, e)
 
+    # Injeta Canvas Editor tools (feature-gated)
+    canvas_instructions = []
+    try:
+        from src.config.feature_gates import is_feature_enabled
+        if is_feature_enabled(phone, "canvas_editor_enabled"):
+            from src.tools.canvas_tools import create_canvas_tools
+            canvas_tools = create_canvas_tools(phone, channel=channel, notifier=notifier)
+            search_tools.extend(canvas_tools)
+            canvas_instructions.append(
+                "CANVAS EDITOR (Canva Conversacional): Use as canvas tools quando o usuario pedir para COMPOR "
+                "imagens com controle preciso de posicao, camadas e elementos visuais. Exemplos:\n"
+                "- 'Coloca texto no centro com sombra'\n"
+                "- 'Adiciona uma barra colorida no topo com @username'\n"
+                "- 'Bota uma foto com borda arredondada no canto'\n"
+                "- 'Cria um slide limpo com fundo escuro e texto grande'\n"
+                "- 'Insere um icone de dinheiro'\n"
+                "- 'Sobe o texto um pouco'\n\n"
+                "Use generate_image (carrossel) quando o usuario quer:\n"
+                "- Imagem gerada por IA (foto, ilustracao)\n"
+                "- Carrossel completo automatico com IA\n"
+                "- Edicao de foto existente\n\n"
+                "FLUXO DO CANVAS:\n"
+                "1. create_canvas — cria canvas com formato e fundo (cor, imagem ou gradiente)\n"
+                "2. Adicione layers conforme o usuario pedir (add_text_layer, add_image_layer, add_shape_layer, add_icon_layer, add_overlay)\n"
+                "3. Cada layer e adicionado incrementalmente — o usuario ve preview automatico apos cada mudanca\n"
+                "4. Use move_layer, update_layer, remove_layer para ajustes\n"
+                "5. apply_template aplica layouts profissionais pre-definidos (capa, conteudo, fechamento, topbar)\n\n"
+                "TEMPLATES RAPIDOS: use apply_template para criar rapidamente slides profissionais "
+                "com o layout pre-definido, depois ajuste conforme o usuario pedir.\n\n"
+                "REGRAS:\n"
+                "- Apos cada adicao/alteracao de layer, o preview e enviado automaticamente ao usuario\n"
+                "- O canvas e salvo no banco — o usuario pode voltar a editar depois\n"
+                "- Use as cores da palette do canvas (canvas_doc.palette) para manter coerencia visual\n"
+                "- Se o usuario tiver brand profile, aplique as cores do branding na palette ao criar o canvas"
+            )
+    except Exception as e:
+        logger.error("Erro ao carregar Canvas tools para %s: %s", phone, e)
+
     # Injeta Social Monitoring tools
     social_instructions = []
     try:
@@ -341,7 +379,7 @@ def create_agent_with_tools(
         "NUNCA diga que nao consegue enviar PDF ou imagens pelo WhatsApp — SEMPRE chame a tool."
     ]
 
-    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + calendar_instructions + copilot_instructions + interactive_instructions + task_instructions + upsell_instructions + briefing_instructions + repurposing_instructions
+    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + canvas_instructions + calendar_instructions + copilot_instructions + interactive_instructions + task_instructions + upsell_instructions + briefing_instructions + repurposing_instructions
 
     return get_assistant(
         session_id=session_id,
