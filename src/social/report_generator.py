@@ -103,6 +103,16 @@ def _get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
+import re as _re
+
+_EMOJI_RE = _re.compile(r'[\U00010000-\U0010FFFF]')
+
+
+def _strip_emoji(text: str) -> str:
+    """Remove emoji and supplementary-plane chars unsupported by DejaVu."""
+    return _EMOJI_RE.sub('', text)
+
+
 def _format_number(n: int) -> str:
     if n >= 1_000_000:
         return f"{n / 1_000_000:.1f}M"
@@ -858,7 +868,7 @@ def render_dashboard_pdf(report_data: dict, insights: str = "", theme: str = "da
                 pdf.set_text_color(*t["text_rgb"])
                 pdf.cell(col_widths[2], 6, _format_number(post.get("likes_count", 0)), fill=fill)
                 pdf.cell(col_widths[3], 6, _format_number(post.get("comments_count", 0)), fill=fill)
-                caption = (post.get("caption", "") or "")[:60]
+                caption = _strip_emoji((post.get("caption", "") or ""))[:60]
                 pdf.set_text_color(*t["text_secondary_rgb"])
                 pdf.cell(col_widths[4], 6, caption, fill=fill, ln=True)
 
@@ -922,7 +932,8 @@ def render_dashboard_pdf(report_data: dict, insights: str = "", theme: str = "da
 
             pdf.set_font("DejaVu", "", 10)
             pdf.set_x(10)
-            for line in insights.split("\n"):
+            safe_insights = _strip_emoji(insights)
+            for line in safe_insights.split("\n"):
                 line = line.strip()
                 if not line:
                     pdf.ln(3)
@@ -1081,9 +1092,10 @@ def render_report_pdf(report_data: dict, insights: str = "") -> bytes:
         pdf.cell(0, 6, f"Engajamento: {acc['engagement_rate']}%  |  Media likes: {acc['avg_likes']:,}", ln=True)
         pdf.cell(0, 6, f"Crescimento 30d: +{acc['growth_pct']}%", ln=True)
         if acc.get("top_post_caption"):
-            caption = acc["top_post_caption"][:100]
+            caption = _strip_emoji(acc["top_post_caption"])[:100]
             pdf.set_font("Helvetica", "I", 9)
-            pdf.cell(0, 6, f"Top post ({acc.get('top_post_likes', 0):,} likes): {caption}", ln=True)
+            safe_line = f"Top post ({acc.get('top_post_likes', 0):,} likes): {caption}"
+            pdf.cell(0, 6, safe_line.encode("latin-1", errors="replace").decode("latin-1"), ln=True)
         pdf.ln(5)
 
     # ── Rankings ──

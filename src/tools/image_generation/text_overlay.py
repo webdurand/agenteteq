@@ -400,19 +400,22 @@ def _layout_conteudo(
     slide: SlideText,
     palette: ColorPalette,
 ) -> Image.Image:
-    """Layout de conteúdo: card glassmorphism com título e body."""
+    """Layout de conteúdo: card semi-transparente com bordas arredondadas, título e body."""
     w, h = img.size
     padding = int(w * 0.08)
     align = _resolve_align(slide, "left")
 
-    # Card glassmorphism no centro
+    # Card semi-transparente com bordas arredondadas
     card_margin = int(w * 0.06)
     card_top = int(h * 0.12)
     card_bottom = int(h * 0.88)
     card_box = (card_margin, card_top, w - card_margin, card_bottom)
 
-    bg_color = _hex_to_rgba(palette.primary)[:3]
-    img = _apply_glassmorphism(img.convert("RGBA"), card_box, bg_color, alpha=140, blur_radius=20, corner_radius=30)
+    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw_overlay = ImageDraw.Draw(overlay)
+    card_color = _hex_to_rgba(palette.primary, alpha=160)
+    _draw_rounded_rect(draw_overlay, card_box, card_color, radius=30)
+    img = Image.alpha_composite(img.convert("RGBA"), overlay)
 
     # Texto sobre o card
     text_overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -497,19 +500,22 @@ def _layout_fechamento(
     slide: SlideText,
     palette: ColorPalette,
 ) -> Image.Image:
-    """Layout de fechamento/CTA: card glassmorphism com bordas arredondadas, texto centralizado."""
+    """Layout de fechamento/CTA: card semi-transparente com bordas arredondadas, texto centralizado."""
     w, h = img.size
     padding = int(w * 0.08)
     align = _resolve_align(slide, "center")
 
-    # Card glassmorphism (mesmo estilo do conteudo, mantém consistência visual)
+    # Card semi-transparente com bordas arredondadas (consistente com conteudo)
     card_margin = int(w * 0.06)
     card_top = int(h * 0.12)
     card_bottom = int(h * 0.88)
     card_box = (card_margin, card_top, w - card_margin, card_bottom)
 
-    bg_color = _hex_to_rgba(palette.primary)[:3]
-    img = _apply_glassmorphism(img.convert("RGBA"), card_box, bg_color, alpha=160, blur_radius=20, corner_radius=30)
+    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw_overlay = ImageDraw.Draw(overlay)
+    card_color = _hex_to_rgba(palette.primary, alpha=170)
+    _draw_rounded_rect(draw_overlay, card_box, card_color, radius=30)
+    img = Image.alpha_composite(img.convert("RGBA"), overlay)
 
     # Camada de sombra
     shadow_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
