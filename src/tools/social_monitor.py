@@ -728,10 +728,12 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
             )
         return f"Alertas desativados para @{username}."
 
-    def generate_competitive_report(usernames: str = "", platforms: str = "instagram", format: str = "images", theme: str = "dark") -> str:
+    def generate_competitive_report(usernames: str = "", platforms: str = "instagram", format: str = "images", theme: str = "dark", delivery_channel: str = "") -> str:
         """
         Gera um relatorio comparando perfis monitorados.
         Pode gerar em diferentes formatos conforme a preferencia do usuario.
+        O envio eh automatico pelo canal atual da conversa (WhatsApp ou web).
+        Se o usuario pedir para enviar por um canal diferente, use delivery_channel para direcionar.
 
         Args:
             usernames: Usernames separados por virgula (ex: "natgeo,bbcnews,cnn").
@@ -743,6 +745,9 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
                     - "text_images": texto + imagens
                     - "pdf": documento PDF dashboard visual para download
             theme: Tema visual do PDF: "dark" (padrao, fundo escuro) ou "light" (fundo branco).
+            delivery_channel: Canal de entrega opcional. Se vazio, usa o canal atual da conversa.
+                              Valores: "whatsapp" (envia como documento/imagem no WhatsApp),
+                              "web" (salva na galeria de midia do painel).
 
         Returns:
             Texto com resumo do relatorio e links se aplicavel.
@@ -755,6 +760,9 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
             render_report_pdf,
             render_dashboard_pdf,
         )
+
+        # Resolve delivery channel: explicit override or session channel
+        effective_channel = delivery_channel.strip().lower() if delivery_channel.strip() else channel
 
         format = format.strip().lower()
         if format not in ("text", "images", "text_images", "pdf"):
@@ -821,7 +829,7 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
                     logger.error("Erro ao salvar PDF na galeria: %s", e)
 
                 # Send PDF as document on WhatsApp
-                if channel in ("whatsapp", "whatsapp_text", "web_whatsapp"):
+                if effective_channel in ("whatsapp", "whatsapp_text", "web_whatsapp"):
                     try:
                         import asyncio as _aio
                         from src.integrations.whatsapp import whatsapp_client as _wpp
@@ -900,7 +908,7 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
             lines.append(f"\n**Insights:**\n{insights[:500]}")
 
         # Send images as media on WhatsApp
-        if image_urls and channel in ("whatsapp", "whatsapp_text", "web_whatsapp"):
+        if image_urls and effective_channel in ("whatsapp", "whatsapp_text", "web_whatsapp"):
             try:
                 import asyncio as _aio
                 from src.integrations.whatsapp import whatsapp_client as _wpp
@@ -1016,6 +1024,10 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
                 # Over limit — fallback to thumbnail only
                 logger.info("Video limit reached for %s, using thumbnail", user_id)
             else:
+                if channel == "web":
+                    _notify("Processando conteudo do video...")
+                else:
+                    _notify("Vou dar uma olhada no video e ja te digo...")
                 video_duration = post.metadata.get("duration", 0)
                 video_bytes = _download_video(post.video_url)
                 if video_bytes:
@@ -1109,7 +1121,10 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
         if limit_msg:
             return limit_msg
 
-        _notify("Baixando video...")
+        if channel == "web":
+            _notify("Processando conteudo do video...")
+        else:
+            _notify("Vou dar uma olhada no video e ja te digo...")
 
         video_bytes, duration = _download_youtube_video(url)
         if not video_bytes:
