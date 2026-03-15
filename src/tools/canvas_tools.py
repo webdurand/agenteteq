@@ -62,6 +62,16 @@ _POSITIONS = {
 def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
     """Factory that creates canvas editor tools with user context pre-injected."""
 
+    _is_whatsapp = channel == "whatsapp"
+
+    def _status(msg: str):
+        """Send status text to WhatsApp user (no-op for web)."""
+        if _is_whatsapp and notifier:
+            try:
+                notifier.notify(msg)
+            except Exception:
+                pass
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -237,6 +247,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         """
         clear_image_cache()
         dims = _FORMATS.get(format, (1080, 1080))
+        if slides_count > 1:
+            _status(f"Criando carrossel com {slides_count} slides...")
 
         background = {"type": background_type, "value": background_value}
         if background_type == "image" and background_image_url:
@@ -860,6 +872,11 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
 
         added_layers = []
 
+        if _is_multi_slide(canvas_doc):
+            cur = canvas_doc.get("current_slide", 0) + 1
+            tot = _slide_count(canvas_doc)
+            _status(f"Montando slide {cur}/{tot}...")
+
         if template == "capa":
             # Gradient overlay bottom 50%
             added_layers.append({
@@ -1388,6 +1405,7 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         slide = canvas_doc["slides"][idx]
         layers_count = len(slide.get("layers", []))
 
+        _status(f"Editando slide {slide_number}/{total}")
         preview_url = _save_and_render(session["id"], canvas_doc)
 
         return (
@@ -1600,8 +1618,11 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         total = len(slides_data)
         carousel_slides = []
 
+        _status(f"Renderizando {total} slides...")
+
         for i, slide in enumerate(slides_data):
-            # Build render doc for this slide
+            _status(f"Renderizando slide {i + 1}/{total}...")
+
             render_doc = {
                 "width": canvas_doc.get("width", 1080),
                 "height": canvas_doc.get("height", 1080),
@@ -1638,13 +1659,39 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         )
         update_carousel_status(carousel_id, "done", carousel_slides)
 
-        # Notify frontend
+        # Notify frontend (web)
         emit_event_sync(user_id, "carousel_done", {
             "carousel_id": carousel_id,
             "title": carousel_title,
             "slides": carousel_slides,
             "total_slides": total,
         })
+
+        # Send images via WhatsApp
+        if _is_whatsapp:
+            try:
+                import asyncio as _aio
+                from src.integrations.whatsapp import whatsapp_client
+                from src.events import _main_loop
+
+                async def _send_carousel_whatsapp():
+                    await whatsapp_client.send_text_message(
+                        user_id, f"Pronto! Enviando {total} slides do carrossel..."
+                    )
+                    for s in carousel_slides:
+                        url = s.get("image_url")
+                        if url:
+                            num = s["slide_number"]
+                            caption = f"Slide {num}/{total}"
+                            try:
+                                await whatsapp_client.send_image(user_id, url, caption=caption)
+                            except Exception as img_err:
+                                logger.error("Erro ao enviar slide %s via WhatsApp: %s", num, img_err)
+
+                if _main_loop and _main_loop.is_running():
+                    _aio.run_coroutine_threadsafe(_send_carousel_whatsapp(), _main_loop)
+            except Exception as e:
+                logger.error("Failed to send canvas carousel via WhatsApp: %s", e)
 
         urls_list = "\n".join(f"  Slide {s['slide_number']}: {s['image_url']}" for s in carousel_slides)
 
