@@ -14,6 +14,11 @@ from src.models.branding import (
     list_brand_profiles,
     get_default_brand_profile,
 )
+from src.models.style_references import (
+    create_style_reference,
+    list_style_references,
+    delete_style_reference,
+)
 from src.integrations.image_storage import upload_user_image
 
 logger = logging.getLogger(__name__)
@@ -136,4 +141,82 @@ async def api_upload_brand_logo(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error("Erro ao fazer upload do logo: %s", e)
+        raise HTTPException(status_code=500, detail="Erro ao fazer upload da imagem.")
+
+
+# ──────────────────────────── Style References ────────────────────────────
+
+
+class StyleReferenceCreate(BaseModel):
+    image_url: str
+    title: Optional[str] = ""
+    source_url: Optional[str] = ""
+    brand_profile_id: Optional[int] = None
+    extracted_colors: Optional[dict] = None
+    style_description: Optional[str] = ""
+    tags: Optional[str] = ""
+
+
+@router.get("/references")
+async def api_list_style_references(
+    brand_profile_id: Optional[int] = None,
+    limit: int = 20,
+    offset: int = 0,
+    user=Depends(get_current_user),
+):
+    refs = list_style_references(
+        user["phone_number"],
+        brand_profile_id=brand_profile_id,
+        limit=limit,
+        offset=offset,
+    )
+    return {"references": refs}
+
+
+@router.post("/references")
+async def api_create_style_reference(
+    body: StyleReferenceCreate,
+    user=Depends(get_current_user),
+):
+    if not body.image_url.strip():
+        raise HTTPException(status_code=400, detail="URL da imagem e obrigatoria.")
+    ref = create_style_reference(
+        user_id=user["phone_number"],
+        image_url=body.image_url.strip(),
+        title=body.title,
+        source_url=body.source_url,
+        brand_profile_id=body.brand_profile_id,
+        extracted_colors=body.extracted_colors,
+        style_description=body.style_description,
+        tags=body.tags,
+    )
+    return {"reference": ref}
+
+
+@router.delete("/references/{ref_id}")
+async def api_delete_style_reference(ref_id: int, user=Depends(get_current_user)):
+    ok = delete_style_reference(ref_id, user["phone_number"])
+    if not ok:
+        raise HTTPException(status_code=404, detail="Referencia nao encontrada.")
+    return {"ok": True}
+
+
+@router.post("/references/upload")
+async def api_upload_style_reference_image(
+    file: UploadFile = File(...),
+    user=Depends(get_current_user),
+):
+    """Upload a style reference image to Cloudinary and return the URL."""
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="O arquivo precisa ser uma imagem.")
+    contents = await file.read()
+    if len(contents) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Imagem muito grande. Maximo 5MB.")
+    try:
+        url = upload_user_image(user["phone_number"], contents)
+        return {"url": url}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Erro ao fazer upload de referencia: %s", e)
         raise HTTPException(status_code=500, detail="Erro ao fazer upload da imagem.")

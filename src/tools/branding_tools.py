@@ -17,6 +17,11 @@ from src.models.carousel_presets import (
     get_preset_by_name,
     delete_preset as db_delete_preset,
 )
+from src.models.style_references import (
+    create_style_reference as db_create_style_reference,
+    list_style_references as db_list_style_references,
+    delete_style_reference as db_delete_style_reference,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -380,7 +385,96 @@ def create_branding_tools(user_id: str):
             )
         return "\n".join(lines)
 
+    def save_style_reference(
+        image_url: str,
+        title: str = "",
+        source_url: str = "",
+        brand_profile_name: str = "",
+        style_description: str = "",
+        tags: str = "",
+    ) -> str:
+        """
+        Salva uma imagem como referencia de estilo na galeria do usuario.
+
+        Use quando o usuario enviar uma imagem de referencia (print de post, screenshot de design,
+        foto de inspiracao) e quiser salvar para consultar depois ao criar novos designs.
+
+        A referencia fica disponivel na galeria de branding e pode ser consultada
+        com list_style_references antes de criar novos designs.
+
+        Args:
+            image_url: URL da imagem de referencia (ja uploaded ou URL externa).
+            title: Titulo/descricao curta da referencia. Ex: "Post minimalista do @fulano".
+            source_url: Link original (post do Instagram, site, etc). Opcional.
+            brand_profile_name: Nome do brand profile para associar. Vazio = sem associacao.
+            style_description: Descricao do estilo visual. Ex: "Fundo escuro, texto bold branco, layout limpo".
+            tags: Tags separadas por virgula para busca. Ex: "minimalista,escuro,bold".
+
+        Returns:
+            Confirmacao com ID da referencia salva.
+        """
+        brand_profile_id = None
+        if brand_profile_name:
+            bp = get_brand_profile_by_name(user_id, brand_profile_name)
+            if bp:
+                brand_profile_id = bp["id"]
+
+        ref = db_create_style_reference(
+            user_id=user_id,
+            image_url=image_url,
+            title=title,
+            source_url=source_url,
+            brand_profile_id=brand_profile_id,
+            style_description=style_description,
+            tags=tags,
+        )
+        profile_info = f" (associada ao perfil '{brand_profile_name}')" if brand_profile_id else ""
+        return (
+            f"Referencia de estilo salva!{profile_info}\n"
+            f"ID: {ref['id']}\n"
+            f"Titulo: {ref['title'] or '(sem titulo)'}\n"
+            f"O usuario pode ver na galeria de referencias no menu de branding."
+        )
+
+    def list_style_references_tool(brand_profile_name: str = "") -> str:
+        """
+        Lista as referencias de estilo salvas pelo usuario.
+
+        Use ANTES de criar qualquer design novo para manter consistencia com o estilo
+        que o usuario ja definiu como referencia. Se houver referencias, use-as como guia.
+
+        Args:
+            brand_profile_name: Filtrar por brand profile. Vazio = todas as referencias.
+
+        Returns:
+            Lista de referencias com titulo, descricao e URL.
+        """
+        brand_profile_id = None
+        if brand_profile_name:
+            bp = get_brand_profile_by_name(user_id, brand_profile_name)
+            if bp:
+                brand_profile_id = bp["id"]
+
+        refs = db_list_style_references(user_id, brand_profile_id=brand_profile_id, limit=10)
+        if not refs:
+            return "Nenhuma referencia de estilo salva. O usuario pode enviar imagens de inspiracao para salvar."
+
+        lines = [f"Referencias de estilo ({len(refs)} encontradas):"]
+        for r in refs:
+            desc = r.get("style_description", "") or ""
+            desc_preview = f" — {desc[:60]}..." if len(desc) > 60 else f" — {desc}" if desc else ""
+            colors = r.get("extracted_colors", {})
+            color_info = ""
+            if colors:
+                color_info = f" | Cores: {', '.join(f'{k}:{v}' for k, v in list(colors.items())[:3])}"
+            lines.append(
+                f"- [{r['id']}] {r.get('title', '(sem titulo)')}{desc_preview}{color_info}\n"
+                f"  URL: {r['image_url']}"
+            )
+        return "\n".join(lines)
+
     return (
         get_brand_profile, update_brand_profile_tool, list_brand_profiles_tool,
         extract_branding_from_image, save_carousel_preset, list_carousel_presets,
+        save_style_reference, list_style_references_tool,
     )

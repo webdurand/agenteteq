@@ -597,6 +597,47 @@ class CarouselPreset(Base):
         }
 
 
+# ──────────────────────────── Style References ────────────────────────────
+
+
+class StyleReference(Base):
+    __tablename__ = "style_references"
+    __table_args__ = (
+        Index("idx_style_references_user", "user_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, nullable=False)
+    brand_profile_id = Column(Integer, nullable=True)
+    image_url = Column(String, nullable=False)
+    title = Column(String, default="")
+    source_url = Column(String, default="")
+    extracted_colors = Column(Text, default="{}")
+    style_description = Column(Text, default="")
+    tags = Column(String, default="")
+    created_at = Column(String, default=lambda: _utcnow().isoformat())
+
+    def to_dict(self) -> dict:
+        import json
+        colors = {}
+        try:
+            colors = json.loads(self.extracted_colors or "{}")
+        except Exception:
+            pass
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "brand_profile_id": self.brand_profile_id,
+            "image_url": self.image_url,
+            "title": self.title,
+            "source_url": self.source_url,
+            "extracted_colors": colors,
+            "style_description": self.style_description,
+            "tags": self.tags,
+            "created_at": self.created_at,
+        }
+
+
 # ──────────────────────────── Image Sessions ────────────────────────────
 
 

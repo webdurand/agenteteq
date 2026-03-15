@@ -52,10 +52,16 @@ _POSITIONS = {
     "center-left": (0.08, 0.35),
     "center": (0.1, 0.35),
     "center-right": (0.6, 0.35),
-    "bottom-left": (0.08, 0.7),
-    "bottom": (0.08, 0.7),
-    "bottom-center": (0.1, 0.7),
-    "bottom-right": (0.6, 0.7),
+    "bottom-left": (0.08, 0.68),
+    "bottom": (0.08, 0.68),
+    "bottom-center": (0.1, 0.68),
+    "bottom-right": (0.6, 0.68),
+    # Semantic presets for common slide composition patterns
+    "title-area": (0.08, 0.55),       # Lower third — where capa titles go
+    "subtitle-area": (0.08, 0.78),    # Below title, above Instagram icons
+    "card-title": (0.14, 0.22),       # Inside glass card, top section
+    "card-body": (0.14, 0.45),        # Inside glass card, middle section
+    "headline": (0.08, 0.15),         # Top of slide, for big statements
 }
 
 
@@ -327,8 +333,11 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
 
         Args:
             text: O texto a ser adicionado.
-            position: Posicao no canvas. Opcoes: "top-left", "top", "top-center", "top-right",
+            position: Posicao no canvas. Opcoes basicas: "top-left", "top", "top-center", "top-right",
                       "center-left", "center", "center-right", "bottom-left", "bottom", "bottom-right".
+                      Posicoes semanticas: "title-area" (terco inferior para titulos de capa),
+                      "subtitle-area" (abaixo do titulo, zona segura), "card-title" (topo do card),
+                      "card-body" (meio do card), "headline" (topo do slide).
                       Ou coordenadas absolutas: "x:100,y:200".
             font_size: Tamanho maximo da fonte em pixels. O texto sera auto-ajustado pra caber.
             font_weight: Peso da fonte. 400=regular, 700=bold.
@@ -382,7 +391,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         slide_info = ""
         if _is_multi_slide(canvas_doc):
             slide_info = f" (Slide {canvas_doc['current_slide'] + 1}/{_slide_count(canvas_doc)})"
-        return f"Texto adicionado! Layer: {layer_id}{slide_info}\nPreview: {preview_url}"
+        feedback = _format_layout_feedback(canvas_doc)
+        return f"Texto adicionado! Layer: {layer_id}{slide_info}\nPreview: {preview_url}{feedback}"
 
     def add_image_layer(
         source_url: str,
@@ -459,7 +469,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         slide.setdefault("layers", []).append(layer)
         preview_url = _save_and_render(session["id"], canvas_doc)
 
-        return f"Imagem adicionada! Layer: {layer_id}\nPreview: {preview_url}"
+        feedback = _format_layout_feedback(canvas_doc)
+        return f"Imagem adicionada! Layer: {layer_id}\nPreview: {preview_url}{feedback}"
 
     def add_icon_layer(
         icon_name: str,
@@ -608,7 +619,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         slide.setdefault("layers", []).append(layer)
         preview_url = _save_and_render(session["id"], canvas_doc)
 
-        return f"Shape '{shape}' adicionado! Layer: {layer_id}\nPreview: {preview_url}"
+        feedback = _format_layout_feedback(canvas_doc)
+        return f"Shape '{shape}' adicionado! Layer: {layer_id}\nPreview: {preview_url}{feedback}"
 
     def add_overlay(
         overlay_type: str = "gradient",
@@ -662,7 +674,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         slide.setdefault("layers", []).append(layer)
         preview_url = _save_and_render(session["id"], canvas_doc)
 
-        return f"Overlay '{overlay_type}' adicionado! Layer: {layer_id}\nPreview: {preview_url}"
+        feedback = _format_layout_feedback(canvas_doc)
+        return f"Overlay '{overlay_type}' adicionado! Layer: {layer_id}\nPreview: {preview_url}{feedback}"
 
     def move_layer(
         layer_id: str = "last",
@@ -712,7 +725,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
                 layer["x"] = layer.get("x", 0) + amount_px
 
         preview_url = _save_and_render(session["id"], canvas_doc)
-        return f"Layer '{layer['id']}' movido! Preview: {preview_url}"
+        feedback = _format_layout_feedback(canvas_doc)
+        return f"Layer '{layer['id']}' movido! Preview: {preview_url}{feedback}"
 
     def update_layer(
         layer_id: str = "last",
@@ -768,7 +782,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         layer["visible"] = visible
 
         preview_url = _save_and_render(session["id"], canvas_doc)
-        return f"Layer '{layer['id']}' atualizado! Preview: {preview_url}"
+        feedback = _format_layout_feedback(canvas_doc)
+        return f"Layer '{layer['id']}' atualizado! Preview: {preview_url}{feedback}"
 
     def remove_layer(
         layer_id: str = "last",
@@ -933,7 +948,7 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
                     "type": "text",
                     "content": body,
                     "x": int(w * 0.08),
-                    "y": int(h * 0.82),
+                    "y": int(h * 0.76),
                     "width": int(w * 0.84),
                     "font_family": "Inter",
                     "font_size": 32,
@@ -1149,11 +1164,12 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         slide_info = ""
         if _is_multi_slide(canvas_doc):
             slide_info = f" (Slide {canvas_doc['current_slide'] + 1}/{_slide_count(canvas_doc)})"
+        feedback = _format_layout_feedback(canvas_doc)
         return (
             f"Template '{template}' aplicado! {len(added_layers)} layers criados.{slide_info}\n"
             f"Layers: {', '.join(layer_ids)}\n"
             f"Preview: {preview_url}\n\n"
-            "Voce pode editar qualquer layer individualmente com update_layer ou move_layer."
+            f"Voce pode editar qualquer layer individualmente com update_layer ou move_layer.{feedback}"
         )
 
     def create_custom_icon(
@@ -1715,6 +1731,170 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         if layer_id == "last":
             return layers[-1]
         return next((l for l in layers if l["id"] == layer_id), None)
+
+    # ------------------------------------------------------------------
+    # Layout Validator — design intelligence safety net
+    # ------------------------------------------------------------------
+
+    def _hex_luminance(hex_color: str) -> float:
+        """Calculate relative luminance of a hex color (0=black, 1=white)."""
+        try:
+            h = hex_color.lstrip("#")
+            if len(h) == 3:
+                h = "".join(c * 2 for c in h)
+            r, g, b = int(h[0:2], 16) / 255, int(h[2:4], 16) / 255, int(h[4:6], 16) / 255
+            # sRGB to linear
+            r = r / 12.92 if r <= 0.03928 else ((r + 0.055) / 1.055) ** 2.4
+            g = g / 12.92 if g <= 0.03928 else ((g + 0.055) / 1.055) ** 2.4
+            b = b / 12.92 if b <= 0.03928 else ((b + 0.055) / 1.055) ** 2.4
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b
+        except Exception:
+            return 0.5
+
+    def _contrast_ratio(color1: str, color2: str) -> float:
+        """WCAG contrast ratio between two hex colors."""
+        l1 = _hex_luminance(color1)
+        l2 = _hex_luminance(color2)
+        lighter = max(l1, l2)
+        darker = min(l1, l2)
+        return (lighter + 0.05) / (darker + 0.05)
+
+    def _validate_layout(canvas_doc: dict) -> tuple:
+        """
+        Check the current slide for common design mistakes.
+        Returns (warnings: list[str], suggestions: list[str]).
+        Warnings = LLM should auto-correct. Suggestions = LLM should ask user.
+        """
+        warnings = []
+        suggestions = []
+        slide = _get_slide(canvas_doc)
+        w = canvas_doc.get("width", 1080)
+        h = canvas_doc.get("height", 1080)
+        layers = slide.get("layers", [])
+        palette = canvas_doc.get("palette", {})
+
+        # Safe margins
+        margin_x = int(w * 0.08)
+        margin_top = int(h * 0.08)
+        safe_bottom = int(h * 0.85)
+
+        text_layers = [la for la in layers if la.get("type") == "text" and la.get("visible", True)]
+        overlay_layers = [la for la in layers if la.get("type") == "overlay" and la.get("visible", True)]
+
+        # Determine effective background color
+        bg = slide.get("background", canvas_doc.get("background", {}))
+        has_image_bg = bg.get("type") == "image"
+        bg_color = bg.get("value", palette.get("primary", "#1A1A2E"))
+
+        # --- WARNINGS (LLM should fix automatically) ---
+
+        # 1. Check text outside safe margins
+        for tl in text_layers:
+            tx = tl.get("x", 0)
+            ty = tl.get("y", 0)
+            if tx < margin_x // 2:
+                warnings.append(
+                    f"Layer '{tl['id']}': texto muito perto da borda esquerda (x={tx}, minimo={margin_x})"
+                )
+            if ty < margin_top // 2:
+                warnings.append(
+                    f"Layer '{tl['id']}': texto muito perto do topo (y={ty}, minimo={margin_top})"
+                )
+            if ty > safe_bottom:
+                warnings.append(
+                    f"Layer '{tl['id']}': texto na zona dos icones do Instagram (y={ty}, max seguro={safe_bottom})"
+                )
+
+        # 2. Check overlapping text layers (bounding box intersection)
+        for i, a in enumerate(text_layers):
+            a_y = a.get("y", 0)
+            a_font = a.get("font_size", 48)
+            a_words = len(a.get("content", "").split())
+            a_max_lines = a.get("max_lines", 3)
+            a_chars_per_line = max(1, a.get("width", 800) // max(1, a_font // 2))
+            a_lines = min(a_max_lines, max(1, (a_words * 6) // a_chars_per_line + 1))
+            a_height = int(a_font * 1.3 * a_lines)
+            a_bottom = a_y + a_height
+
+            for b in text_layers[i + 1:]:
+                b_y = b.get("y", 0)
+                b_font = b.get("font_size", 48)
+                b_words = len(b.get("content", "").split())
+                b_max_lines = b.get("max_lines", 3)
+                b_chars_per_line = max(1, b.get("width", 800) // max(1, b_font // 2))
+                b_lines = min(b_max_lines, max(1, (b_words * 6) // b_chars_per_line + 1))
+                b_height = int(b_font * 1.3 * b_lines)
+                b_bottom = b_y + b_height
+
+                # Check vertical overlap
+                if a_y < b_bottom and b_y < a_bottom:
+                    gap = b_y - a_bottom if b_y > a_y else a_y - b_bottom
+                    warnings.append(
+                        f"SOBREPOSICAO: layers '{a['id']}' e '{b['id']}' se sobrepoem verticalmente "
+                        f"(gap={gap}px, minimo=30px). Mova o segundo para baixo."
+                    )
+
+        # 3. Check font hierarchy
+        if len(text_layers) >= 2:
+            sizes = [(tl.get("font_size", 48), tl["id"]) for tl in text_layers]
+            sorted_sizes = sorted(sizes, reverse=True)
+            biggest = sorted_sizes[0][0]
+            second = sorted_sizes[1][0]
+            if biggest > 0 and second / biggest > 0.85:
+                warnings.append(
+                    f"HIERARQUIA: tamanhos de fonte muito proximos ({biggest}px e {second}px). "
+                    f"O titulo deve ser pelo menos 1.5x maior que o corpo."
+                )
+
+        # 4. Text on image background without overlay
+        if has_image_bg and text_layers and not overlay_layers:
+            warnings.append(
+                "LEGIBILIDADE: texto sobre imagem de fundo SEM overlay. "
+                "Adicione add_overlay(overlay_type='gradient', position='bottom') para melhorar a leitura."
+            )
+
+        # --- SUGGESTIONS (LLM should ask user) ---
+
+        # 5. Low contrast text
+        for tl in text_layers:
+            text_color = tl.get("color", "#FFFFFF")
+            effective_bg = bg_color if not has_image_bg else "#333333"  # assume dark for image bg
+            ratio = _contrast_ratio(text_color, effective_bg)
+            if ratio < 3.0 and not has_image_bg:
+                light_bg = _hex_luminance(effective_bg) > 0.5
+                suggested = palette.get("text_primary", "#1A1A2E") if light_bg else "#FFFFFF"
+                suggestions.append(
+                    f"Contraste baixo entre texto {text_color} e fundo {effective_bg} "
+                    f"(ratio={ratio:.1f}, minimo=3.0). Sugira cor {suggested}."
+                )
+
+        # 6. Too many layers
+        visible_layers = [la for la in layers if la.get("visible", True)]
+        if len(visible_layers) > 5:
+            suggestions.append(
+                f"Slide com {len(visible_layers)} elementos. Slides limpos performam melhor no Instagram."
+            )
+
+        # 7. Too many text layers
+        if len(text_layers) > 3:
+            suggestions.append(
+                f"Slide com {len(text_layers)} layers de texto. Considere simplificar para max 3."
+            )
+
+        return warnings, suggestions
+
+    def _format_layout_feedback(canvas_doc: dict) -> str:
+        """Run validation and format feedback string for tool responses."""
+        warnings, suggestions = _validate_layout(canvas_doc)
+        # Clean up temp key
+        canvas_doc.pop("_layout_warnings", None)
+
+        parts = []
+        if warnings:
+            parts.append("\n\n⚠️ AVISOS DE LAYOUT:\n" + "\n".join(f"- {w}" for w in warnings[:3]))
+        if suggestions:
+            parts.append("\n💡 SUGESTOES:\n" + "\n".join(f"- {s}" for s in suggestions[:2]))
+        return "".join(parts)
 
     # ------------------------------------------------------------------
     # Return all tools
