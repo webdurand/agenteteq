@@ -6,6 +6,7 @@ Each tool mutates a canvas document (JSON), saves to DB, renders a preview,
 and sends it to the user via WebSocket.
 """
 
+import copy
 import json
 import logging
 import uuid
@@ -19,10 +20,12 @@ from src.models.canvas_session import (
     get_active_canvas,
     update_canvas_json,
 )
+from src.models.carousel import create_carousel, update_carousel_status
 from src.models.shared_assets import (
     search_assets,
     get_asset_by_name,
     increment_usage,
+    create_asset,
 )
 from src.tools.image_generation.canvas_renderer import render_canvas, clear_image_cache
 from src.integrations.image_storage import _ensure_cloudinary_config, convert_to_webp
@@ -74,9 +77,10 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         return session, session["canvas_json"]
 
     def _save_and_render(session_id: str, canvas_doc: dict, upload: bool = True) -> str:
-        """Save canvas to DB, render, upload preview, send WS event."""
-        # Render
-        png_bytes = render_canvas(canvas_doc)
+        """Save canvas to DB, render current slide, upload preview, send WS event."""
+        # Render current slide only
+        render_doc = _build_render_doc(canvas_doc)
+        png_bytes = render_canvas(render_doc)
 
         thumbnail_url = ""
         if upload:
@@ -95,11 +99,16 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         update_canvas_json(session_id, canvas_doc, thumbnail_url=thumbnail_url or None)
 
         # Notify frontend
-        layers_count = len(canvas_doc.get("layers", []))
+        slide = _get_slide(canvas_doc)
+        layers_count = len(slide.get("layers", []))
+        current = canvas_doc.get("current_slide", 0) if _is_multi_slide(canvas_doc) else 0
+        total = _slide_count(canvas_doc)
         emit_event_sync(user_id, "canvas_preview", {
             "canvas_id": session_id,
             "preview_url": thumbnail_url,
             "layers_count": layers_count,
+            "current_slide": current + 1,  # 1-based for display
+            "total_slides": total,
         })
 
         return thumbnail_url
@@ -130,10 +139,58 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         session = get_active_canvas(user_id)
         if not session:
             return 1
-        layers = session["canvas_json"].get("layers", [])
+        slide = _get_slide(session["canvas_json"])
+        layers = slide.get("layers", [])
         if not layers:
             return 1
         return max(l.get("z_index", 0) for l in layers) + 1
+
+    def _is_multi_slide(canvas_doc: dict) -> bool:
+        """Check if canvas is in multi-slide mode."""
+        return "slides" in canvas_doc
+
+    def _get_slide(canvas_doc: dict) -> dict:
+        """Get the current working slide. Returns the slide dict (mutable reference)."""
+        if _is_multi_slide(canvas_doc):
+            idx = canvas_doc.get("current_slide", 0)
+            return canvas_doc["slides"][idx]
+        return canvas_doc  # single-slide: the doc itself IS the slide
+
+    def _build_render_doc(canvas_doc: dict, slide_index: int = -1) -> dict:
+        """Build a single-slide render document for the renderer."""
+        if not _is_multi_slide(canvas_doc):
+            return canvas_doc
+        idx = slide_index if slide_index >= 0 else canvas_doc.get("current_slide", 0)
+        slide = canvas_doc["slides"][idx]
+        return {
+            "width": canvas_doc.get("width", 1080),
+            "height": canvas_doc.get("height", 1080),
+            "background": slide.get("background", {}),
+            "layers": slide.get("layers", []),
+            "palette": canvas_doc.get("palette", {}),
+        }
+
+    def _to_multi_slide(canvas_doc: dict) -> dict:
+        """Convert single-slide canvas to multi-slide format. Idempotent."""
+        if _is_multi_slide(canvas_doc):
+            return canvas_doc
+        slide = {
+            "background": canvas_doc.get("background", {"type": "color", "value": "#1A1A2E"}),
+            "layers": canvas_doc.get("layers", []),
+        }
+        canvas_doc["slides"] = [slide]
+        canvas_doc["current_slide"] = 0
+        canvas_doc["version"] = 2
+        # Remove top-level keys that now live inside slides
+        canvas_doc.pop("background", None)
+        canvas_doc.pop("layers", None)
+        return canvas_doc
+
+    def _slide_count(canvas_doc: dict) -> int:
+        """Return number of slides."""
+        if _is_multi_slide(canvas_doc):
+            return len(canvas_doc.get("slides", []))
+        return 1
 
     # ------------------------------------------------------------------
     # Tools
@@ -150,12 +207,17 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         palette_accent: str = "#E94560",
         palette_text_primary: str = "#FFFFFF",
         palette_text_secondary: str = "#D0D0D0",
+        slides_count: int = 1,
     ) -> str:
         """
-        Cria um novo canvas para composicao de imagem.
+        Cria um novo canvas para composicao de imagem ou carrossel multi-slide.
 
         Inicia uma sessao de edicao onde voce pode adicionar textos, imagens, shapes e overlays
         via os outros canvas tools. O canvas funciona como um projeto editavel com layers.
+
+        Para carrosseis: passe slides_count > 1 para criar multiplos slides de uma vez.
+        Cada slide compartilha a mesma palette e formato, mas pode ter fundo e layers diferentes.
+        Use switch_slide para navegar entre slides e add_slide para adicionar mais depois.
 
         Args:
             title: Nome do canvas/projeto.
@@ -168,6 +230,7 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
             palette_accent: Cor de destaque/CTA.
             palette_text_primary: Cor principal do texto.
             palette_text_secondary: Cor secundaria do texto.
+            slides_count: Numero de slides. 1 = canvas simples. >1 = carrossel multi-slide.
 
         Returns:
             Confirmacao com ID do canvas e preview URL.
@@ -181,23 +244,51 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         elif background_type == "gradient" and gradient_colors:
             background["gradient"] = {"colors": [c.strip() for c in gradient_colors.split(",")]}
 
-        canvas_doc = {
-            "version": 1,
-            "width": dims[0],
-            "height": dims[1],
-            "background": background,
-            "layers": [],
-            "palette": {
-                "primary": palette_primary,
-                "accent": palette_accent,
-                "text_primary": palette_text_primary,
-                "text_secondary": palette_text_secondary,
-            },
+        palette = {
+            "primary": palette_primary,
+            "accent": palette_accent,
+            "text_primary": palette_text_primary,
+            "text_secondary": palette_text_secondary,
         }
+
+        slides_count = max(1, min(slides_count, 20))  # cap at 20
+
+        if slides_count > 1:
+            # Multi-slide mode
+            slides = [{"background": dict(background), "layers": []} for _ in range(slides_count)]
+            canvas_doc = {
+                "version": 2,
+                "width": dims[0],
+                "height": dims[1],
+                "palette": palette,
+                "current_slide": 0,
+                "slides": slides,
+            }
+        else:
+            # Single-slide mode (backward compat)
+            canvas_doc = {
+                "version": 1,
+                "width": dims[0],
+                "height": dims[1],
+                "background": background,
+                "layers": [],
+                "palette": palette,
+            }
 
         session_id = create_canvas_session(user_id, canvas_doc, title=title, fmt=format)
         preview_url = _save_and_render(session_id, canvas_doc)
 
+        if slides_count > 1:
+            return (
+                f"Carrossel criado! ID: {session_id}\n"
+                f"Formato: {format} ({dims[0]}x{dims[1]})\n"
+                f"Slides: {slides_count}\n"
+                f"Fundo: {background_type}\n"
+                f"Slide ativo: 1/{slides_count}\n"
+                f"Preview: {preview_url}\n\n"
+                "Use apply_template ou add_text_layer em cada slide. "
+                "Use switch_slide para navegar entre slides."
+            )
         return (
             f"Canvas criado! ID: {session_id}\n"
             f"Formato: {format} ({dims[0]}x{dims[1]})\n"
@@ -244,8 +335,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         if not session:
             return "Nenhum canvas ativo. Use create_canvas primeiro."
 
-        w = canvas_doc["width"]
-        h = canvas_doc["height"]
+        w = canvas_doc.get("width", 1080)
+        h = canvas_doc.get("height", 1080)
         layer_w = int(w * max_width_percent / 100)
         x, y = _resolve_position(position, w, h, layer_w, 0)
 
@@ -272,10 +363,14 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
             "visible": True,
         }
 
-        canvas_doc["layers"].append(layer)
+        slide = _get_slide(canvas_doc)
+        slide.setdefault("layers", []).append(layer)
         preview_url = _save_and_render(session["id"], canvas_doc)
 
-        return f"Texto adicionado! Layer: {layer_id}\nPreview: {preview_url}"
+        slide_info = ""
+        if _is_multi_slide(canvas_doc):
+            slide_info = f" (Slide {canvas_doc['current_slide'] + 1}/{_slide_count(canvas_doc)})"
+        return f"Texto adicionado! Layer: {layer_id}{slide_info}\nPreview: {preview_url}"
 
     def add_image_layer(
         source_url: str,
@@ -316,8 +411,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         if not session:
             return "Nenhum canvas ativo. Use create_canvas primeiro."
 
-        w = canvas_doc["width"]
-        h = canvas_doc["height"]
+        w = canvas_doc.get("width", 1080)
+        h = canvas_doc.get("height", 1080)
         target_w = int(w * width_percent / 100)
         target_h = int(h * height_percent / 100) if height_percent > 0 else target_w
         x, y = _resolve_position(position, w, h, target_w, target_h)
@@ -348,7 +443,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
             "visible": True,
         }
 
-        canvas_doc["layers"].append(layer)
+        slide = _get_slide(canvas_doc)
+        slide.setdefault("layers", []).append(layer)
         preview_url = _save_and_render(session["id"], canvas_doc)
 
         return f"Imagem adicionada! Layer: {layer_id}\nPreview: {preview_url}"
@@ -413,8 +509,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
                 "Tente outro nome ou busque por tags."
             )
 
-        w = canvas_doc["width"]
-        h = canvas_doc["height"]
+        w = canvas_doc.get("width", 1080)
+        h = canvas_doc.get("height", 1080)
         x, y = _resolve_position(position, w, h, size, size)
 
         layer_id = f"icon_{uuid.uuid4().hex[:6]}"
@@ -430,7 +526,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
             "visible": True,
         }
 
-        canvas_doc["layers"].append(layer)
+        slide = _get_slide(canvas_doc)
+        slide.setdefault("layers", []).append(layer)
         preview_url = _save_and_render(session["id"], canvas_doc)
 
         return f"Icone '{icon_name}' adicionado! Layer: {layer_id}\nPreview: {preview_url}"
@@ -471,8 +568,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         if not session:
             return "Nenhum canvas ativo. Use create_canvas primeiro."
 
-        w = canvas_doc["width"]
-        h = canvas_doc["height"]
+        w = canvas_doc.get("width", 1080)
+        h = canvas_doc.get("height", 1080)
         sw = int(w * width_percent / 100)
         x, y = _resolve_position(position, w, h, sw, height_px)
 
@@ -495,7 +592,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
             "visible": True,
         }
 
-        canvas_doc["layers"].append(layer)
+        slide = _get_slide(canvas_doc)
+        slide.setdefault("layers", []).append(layer)
         preview_url = _save_and_render(session["id"], canvas_doc)
 
         return f"Shape '{shape}' adicionado! Layer: {layer_id}\nPreview: {preview_url}"
@@ -548,7 +646,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
             "visible": True,
         }
 
-        canvas_doc["layers"].append(layer)
+        slide = _get_slide(canvas_doc)
+        slide.setdefault("layers", []).append(layer)
         preview_url = _save_and_render(session["id"], canvas_doc)
 
         return f"Overlay '{overlay_type}' adicionado! Layer: {layer_id}\nPreview: {preview_url}"
@@ -578,12 +677,13 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         if not session:
             return "Nenhum canvas ativo."
 
-        layer = _find_layer(canvas_doc, layer_id)
+        slide = _get_slide(canvas_doc)
+        layer = _find_layer(slide, layer_id)
         if not layer:
             return f"Layer '{layer_id}' nao encontrado."
 
-        w = canvas_doc["width"]
-        h = canvas_doc["height"]
+        w = canvas_doc.get("width", 1080)
+        h = canvas_doc.get("height", 1080)
 
         if new_position:
             lw = layer.get("width", 0)
@@ -636,7 +736,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         if not session:
             return "Nenhum canvas ativo."
 
-        layer = _find_layer(canvas_doc, layer_id)
+        slide = _get_slide(canvas_doc)
+        layer = _find_layer(slide, layer_id)
         if not layer:
             return f"Layer '{layer_id}' nao encontrado."
 
@@ -675,7 +776,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         if not session:
             return "Nenhum canvas ativo."
 
-        layers = canvas_doc.get("layers", [])
+        slide = _get_slide(canvas_doc)
+        layers = slide.get("layers", [])
         if not layers:
             return "Canvas nao tem layers."
 
@@ -748,8 +850,8 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         if not session:
             return "Nenhum canvas ativo. Use create_canvas primeiro."
 
-        w = canvas_doc["width"]
-        h = canvas_doc["height"]
+        w = canvas_doc.get("width", 1080)
+        h = canvas_doc.get("height", 1080)
         palette = canvas_doc.get("palette", {})
         primary = palette.get("primary", "#1A1A2E")
         accent = palette.get("accent", "#E94560")
@@ -1019,23 +1121,548 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
                     "visible": True,
                 })
 
-        # Add all layers
+        # Add all layers to current slide
+        slide = _get_slide(canvas_doc)
         for layer in added_layers:
-            canvas_doc["layers"].append(layer)
+            slide.setdefault("layers", []).append(layer)
 
         preview_url = _save_and_render(session["id"], canvas_doc)
         layer_ids = [l["id"] for l in added_layers]
 
+        slide_info = ""
+        if _is_multi_slide(canvas_doc):
+            slide_info = f" (Slide {canvas_doc['current_slide'] + 1}/{_slide_count(canvas_doc)})"
         return (
-            f"Template '{template}' aplicado! {len(added_layers)} layers criados.\n"
+            f"Template '{template}' aplicado! {len(added_layers)} layers criados.{slide_info}\n"
             f"Layers: {', '.join(layer_ids)}\n"
             f"Preview: {preview_url}\n\n"
             "Voce pode editar qualquer layer individualmente com update_layer ou move_layer."
         )
 
-    def _find_layer(canvas_doc: dict, layer_id: str) -> Optional[dict]:
-        """Find layer by ID or 'last'."""
-        layers = canvas_doc.get("layers", [])
+    def create_custom_icon(
+        name: str,
+        svg_content: str,
+        tags: str = "",
+        position: str = "center",
+        size: int = 48,
+        color: str = "#FFFFFF",
+        canvas_id: str = "",
+    ) -> str:
+        """
+        Cria um icone SVG personalizado, salva na biblioteca compartilhada e adiciona ao canvas.
+
+        Use quando o usuario pedir um icone que NAO existe na biblioteca.
+        Voce (o agente) deve gerar o SVG no formato Lucide (24x24 viewBox, stroke-based).
+
+        O SVG gerado fica disponivel para TODOS os usuarios da plataforma.
+
+        Template SVG basico:
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+             fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <!-- seus paths/circles/lines aqui -->
+        </svg>
+
+        Args:
+            name: Nome unico do icone (slug). Ex: "foguete", "megafone", "lampada".
+            svg_content: Codigo SVG completo do icone. Use stroke="currentColor" para permitir recoloracao.
+            tags: Tags separadas por virgula para busca. Ex: "rocket,space,launch".
+            position: Posicao no canvas (mesmo formato dos outros tools).
+            size: Tamanho do icone em pixels.
+            color: Cor do icone em hex.
+            canvas_id: ID do canvas. Vazio = canvas ativo.
+
+        Returns:
+            Confirmacao com asset ID, layer ID e preview.
+        """
+        # Validate minimal SVG
+        if "<svg" not in svg_content:
+            return "SVG invalido. O conteudo deve conter uma tag <svg>."
+
+        # Check if name already exists
+        existing = get_asset_by_name(name, category="icon")
+        if existing:
+            # Use existing instead of creating duplicate
+            svg_content = existing.get("metadata", {}).get("svg_content", svg_content)
+            asset_id = existing["id"]
+        else:
+            # Save to shared library
+            asset_id = create_asset(
+                name=name,
+                url="",
+                tags=tags or name.replace("-", ","),
+                category="icon",
+                asset_type="svg",
+                source="generated",
+                metadata={"svg_content": svg_content},
+                created_by=user_id,
+            )
+
+        # Now add to canvas
+        session, canvas_doc = _get_or_fail_canvas(canvas_id)
+        if not session:
+            return f"Icone '{name}' salvo na biblioteca (ID: {asset_id}), mas nenhum canvas ativo para adicionar."
+
+        w = canvas_doc.get("width", 1080)
+        h = canvas_doc.get("height", 1080)
+        x, y = _resolve_position(position, w, h, size, size)
+
+        layer_id = f"icon_{uuid.uuid4().hex[:6]}"
+        layer = {
+            "id": layer_id,
+            "type": "icon",
+            "svg_content": svg_content,
+            "x": x,
+            "y": y,
+            "size": size,
+            "color": color,
+            "z_index": _next_z(),
+            "visible": True,
+        }
+
+        slide = _get_slide(canvas_doc)
+        slide.setdefault("layers", []).append(layer)
+        preview_url = _save_and_render(session["id"], canvas_doc)
+
+        return (
+            f"Icone '{name}' criado e salvo na biblioteca!\n"
+            f"Asset ID: {asset_id}\n"
+            f"Layer: {layer_id}\n"
+            f"Preview: {preview_url}\n\n"
+            "Este icone agora esta disponivel para todos os usuarios."
+        )
+
+    def upload_icon(
+        name: str,
+        source_url: str,
+        tags: str = "",
+    ) -> str:
+        """
+        Salva uma imagem/SVG enviada pelo usuario na biblioteca compartilhada de assets.
+
+        Use quando o usuario enviar um arquivo (logo, icone, SVG) e pedir para salvar
+        na biblioteca para reutilizar em futuros canvas. O asset fica disponivel para todos.
+
+        Args:
+            name: Nome unico do asset (slug). Ex: "logo-minha-marca", "icone-custom".
+            source_url: URL da imagem enviada pelo usuario (ja uploaded via chat).
+            tags: Tags separadas por virgula para busca. Ex: "logo,marca,empresa".
+
+        Returns:
+            Confirmacao com asset ID.
+        """
+        if not source_url:
+            return "URL da imagem e obrigatoria."
+
+        existing = get_asset_by_name(name, category="icon")
+        if existing:
+            return f"Ja existe um asset com o nome '{name}'. Use outro nome ou busque com add_icon_layer."
+
+        # Determine type from URL
+        is_svg = source_url.lower().endswith(".svg")
+        asset_type = "svg" if is_svg else "png"
+
+        metadata = {}
+        # If SVG, try to download and store content for rendering
+        if is_svg:
+            try:
+                import httpx
+                resp = httpx.get(source_url, timeout=15, follow_redirects=True)
+                resp.raise_for_status()
+                metadata["svg_content"] = resp.text
+            except Exception as e:
+                logger.warning("Failed to download SVG for metadata: %s", e)
+
+        asset_id = create_asset(
+            name=name,
+            url=source_url,
+            tags=tags or name.replace("-", ","),
+            category="icon",
+            asset_type=asset_type,
+            source="uploaded",
+            thumbnail_url=source_url,
+            metadata=metadata,
+            created_by=user_id,
+        )
+
+        return (
+            f"Asset '{name}' salvo na biblioteca!\n"
+            f"ID: {asset_id}\n"
+            f"Tipo: {asset_type}\n"
+            f"Tags: {tags}\n\n"
+            "Agora voce pode usar este icone em qualquer canvas com add_icon_layer(icon_name=\"{name}\")."
+        )
+
+    # ------------------------------------------------------------------
+    # Multi-slide tools
+    # ------------------------------------------------------------------
+
+    def add_slide(
+        background_type: str = "",
+        background_value: str = "",
+        background_image_url: str = "",
+        gradient_colors: str = "",
+        canvas_id: str = "",
+    ) -> str:
+        """
+        Adiciona um novo slide ao carrossel e muda para ele.
+
+        Converte automaticamente um canvas simples em carrossel multi-slide se necessario.
+        O novo slide comeca vazio — use add_text_layer, apply_template etc. para compor.
+
+        Args:
+            background_type: "color", "image", "gradient". Vazio = mesma config do slide anterior.
+            background_value: Cor hex do fundo. Vazio = copia do slide anterior.
+            background_image_url: URL da imagem de fundo (se background_type="image").
+            gradient_colors: Cores do gradiente separadas por virgula.
+            canvas_id: ID do canvas. Vazio = canvas ativo.
+
+        Returns:
+            Confirmacao com numero do novo slide e preview.
+        """
+        session, canvas_doc = _get_or_fail_canvas(canvas_id)
+        if not session:
+            return "Nenhum canvas ativo. Use create_canvas primeiro."
+
+        # Convert to multi-slide if needed
+        _to_multi_slide(canvas_doc)
+
+        # Build background for new slide
+        prev_slide = canvas_doc["slides"][-1] if canvas_doc["slides"] else {}
+        prev_bg = prev_slide.get("background", {"type": "color", "value": "#1A1A2E"})
+
+        if background_type:
+            new_bg = {"type": background_type, "value": background_value or prev_bg.get("value", "#1A1A2E")}
+            if background_type == "image" and background_image_url:
+                new_bg["image_url"] = background_image_url
+            elif background_type == "gradient" and gradient_colors:
+                new_bg["gradient"] = {"colors": [c.strip() for c in gradient_colors.split(",")]}
+        else:
+            new_bg = copy.deepcopy(prev_bg)
+
+        canvas_doc["slides"].append({"background": new_bg, "layers": []})
+        new_idx = len(canvas_doc["slides"]) - 1
+        canvas_doc["current_slide"] = new_idx
+
+        preview_url = _save_and_render(session["id"], canvas_doc)
+        total = _slide_count(canvas_doc)
+
+        return (
+            f"Slide {new_idx + 1} adicionado! Total: {total} slides.\n"
+            f"Slide ativo: {new_idx + 1}/{total}\n"
+            f"Preview: {preview_url}\n\n"
+            "Use add_text_layer, apply_template, etc. para compor este slide."
+        )
+
+    def switch_slide(
+        slide_number: int,
+        canvas_id: str = "",
+    ) -> str:
+        """
+        Muda para outro slide do carrossel.
+
+        Todos os comandos de edicao (add_text_layer, move_layer, etc.) passam a agir
+        no slide selecionado ate que voce mude novamente.
+
+        Args:
+            slide_number: Numero do slide (1-based). Ex: 1 = primeiro, 2 = segundo.
+            canvas_id: ID do canvas. Vazio = canvas ativo.
+
+        Returns:
+            Info do slide ativo com preview.
+        """
+        session, canvas_doc = _get_or_fail_canvas(canvas_id)
+        if not session:
+            return "Nenhum canvas ativo."
+
+        if not _is_multi_slide(canvas_doc):
+            return "Canvas tem apenas 1 slide. Use add_slide para criar mais."
+
+        total = _slide_count(canvas_doc)
+        idx = slide_number - 1  # convert to 0-based
+
+        if idx < 0 or idx >= total:
+            return f"Slide {slide_number} nao existe. Total: {total} slides (1 a {total})."
+
+        canvas_doc["current_slide"] = idx
+        slide = canvas_doc["slides"][idx]
+        layers_count = len(slide.get("layers", []))
+
+        preview_url = _save_and_render(session["id"], canvas_doc)
+
+        return (
+            f"Slide ativo: {slide_number}/{total}\n"
+            f"Layers: {layers_count}\n"
+            f"Preview: {preview_url}"
+        )
+
+    def list_slides(
+        canvas_id: str = "",
+    ) -> str:
+        """
+        Lista todos os slides do carrossel com resumo de cada um.
+
+        Args:
+            canvas_id: ID do canvas. Vazio = canvas ativo.
+
+        Returns:
+            Lista dos slides com numero de layers e preview.
+        """
+        session, canvas_doc = _get_or_fail_canvas(canvas_id)
+        if not session:
+            return "Nenhum canvas ativo."
+
+        if not _is_multi_slide(canvas_doc):
+            slide_layers = len(canvas_doc.get("layers", []))
+            return f"Canvas simples (1 slide). Layers: {slide_layers}. Use add_slide para criar carrossel."
+
+        total = _slide_count(canvas_doc)
+        current = canvas_doc.get("current_slide", 0)
+        lines = [f"Carrossel: {total} slides. Slide ativo: {current + 1}\n"]
+
+        for i, slide in enumerate(canvas_doc["slides"]):
+            layers = slide.get("layers", [])
+            layer_types = {}
+            for l in layers:
+                t = l.get("type", "?")
+                layer_types[t] = layer_types.get(t, 0) + 1
+            type_summary = ", ".join(f"{v} {k}" for k, v in layer_types.items()) if layer_types else "vazio"
+            marker = " ← ativo" if i == current else ""
+            lines.append(f"  Slide {i + 1}: {len(layers)} layers ({type_summary}){marker}")
+
+        return "\n".join(lines)
+
+    def duplicate_slide(
+        slide_number: int = 0,
+        canvas_id: str = "",
+    ) -> str:
+        """
+        Duplica um slide existente e muda para a copia.
+
+        Util para criar slides com visual consistente — duplica e depois altera o texto/conteudo.
+
+        Args:
+            slide_number: Numero do slide a duplicar (1-based). 0 = slide ativo atual.
+            canvas_id: ID do canvas. Vazio = canvas ativo.
+
+        Returns:
+            Confirmacao com numero do novo slide.
+        """
+        session, canvas_doc = _get_or_fail_canvas(canvas_id)
+        if not session:
+            return "Nenhum canvas ativo."
+
+        _to_multi_slide(canvas_doc)
+
+        total = _slide_count(canvas_doc)
+        if slide_number == 0:
+            src_idx = canvas_doc.get("current_slide", 0)
+        else:
+            src_idx = slide_number - 1
+
+        if src_idx < 0 or src_idx >= total:
+            return f"Slide {slide_number} nao existe."
+
+        new_slide = copy.deepcopy(canvas_doc["slides"][src_idx])
+        # Generate new IDs for all layers to avoid conflicts
+        for layer in new_slide.get("layers", []):
+            prefix = layer["id"].split("_")[0] if "_" in layer["id"] else "lyr"
+            layer["id"] = f"{prefix}_{uuid.uuid4().hex[:6]}"
+
+        canvas_doc["slides"].append(new_slide)
+        new_idx = len(canvas_doc["slides"]) - 1
+        canvas_doc["current_slide"] = new_idx
+
+        preview_url = _save_and_render(session["id"], canvas_doc)
+        new_total = _slide_count(canvas_doc)
+
+        return (
+            f"Slide {src_idx + 1} duplicado! Novo slide: {new_idx + 1}/{new_total}\n"
+            f"Preview: {preview_url}\n\n"
+            "Agora edite o conteudo deste slide (update_layer, add_text_layer, etc.)."
+        )
+
+    def reorder_slides(
+        from_number: int,
+        to_number: int,
+        canvas_id: str = "",
+    ) -> str:
+        """
+        Move um slide para outra posicao no carrossel.
+
+        Args:
+            from_number: Numero do slide a mover (1-based).
+            to_number: Nova posicao (1-based).
+            canvas_id: ID do canvas. Vazio = canvas ativo.
+
+        Returns:
+            Confirmacao com nova ordem.
+        """
+        session, canvas_doc = _get_or_fail_canvas(canvas_id)
+        if not session:
+            return "Nenhum canvas ativo."
+
+        if not _is_multi_slide(canvas_doc):
+            return "Canvas tem apenas 1 slide."
+
+        total = _slide_count(canvas_doc)
+        from_idx = from_number - 1
+        to_idx = to_number - 1
+
+        if from_idx < 0 or from_idx >= total or to_idx < 0 or to_idx >= total:
+            return f"Indices invalidos. Slides disponíveis: 1 a {total}."
+
+        slide = canvas_doc["slides"].pop(from_idx)
+        canvas_doc["slides"].insert(to_idx, slide)
+        canvas_doc["current_slide"] = to_idx
+
+        update_canvas_json(session["id"], canvas_doc)
+
+        return f"Slide movido de posicao {from_number} para {to_number}. Slide ativo: {to_idx + 1}/{total}."
+
+    def remove_slide(
+        slide_number: int = 0,
+        canvas_id: str = "",
+    ) -> str:
+        """
+        Remove um slide do carrossel.
+
+        Args:
+            slide_number: Numero do slide a remover (1-based). 0 = slide ativo atual.
+            canvas_id: ID do canvas. Vazio = canvas ativo.
+
+        Returns:
+            Confirmacao.
+        """
+        session, canvas_doc = _get_or_fail_canvas(canvas_id)
+        if not session:
+            return "Nenhum canvas ativo."
+
+        if not _is_multi_slide(canvas_doc):
+            return "Canvas tem apenas 1 slide. Use remove_layer para remover layers."
+
+        total = _slide_count(canvas_doc)
+        if total <= 1:
+            return "Nao e possivel remover o unico slide."
+
+        if slide_number == 0:
+            rm_idx = canvas_doc.get("current_slide", 0)
+        else:
+            rm_idx = slide_number - 1
+
+        if rm_idx < 0 or rm_idx >= total:
+            return f"Slide {slide_number} nao existe."
+
+        canvas_doc["slides"].pop(rm_idx)
+        new_total = len(canvas_doc["slides"])
+        canvas_doc["current_slide"] = min(rm_idx, new_total - 1)
+
+        preview_url = _save_and_render(session["id"], canvas_doc)
+
+        return (
+            f"Slide {rm_idx + 1} removido. Total: {new_total} slides.\n"
+            f"Slide ativo: {canvas_doc['current_slide'] + 1}/{new_total}\n"
+            f"Preview: {preview_url}"
+        )
+
+    def save_carousel(
+        title: str = "",
+        delivery_channel: str = "",
+        canvas_id: str = "",
+    ) -> str:
+        """
+        Renderiza TODOS os slides e salva como carrossel na galeria.
+
+        Cada slide e renderizado, convertido para WebP, e uploaded ao Cloudinary.
+        O carrossel e salvo na mesma tabela da galeria de carrosseis existente,
+        ficando disponivel para download e envio via WhatsApp.
+
+        Args:
+            title: Titulo do carrossel na galeria. Vazio = usa o titulo do canvas.
+            delivery_channel: Canal de entrega: "whatsapp", "web", "ambos". Vazio = nao envia automaticamente.
+            canvas_id: ID do canvas. Vazio = canvas ativo.
+
+        Returns:
+            ID do carrossel criado com URLs de todos os slides.
+        """
+        session, canvas_doc = _get_or_fail_canvas(canvas_id)
+        if not session:
+            return "Nenhum canvas ativo."
+
+        carousel_title = title or session.get("title", "Canvas Carousel")
+
+        # Determine slides to render
+        if _is_multi_slide(canvas_doc):
+            slides_data = canvas_doc["slides"]
+        else:
+            slides_data = [{"background": canvas_doc.get("background", {}), "layers": canvas_doc.get("layers", [])}]
+
+        total = len(slides_data)
+        carousel_slides = []
+
+        for i, slide in enumerate(slides_data):
+            # Build render doc for this slide
+            render_doc = {
+                "width": canvas_doc.get("width", 1080),
+                "height": canvas_doc.get("height", 1080),
+                "background": slide.get("background", {}),
+                "layers": slide.get("layers", []),
+                "palette": canvas_doc.get("palette", {}),
+            }
+
+            try:
+                png_bytes = render_canvas(render_doc)
+                webp_bytes = convert_to_webp(png_bytes)
+                result = cloudinary.uploader.upload(
+                    webp_bytes,
+                    folder=f"canvas/{user_id}",
+                    resource_type="image",
+                    format="webp",
+                )
+                image_url = result.get("secure_url", "")
+            except Exception as e:
+                logger.error("Failed to render/upload slide %d: %s", i + 1, e)
+                image_url = ""
+
+            carousel_slides.append({
+                "slide_number": i + 1,
+                "image_url": image_url,
+                "role": "capa" if i == 0 else ("fechamento" if i == total - 1 else "conteudo"),
+            })
+
+        # Save to carousels table
+        carousel_id = create_carousel(
+            user_id=user_id,
+            title=carousel_title,
+            slides=carousel_slides,
+        )
+        update_carousel_status(carousel_id, "done", carousel_slides)
+
+        # Notify frontend
+        emit_event_sync(user_id, "carousel_done", {
+            "carousel_id": carousel_id,
+            "title": carousel_title,
+            "slides": carousel_slides,
+            "total_slides": total,
+        })
+
+        urls_list = "\n".join(f"  Slide {s['slide_number']}: {s['image_url']}" for s in carousel_slides)
+
+        return (
+            f"Carrossel salvo na galeria!\n"
+            f"ID: {carousel_id}\n"
+            f"Titulo: {carousel_title}\n"
+            f"Slides: {total}\n\n"
+            f"{urls_list}"
+        )
+
+    # ------------------------------------------------------------------
+    # Internal helpers (continued)
+    # ------------------------------------------------------------------
+
+    def _find_layer(slide_or_doc: dict, layer_id: str) -> Optional[dict]:
+        """Find layer by ID or 'last' within a slide dict."""
+        layers = slide_or_doc.get("layers", [])
         if not layers:
             return None
         if layer_id == "last":
@@ -1057,4 +1684,14 @@ def create_canvas_tools(user_id: str, channel: str = "web", notifier=None):
         remove_layer,
         render_canvas_tool,
         apply_template,
+        create_custom_icon,
+        upload_icon,
+        # Multi-slide tools
+        add_slide,
+        switch_slide,
+        list_slides,
+        duplicate_slide,
+        reorder_slides,
+        remove_slide,
+        save_carousel,
     ]
