@@ -458,6 +458,10 @@ _COST_USD = {
     "image_per_unit": 0.039,         # gemini-3-pro-image-preview por imagem gerada
     "search_per_call": 0.0,          # DuckDuckGo (padrão) é grátis
     "deep_research_per_call": 0.025, # ~5 chamadas flash (decisor + pesquisadores)
+    "whisper_per_minute": 0.006,     # OpenAI Whisper transcrição
+    "apify_per_run": 0.07,           # Apify Instagram scraping (média profile+posts)
+    "cloudinary_per_gb": 0.01,       # Cloudinary storage/bandwidth
+    "whatsapp_per_message": 0.005,   # Meta WhatsApp Cloud API (média)
 }
 _USD_TO_BRL = 5.80
 
@@ -470,30 +474,64 @@ def get_cost_per_user(days: int = 30, user: dict = Depends(require_admin)):
     import json as _json
 
     with get_db() as session:
-        # 1) Custo REAL do LLM via llm_usage events (gravados pelo log_run_metrics)
-        llm_rows = session.execute(text("""
+        # 1) Custo REAL de APIs via events com extra_data.cost_usd
+        # Inclui: llm_usage, whisper_transcription, apify_call, cloudinary_upload, web_search_cost
+        _COST_EVENT_TYPES = ("llm_usage", "whisper_transcription", "apify_call", "cloudinary_upload", "web_search_cost")
+        cost_rows = session.execute(text("""
+            SELECT user_id, event_type, extra_data
+            FROM usage_events
+            WHERE event_type IN :types AND extra_data IS NOT NULL
+                  AND created_at >= NOW() - make_interval(days => :d)
+        """), {"types": _COST_EVENT_TYPES, "d": days}).fetchall()
+
+        # Custo de mensagens WhatsApp (event_type=message_sent com cost_usd)
+        wa_cost_rows = session.execute(text("""
             SELECT user_id, extra_data
             FROM usage_events
-            WHERE event_type = 'llm_usage' AND extra_data IS NOT NULL
+            WHERE event_type = 'message_sent' AND channel = 'whatsapp' AND extra_data IS NOT NULL
                   AND created_at >= NOW() - make_interval(days => :d)
         """), {"d": days}).fetchall()
 
         # Agregar custo real por usuário
-        real_cost_map: dict[str, dict] = {}  # user_id -> {cost_usd, input_tokens, output_tokens, ...}
-        for r in llm_rows:
+        real_cost_map: dict[str, dict] = {}
+        for r in cost_rows:
+            uid = r[0]
+            try:
+                meta = _json.loads(r[2]) if r[2] else {}
+            except (ValueError, TypeError):
+                continue
+            if uid not in real_cost_map:
+                real_cost_map[uid] = {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "calls": 0,
+                                      "whisper_usd": 0.0, "apify_usd": 0.0, "cloudinary_usd": 0.0, "search_usd": 0.0, "whatsapp_usd": 0.0}
+            entry = real_cost_map[uid]
+            cost = meta.get("cost_usd") or 0.0
+            evt = r[1]
+            if evt == "llm_usage":
+                entry["cost_usd"] += cost
+                entry["input_tokens"] += meta.get("input_tokens") or 0
+                entry["output_tokens"] += meta.get("output_tokens") or 0
+                entry["total_tokens"] += meta.get("total_tokens") or 0
+                entry["calls"] += 1
+            elif evt == "whisper_transcription":
+                entry["whisper_usd"] += cost
+            elif evt == "apify_call":
+                entry["apify_usd"] += cost
+            elif evt == "cloudinary_upload":
+                entry["cloudinary_usd"] += cost
+            elif evt == "web_search_cost":
+                entry["search_usd"] += cost
+
+        # WhatsApp message costs
+        for r in wa_cost_rows:
             uid = r[0]
             try:
                 meta = _json.loads(r[1]) if r[1] else {}
             except (ValueError, TypeError):
                 continue
             if uid not in real_cost_map:
-                real_cost_map[uid] = {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "calls": 0}
-            entry = real_cost_map[uid]
-            entry["cost_usd"] += meta.get("cost_usd") or 0.0
-            entry["input_tokens"] += meta.get("input_tokens") or 0
-            entry["output_tokens"] += meta.get("output_tokens") or 0
-            entry["total_tokens"] += meta.get("total_tokens") or 0
-            entry["calls"] += 1
+                real_cost_map[uid] = {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "calls": 0,
+                                      "whisper_usd": 0.0, "apify_usd": 0.0, "cloudinary_usd": 0.0, "search_usd": 0.0, "whatsapp_usd": 0.0}
+            real_cost_map[uid]["whatsapp_usd"] += meta.get("cost_usd") or 0.0
 
         has_real_data = bool(real_cost_map)
 
@@ -565,16 +603,26 @@ def get_cost_per_user(days: int = 30, user: dict = Depends(require_admin)):
         est = est_map.get(uid, {"chat": 0, "voice_min": 0, "searches": 0, "deep": 0, "images": 0})
         images = est.get("images", 0)
 
-        if real and real["cost_usd"] and real["cost_usd"] > 0:
-            # Real LLM cost + estimated image cost
+        if real and (real["cost_usd"] > 0 or real.get("whisper_usd", 0) > 0 or real.get("whatsapp_usd", 0) > 0):
+            # Real costs from tracked APIs
             llm_usd = real["cost_usd"]
             img_usd = images * _COST_USD["image_per_unit"]
-            cost_usd = llm_usd + img_usd
+            whisper_usd = real.get("whisper_usd", 0)
+            apify_usd = real.get("apify_usd", 0)
+            cloudinary_usd = real.get("cloudinary_usd", 0)
+            search_usd = real.get("search_usd", 0)
+            whatsapp_usd = real.get("whatsapp_usd", 0)
+            cost_usd = llm_usd + img_usd + whisper_usd + apify_usd + cloudinary_usd + search_usd + whatsapp_usd
             cost_brl = round(cost_usd * _USD_TO_BRL, 2)
             source = "real"
             breakdown = {
                 "llm": round(llm_usd * _USD_TO_BRL, 2),
                 "images": round(img_usd * _USD_TO_BRL, 2),
+                "whisper": round(whisper_usd * _USD_TO_BRL, 2),
+                "apify": round(apify_usd * _USD_TO_BRL, 2),
+                "cloudinary": round(cloudinary_usd * _USD_TO_BRL, 2),
+                "search": round(search_usd * _USD_TO_BRL, 2),
+                "whatsapp": round(whatsapp_usd * _USD_TO_BRL, 2),
                 "total_tokens": real["total_tokens"],
                 "calls": real["calls"],
             }

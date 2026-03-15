@@ -277,6 +277,46 @@ def log_video_analysis(user_id: str, duration_seconds: float, channel: str = "we
 
 
 # ---------------------------------------------------------------------------
+# Monthly LLM budget (soft warning)
+# ---------------------------------------------------------------------------
+
+def _sum_llm_cost_monthly(user_id: str) -> float:
+    """Soma custo LLM (USD) no mes corrente a partir de usage_events."""
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    with get_db() as session:
+        rows = (
+            session.query(UsageEvent.extra_data)
+            .filter(
+                UsageEvent.user_id == user_id,
+                UsageEvent.event_type == "llm_usage",
+                UsageEvent.created_at >= month_start,
+            )
+            .all()
+        )
+    total = 0.0
+    for (ed,) in rows:
+        try:
+            meta = json.loads(ed) if ed else {}
+            total += meta.get("cost_usd", 0) or 0
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return round(total, 4)
+
+
+def check_monthly_llm_budget(user_id: str) -> bool:
+    """Retorna True se o budget mensal de LLM foi excedido (soft warning, nao bloqueia)."""
+    plan = get_user_plan(user_id)
+    if plan.get("_is_admin"):
+        return False
+    budget = float(_get_limit(plan, "max_llm_cost_monthly_usd", 0))
+    if budget <= 0:
+        return False
+    used = _sum_llm_cost_monthly(user_id)
+    return used >= budget
+
+
+# ---------------------------------------------------------------------------
 # Limit helpers for task_queue (concurrent + daily)
 # ---------------------------------------------------------------------------
 
@@ -312,16 +352,32 @@ _COUNTABLE_FEATURES = {
         "label": "Pesquisa profunda",
         "counter": "usage_events",
     },
+    "max_messages_daily": {
+        "key": "chat_messages",
+        "label": "Mensagens (chat)",
+        "counter": "usage_events",
+    },
+    "max_whatsapp_messages_daily": {
+        "key": "whatsapp_messages",
+        "label": "Mensagens (WhatsApp)",
+        "counter": "usage_events",
+    },
+    "max_audio_transcriptions_daily": {
+        "key": "audio_transcriptions",
+        "label": "Transcrições de áudio",
+        "counter": "usage_events",
+    },
+    "max_tts_daily": {
+        "key": "tts_synthesis",
+        "label": "Síntese de voz (TTS)",
+        "counter": "usage_events",
+    },
 }
 
 _TOGGLEABLE_FEATURES = {
     "voice_live_enabled": {
         "key": "voice_live",
         "label": "Voz real-time",
-    },
-    "tts_enabled": {
-        "key": "tts",
-        "label": "Síntese de voz (TTS)",
     },
 }
 
@@ -336,6 +392,14 @@ _MONTHLY_MINUTE_FEATURES = {
     "video_analysis_max_minutes_monthly": {
         "key": "video_analysis_minutes",
         "label": "Análise de vídeo (mensal)",
+    },
+}
+
+_MONTHLY_BUDGET_FEATURES = {
+    "max_llm_cost_monthly_usd": {
+        "key": "llm_budget",
+        "label": "Orçamento mensal de IA",
+        "unit": "USD",
     },
 }
 
@@ -447,10 +511,39 @@ def get_all_usage_summary(user_id: str) -> dict:
             "period": "monthly",
         }
 
+    # Monthly budget features (LLM cost)
+    for config_key, meta in _MONTHLY_BUDGET_FEATURES.items():
+        fkey = meta["key"]
+        label = meta["label"]
+        unit = meta.get("unit", "USD")
+
+        if is_admin:
+            features[fkey] = {"enabled": True, "limit": -1, "used": 0, "remaining": -1, "label": label, "unlimited": True}
+            continue
+
+        budget = float(_get_limit(plan, config_key, 0))
+        used_cost = round(_sum_llm_cost_monthly(user_id), 2)
+        remaining_cost = max(0, round(budget - used_cost, 2))
+        features[fkey] = {
+            "enabled": budget > 0,
+            "limit": budget,
+            "used": used_cost,
+            "remaining": remaining_cost,
+            "label": label,
+            "unit": unit,
+            "period": "monthly",
+            "budget_exceeded": used_cost >= budget if budget > 0 else False,
+        }
+
+    # Monthly resets_at (1o dia do proximo mes)
+    next_month = (now.replace(day=28) + timedelta(days=4)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    monthly_resets_at = next_month.isoformat()
+
     return {
         "plan_name": plan_name,
         "plan_code": plan_code,
         "resets_at": resets_at,
+        "monthly_resets_at": monthly_resets_at,
         "features": features,
     }
 
@@ -520,6 +613,21 @@ def get_limits_context(user_id: str) -> str:
             any_near = True
         else:
             parts.append(f"{meta['label']}: {remaining}/{limit}min restantes")
+
+    # Monthly LLM budget (soft warning)
+    budget = float(_get_limit(plan, "max_llm_cost_monthly_usd", 0))
+    if budget > 0:
+        llm_cost = _sum_llm_cost_monthly(user_id)
+        if llm_cost >= budget:
+            parts.append(
+                f"Orcamento mensal de IA: EXCEDIDO (${llm_cost:.2f}/${budget:.2f}). "
+                "Avise o usuario de forma natural que o limite mensal de IA foi atingido, "
+                "mas como estamos em fase de testes e o Durand e legal, pode continuar usando normalmente."
+            )
+            any_hit = True
+        elif llm_cost / budget >= 0.8:
+            parts.append(f"Orcamento mensal de IA: ${llm_cost:.2f}/${budget:.2f} (quase no limite)")
+            any_near = True
 
     # Disabled features worth mentioning
     disabled = []

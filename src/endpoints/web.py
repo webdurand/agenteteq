@@ -12,7 +12,7 @@ def split_into_sentences(text: str) -> list[str]:
 from src.agent.factory import create_agent_with_tools
 from src.agent.response_utils import extract_final_response, parse_interactive_elements
 from src.integrations.tts import get_tts
-from src.config.feature_gates import is_feature_enabled
+from src.config.feature_gates import is_feature_enabled, check_daily_feature_limit, log_feature_usage
 from src.memory.identity import get_user, update_user_name, update_last_seen, is_new_session, is_plan_active, get_or_rotate_session
 from src.memory.extractor import extract_and_save_facts
 from src.tools.memory_manager import add_memory
@@ -90,10 +90,17 @@ class WebSocketNotifier:
 async def _process_text(websocket, phone_number: str, user_text: str, tts, user: dict, mode: str = "voice", images_b64: list = None):
     if images_b64 is None:
         images_b64 = []
-        
+
+    # Enforcement: limite diario de mensagens (chat web)
+    limit_msg = check_daily_feature_limit(phone_number, "max_messages_daily")
+    if limit_msg:
+        await websocket.send_json({"type": "response", "text": limit_msg, "done": True})
+        return
+
     start_time = time.time()
     log_event(user_id=phone_number, channel="web", event_type="message_received", status="success",
               extra_data={"mode": mode, "image_count": len(images_b64) if images_b64 else 0})
+    log_feature_usage(phone_number, "max_messages_daily", channel="web")
     
     # Decodificar imagens
     image_bytes_list = []
@@ -313,16 +320,18 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     mime_type = "none"
 
     tts_enabled = is_feature_enabled(phone_number, "tts_enabled")
-    if mode != "text" and tts_enabled:
+    tts_limit_msg = check_daily_feature_limit(phone_number, "max_tts_daily") if tts_enabled else None
+    if mode != "text" and tts_enabled and not tts_limit_msg:
         await websocket.send_json({"type": "status", "text": "Gerando áudio..."})
         try:
             audio_out, mime_type = await tts.synthesize(final_text)
             logger.info("[WEB WS] TTS: %s bytes | %s", len(audio_out), mime_type)
             audio_b64 = base64.b64encode(audio_out).decode() if audio_out else ""
+            log_feature_usage(phone_number, "max_tts_daily", channel="web")
         except Exception as e:
             logger.info("[WEB WS] TTS falhou, enviando só texto: %s", e)
             mime_type = "browser"
-    elif mode != "text" and not tts_enabled:
+    elif mode != "text" and (not tts_enabled or tts_limit_msg):
         mime_type = "browser"
 
     await asyncio.sleep(0)
@@ -570,9 +579,16 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                         extract_and_save_facts, phone_number, "Áudio do usuário", response_content
                     ))
                 else:
+                    # Enforcement: limite diario de transcricoes
+                    audio_limit_msg = check_daily_feature_limit(phone_number, "max_audio_transcriptions_daily")
+                    if audio_limit_msg:
+                        await websocket.send_json({"type": "response", "text": audio_limit_msg, "done": True})
+                        continue
+
                     from src.integrations.transcriber import transcriber
 
-                    transcript = await transcriber.transcribe(audio_bytes, filename=f"audio.{audio_fmt}")
+                    transcript = await transcriber.transcribe(audio_bytes, filename=f"audio.{audio_fmt}", user_id=phone_number)
+                    log_feature_usage(phone_number, "max_audio_transcriptions_daily", channel="web")
                     await websocket.send_json({"type": "transcript", "text": transcript})
                     await websocket.send_json({"type": "status", "text": "Pensando..."})
 
@@ -639,12 +655,14 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                 audio_b64 = ""
                 mime_type = "audio/wav"
                 tts_ok = is_feature_enabled(phone_number, "tts_enabled")
-                if tts_ok:
+                tts_daily_limit = check_daily_feature_limit(phone_number, "max_tts_daily") if tts_ok else None
+                if tts_ok and not tts_daily_limit:
                     await websocket.send_json({"type": "status", "text": "Gerando áudio..."})
                     try:
                         audio_out, mime_type = await tts.synthesize(response_content)
                         logger.info("[WEB WS] TTS gerado: %s bytes | mime=%s", len(audio_out), mime_type)
                         audio_b64 = base64.b64encode(audio_out).decode() if audio_out else ""
+                        log_feature_usage(phone_number, "max_tts_daily", channel="web")
                     except Exception as e:
                         logger.info("[WEB WS] TTS falhou, enviando só texto: %s", e)
                         mime_type = "browser"

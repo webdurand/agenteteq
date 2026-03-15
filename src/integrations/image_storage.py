@@ -76,7 +76,24 @@ def upload_user_image(user_id: str, image_bytes: bytes, extension: str = "png") 
         public_id=f"img_{timestamp}",
         overwrite=True,
     )
-    
+
+    # Rastrear custo Cloudinary
+    try:
+        from src.memory.analytics import log_event
+        log_event(
+            user_id=user_id,
+            channel="api",
+            event_type="cloudinary_upload",
+            tool_name="cloudinary",
+            status="success",
+            extra_data={
+                "bytes_uploaded": len(image_bytes),
+                "cost_usd": round(len(image_bytes) / (1024 * 1024 * 1024) * 0.01, 6),
+            },
+        )
+    except Exception as e:
+        logger.error("Erro ao logar custo Cloudinary: %s", e)
+
     return upload_result.get("secure_url")
 
 def index_user_image(user_id: str, cloudinary_url: str, description: str):

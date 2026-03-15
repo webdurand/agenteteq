@@ -188,7 +188,7 @@ class ApifyProvider(SocialProvider):
 
     # ──────────────── internal ────────────────
 
-    async def _run_actor(self, actor_id: str, input_data: dict) -> list[dict]:
+    async def _run_actor(self, actor_id: str, input_data: dict, user_id: str = None) -> list[dict]:
         """Run an Apify actor synchronously and return dataset items."""
         url = f"{APIFY_BASE}/acts/{actor_id.replace('/', '~')}/run-sync-get-dataset-items"
         params = {"token": self.token}
@@ -205,7 +205,28 @@ class ApifyProvider(SocialProvider):
                 raise ValueError(f"Erro ao executar scraper ({resp.status_code}). Tente novamente mais tarde.")
 
             try:
-                return resp.json()
+                items = resp.json()
             except Exception:
                 logger.error("Apify retornou resposta invalida para %s", actor_id)
                 raise ValueError("Resposta invalida do scraper. Tente novamente mais tarde.")
+
+            # Rastrear custo Apify
+            try:
+                from src.memory.analytics import log_event
+                # Custo estimado: profile scraper ~$0.05, post scraper ~$0.10
+                cost = 0.05 if "profile" in actor_id else 0.10
+                log_event(
+                    user_id=user_id or "system",
+                    channel="api",
+                    event_type="apify_call",
+                    tool_name=actor_id,
+                    status="success",
+                    extra_data={
+                        "items_count": len(items) if items else 0,
+                        "cost_usd": cost,
+                    },
+                )
+            except Exception as e:
+                logger.error("Erro ao logar custo Apify: %s", e)
+
+            return items

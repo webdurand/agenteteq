@@ -176,7 +176,18 @@ def create_web_search_tool(notifier: StatusNotifier, user_id: str = None):
             notifier.notify("Beleza, vou dar uma olhada e já te respondo!")
         result = web_search_raw(query, max_results, topic=topic, days=days)
         if user_id:
+            provider = os.getenv("SEARCH_PROVIDER", "duckduckgo").lower()
+            _search_cost = {"duckduckgo": 0.0, "tavily": 0.01, "exa": 0.005, "serper": 0.005, "brave": 0.0}
             log_feature_usage(user_id, "max_searches_daily")
+            try:
+                from src.memory.analytics import log_event
+                log_event(
+                    user_id=user_id, channel="api", event_type="web_search_cost",
+                    tool_name=provider, status="success",
+                    extra_data={"cost_usd": _search_cost.get(provider, 0.0), "query": query[:100]},
+                )
+            except Exception:
+                pass
         return result
 
     return web_search

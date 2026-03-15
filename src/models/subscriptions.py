@@ -13,11 +13,16 @@ FREE_LIMITS = {
     "voice_live_enabled": False,
     "voice_live_max_minutes_daily": 0,
     "tts_enabled": False,
+    "max_tts_daily": 0,
     "max_searches_daily": 10,
     "max_deep_research_daily": 1,
     "social_monitoring_enabled": True,
     "max_tracked_accounts": 3,
     "video_analysis_max_minutes_monthly": 0,
+    "max_messages_daily": 50,
+    "max_whatsapp_messages_daily": 20,
+    "max_audio_transcriptions_daily": 5,
+    "max_llm_cost_monthly_usd": 0.50,
 }
 
 PAID_LIMITS = {
@@ -26,11 +31,16 @@ PAID_LIMITS = {
     "voice_live_enabled": True,
     "voice_live_max_minutes_daily": 20,
     "tts_enabled": True,
+    "max_tts_daily": 50,
     "max_searches_daily": 50,
     "max_deep_research_daily": 3,
     "social_monitoring_enabled": True,
     "max_tracked_accounts": 20,
     "video_analysis_max_minutes_monthly": 30,
+    "max_messages_daily": 300,
+    "max_whatsapp_messages_daily": 150,
+    "max_audio_transcriptions_daily": 30,
+    "max_llm_cost_monthly_usd": 8.00,
 }
 
 
@@ -41,6 +51,19 @@ def init_billing_db():
 def ensure_default_plan():
     """Backward compat alias."""
     ensure_default_plans()
+
+
+def _merge_limits(defaults: dict, current_json: str) -> str | None:
+    """Merge new default keys into existing limits_json without overwriting admin customizations.
+    Returns updated JSON string if changes were made, None otherwise."""
+    try:
+        current = json.loads(current_json or "{}")
+    except (json.JSONDecodeError, TypeError):
+        current = {}
+    merged = {**defaults, **current}  # existing values take precedence
+    if merged != current:
+        return json.dumps(merged)
+    return None
 
 
 def ensure_default_plans():
@@ -56,11 +79,18 @@ def ensure_default_plans():
             features_json='["Chat texto","Tarefas","Lembretes"]',
             limits_json=json.dumps(FREE_LIMITS),
         )
-    elif not free.get("limits_json") or free["limits_json"] == "{}":
-        update_plan("free", limits_json=json.dumps(FREE_LIMITS))
+    else:
+        updated = _merge_limits(FREE_LIMITS, free.get("limits_json"))
+        if updated:
+            update_plan("free", limits_json=updated)
 
-    # Planos pagos são criados manualmente pelo admin via API.
-    # Certifique-se de configurar o stripe_price_id ao criar o plano.
+    # Merge new keys into existing paid plans too
+    for plan in list_plans():
+        if plan["code"] == "free":
+            continue
+        updated = _merge_limits(PAID_LIMITS, plan.get("limits_json"))
+        if updated:
+            update_plan(plan["code"], limits_json=updated)
 
 
 def is_event_processed(event_id: str) -> bool:

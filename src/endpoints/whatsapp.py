@@ -25,6 +25,7 @@ from src.tools.memory_manager import add_memory
 from src.memory.analytics import log_event, log_agent_tools, log_run_metrics
 from src.db.session import get_db
 from src.db.models import ProcessedMessage, MessageBuffer
+from src.config.feature_gates import check_daily_feature_limit, log_feature_usage
 
 router = APIRouter()
 
@@ -425,6 +426,16 @@ async def orchestrate_message(event: dict):
 async def process_aggregated_message(from_number: str, message_id: str, event: dict, agent, injection: str | None = None):
     start_time = time.time()
 
+    # Enforcement: limite diario de mensagens WhatsApp
+    limit_msg = check_daily_feature_limit(from_number, "max_whatsapp_messages_daily")
+    if limit_msg:
+        if not _is_test_number(from_number):
+            try:
+                await whatsapp_client.send_text_message(from_number, limit_msg, reply_to_message_id=message_id)
+            except Exception:
+                pass
+        return
+
     texts = event.get("aggregated_text", "")
     images = event.get("raw_message", {}).get("images", [])
     audios = event.get("raw_message", {}).get("all_audios", [])
@@ -438,6 +449,7 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
             "image_count": len(images),
         },
     )
+    log_feature_usage(from_number, "max_whatsapp_messages_daily", channel="whatsapp")
 
     if len(images) > 10:
         try:
@@ -466,7 +478,13 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
             agent_audios.append(Audio(content=a_bytes))
     else:
         for a_bytes in audio_bytes_list:
-            transcript = await transcriber.transcribe(a_bytes)
+            # Enforcement: limite diario de transcricoes
+            audio_limit_msg = check_daily_feature_limit(from_number, "max_audio_transcriptions_daily")
+            if audio_limit_msg:
+                texts += f"\n\n[Audio nao transcrito: {audio_limit_msg}]"
+                continue
+            transcript = await transcriber.transcribe(a_bytes, user_id=from_number)
+            log_feature_usage(from_number, "max_audio_transcriptions_daily", channel="whatsapp")
             texts += f"\n\n[Áudio transcrito]: {transcript}"
 
     image_bytes_list = []
@@ -508,7 +526,7 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
                 if not _is_test_number(from_number):
                     await whatsapp_client.send_text_message(from_number, shortcut_msg, reply_to_message_id=message_id)
                     latency = int((time.time() - start_time) * 1000)
-                    log_event(user_id=from_number, channel="whatsapp", event_type="message_sent", status="success", latency_ms=latency)
+                    log_event(user_id=from_number, channel="whatsapp", event_type="message_sent", status="success", latency_ms=latency, extra_data={"cost_usd": 0.005})
                 return
         except Exception as e:
             logger.error("Falha no atalho de lembrete rapido: %s", e)
@@ -559,4 +577,4 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
         logger.info("Enviando resposta para %s", from_number)
         await _send_whatsapp_response(from_number, final_text, reply_to_message_id=message_id)
         latency = int((time.time() - start_time) * 1000)
-        log_event(user_id=from_number, channel="whatsapp", event_type="message_sent", status="success", latency_ms=latency)
+        log_event(user_id=from_number, channel="whatsapp", event_type="message_sent", status="success", latency_ms=latency, extra_data={"cost_usd": 0.005})
