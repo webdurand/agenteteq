@@ -60,6 +60,7 @@ class SlideText:
     slide_number: int = 1
     total_slides: int = 5
     cta_text: str = ""
+    text_align: str = ""  # "left", "center" — vazio usa default do role
 
 
 @dataclass
@@ -108,6 +109,13 @@ def _adaptive_text_color(
     if lum > 0.55:
         return "#1A1A2E"
     return palette.text_primary
+
+
+def _resolve_align(slide: SlideText, default: str) -> str:
+    """Resolve o alinhamento efetivo: usa text_align do slide se definido, senão o default do role."""
+    if slide.text_align in ("left", "center"):
+        return slide.text_align
+    return default
 
 
 # ---------------------------------------------------------------------------
@@ -187,23 +195,31 @@ def _draw_text_block(
     draw: ImageDraw.ImageDraw,
     lines: list[str],
     font: ImageFont.FreeTypeFont,
-    x_center: int,
+    x_anchor: int,
     y_start: int,
     color: Tuple[int, int, int, int],
     shadow: bool = True,
+    align: str = "center",
+    shadow_layer: Optional[Image.Image] = None,
 ) -> int:
-    """Desenha bloco de texto centralizado. Retorna y final."""
+    """Desenha bloco de texto. Retorna y final.
+    align: 'center' centraliza em x_anchor, 'left' alinha à esquerda em x_anchor."""
     line_height = _get_line_height(font)
     y = y_start
 
     for line in lines:
         bbox = font.getbbox(line)
         text_width = bbox[2] - bbox[0]
-        x = x_center - text_width // 2
 
-        if shadow:
-            shadow_color = (0, 0, 0, 120)
-            draw.text((x + 2, y + 2), line, font=font, fill=shadow_color)
+        if align == "center":
+            x = x_anchor - text_width // 2
+        else:
+            x = x_anchor
+
+        if shadow and shadow_layer is not None:
+            shadow_draw = ImageDraw.Draw(shadow_layer)
+            shadow_color = (0, 0, 0, 160)
+            shadow_draw.text((x, y), line, font=font, fill=shadow_color)
 
         draw.text((x, y), line, font=font, fill=color)
         y += line_height
@@ -211,8 +227,14 @@ def _draw_text_block(
     return y
 
 
+def _apply_blur_shadow(base: Image.Image, shadow_layer: Image.Image, radius: int = 6) -> Image.Image:
+    """Aplica blur gaussian na camada de sombra e compõe com a imagem base."""
+    blurred = shadow_layer.filter(ImageFilter.GaussianBlur(radius=radius))
+    return Image.alpha_composite(base, blurred)
+
+
 # ---------------------------------------------------------------------------
-# Desenho de overlays (gradiente, card)
+# Desenho de overlays (gradiente, card, glassmorphism)
 # ---------------------------------------------------------------------------
 def _draw_gradient_overlay(
     overlay: Image.Image,
@@ -222,17 +244,18 @@ def _draw_gradient_overlay(
     direction: str = "bottom",
 ):
     """Desenha gradiente semi-transparente na região.
-    direction: 'bottom' (transparente→opaco), 'top' (opaco→transparente), 'full' (opacidade uniforme)."""
+    direction: 'bottom' (transparente→opaco com ease-in), 'top' (opaco→transparente), 'full' (opacidade uniforme)."""
     x1, y1, x2, y2 = box
     height = y2 - y1
     draw = ImageDraw.Draw(overlay)
 
     for i in range(height):
+        t = i / height if height > 0 else 0
         if direction == "bottom":
-            # Gradiente de cima (transparente) para baixo (opaco)
-            alpha = int(max_alpha * (i / height))
+            # Curva ease-in (quadrática) para transição mais suave
+            alpha = int(max_alpha * (t ** 2))
         elif direction == "top":
-            alpha = int(max_alpha * (1 - i / height))
+            alpha = int(max_alpha * ((1 - t) ** 2))
         else:
             alpha = max_alpha
 
@@ -252,6 +275,39 @@ def _draw_rounded_rect(
     draw.rounded_rectangle(box, radius=radius, fill=fill)
 
 
+def _apply_glassmorphism(
+    img: Image.Image,
+    box: Tuple[int, int, int, int],
+    color: Tuple[int, int, int],
+    alpha: int = 140,
+    blur_radius: int = 20,
+    corner_radius: int = 30,
+) -> Image.Image:
+    """Aplica efeito glassmorphism: blur do fundo + overlay semi-transparente com bordas arredondadas."""
+    w, h = img.size
+    x1, y1, x2, y2 = box
+
+    # 1. Cria máscara com bordas arredondadas
+    mask = Image.new("L", (w, h), 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.rounded_rectangle(box, radius=corner_radius, fill=255)
+
+    # 2. Aplica blur na imagem inteira
+    blurred = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+
+    # 3. Compõe: usa imagem original onde não tem card, blurred onde tem
+    result = img.copy()
+    result.paste(blurred, mask=mask)
+
+    # 4. Overlay de cor semi-transparente por cima do blur
+    color_overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    color_draw = ImageDraw.Draw(color_overlay)
+    color_draw.rounded_rectangle(box, radius=corner_radius, fill=(*color, alpha))
+    result = Image.alpha_composite(result.convert("RGBA"), color_overlay)
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Layouts por role
 # ---------------------------------------------------------------------------
@@ -260,26 +316,43 @@ def _layout_capa(
     slide: SlideText,
     palette: ColorPalette,
 ) -> Image.Image:
-    """Layout de capa: título grande no terço inferior com gradiente."""
+    """Layout de capa: título grande no terço inferior com gradiente ease-in e accent bar."""
     w, h = img.size
     padding = int(w * 0.08)
     max_text_width = w - padding * 2
+    align = _resolve_align(slide, "center")
 
-    # Área do gradiente: 50% inferior
+    # Área do gradiente: 50% inferior com ease-in
     grad_top = int(h * 0.45)
     overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
 
     bg_color = _hex_to_rgba(palette.primary)[:3]
-    _draw_gradient_overlay(overlay, (0, grad_top, w, h), bg_color, max_alpha=200)
+    _draw_gradient_overlay(overlay, (0, grad_top, w, h), bg_color, max_alpha=210)
 
     img = Image.alpha_composite(img.convert("RGBA"), overlay)
+
+    # Camada de sombra (blur gaussian)
+    shadow_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
 
     # Texto
     text_overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(text_overlay)
 
+    # Accent bar acima do título
+    accent_color = _hex_to_rgba(palette.accent)
+    bar_y = int(h * 0.56)
+    if align == "center":
+        bar_x = w // 2 - 30
+    else:
+        bar_x = padding
+    draw.rounded_rectangle(
+        (bar_x, bar_y, bar_x + 60, bar_y + 5),
+        radius=3,
+        fill=accent_color,
+    )
+
     # Título
-    title_area_top = int(h * 0.58)
+    title_area_top = bar_y + 18
     title_area_height = int(h * 0.30)
     title_font, title_lines, _ = _fit_text_size(
         slide.title,
@@ -295,7 +368,10 @@ def _layout_capa(
     title_region = (padding, title_area_top, w - padding, title_area_top + title_area_height)
     adaptive_color = _adaptive_text_color(img, title_region, palette)
     title_color = _hex_to_rgba(adaptive_color)
-    _draw_text_block(draw, title_lines, title_font, w // 2, title_area_top, title_color)
+
+    x_anchor = w // 2 if align == "center" else padding
+    _draw_text_block(draw, title_lines, title_font, x_anchor, title_area_top, title_color,
+                     shadow=True, align=align, shadow_layer=shadow_layer)
 
     # Subtítulo / body (se houver)
     if slide.body:
@@ -311,8 +387,11 @@ def _layout_capa(
             weight=400,
         )
         body_color = _hex_to_rgba(palette.text_secondary if adaptive_color == palette.text_primary else "#4A4A4A")
-        _draw_text_block(draw, body_lines, body_font, w // 2, body_top, body_color, shadow=False)
+        _draw_text_block(draw, body_lines, body_font, x_anchor, body_top, body_color,
+                         shadow=False, align=align)
 
+    # Compor: sombra blur + texto
+    img = _apply_blur_shadow(img, shadow_layer, radius=8)
     return Image.alpha_composite(img, text_overlay)
 
 
@@ -321,24 +400,19 @@ def _layout_conteudo(
     slide: SlideText,
     palette: ColorPalette,
 ) -> Image.Image:
-    """Layout de conteúdo: card semi-transparente com título e body."""
+    """Layout de conteúdo: card glassmorphism com título e body."""
     w, h = img.size
     padding = int(w * 0.08)
-    max_text_width = w - padding * 4  # mais margem interna no card
+    align = _resolve_align(slide, "left")
 
-    # Card semi-transparente no centro
+    # Card glassmorphism no centro
     card_margin = int(w * 0.06)
     card_top = int(h * 0.12)
     card_bottom = int(h * 0.88)
     card_box = (card_margin, card_top, w - card_margin, card_bottom)
 
-    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    draw_overlay = ImageDraw.Draw(overlay)
-
-    card_color = _hex_to_rgba(palette.primary, alpha=180)
-    _draw_rounded_rect(draw_overlay, card_box, card_color, radius=30)
-
-    img = Image.alpha_composite(img.convert("RGBA"), overlay)
+    bg_color = _hex_to_rgba(palette.primary)[:3]
+    img = _apply_glassmorphism(img.convert("RGBA"), card_box, bg_color, alpha=140, blur_radius=20, corner_radius=30)
 
     # Texto sobre o card
     text_overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -377,12 +451,17 @@ def _layout_conteudo(
         weight=700,
     )
 
-    # Alinhado à esquerda para conteúdo
     title_color = _hex_to_rgba(palette.text_primary)
     y = title_top
     line_height = _get_line_height(title_font)
     for line in title_lines:
-        draw.text((content_left, y), line, font=title_font, fill=title_color)
+        if align == "center":
+            bbox = title_font.getbbox(line)
+            text_w = bbox[2] - bbox[0]
+            x = content_left + (content_width - text_w) // 2
+        else:
+            x = content_left
+        draw.text((x, y), line, font=title_font, fill=title_color)
         y += line_height
 
     # Body
@@ -401,7 +480,13 @@ def _layout_conteudo(
         )
         body_color = _hex_to_rgba(palette.text_secondary)
         for line in body_lines:
-            draw.text((content_left, body_top), line, font=body_font, fill=body_color)
+            if align == "center":
+                bbox = body_font.getbbox(line)
+                text_w = bbox[2] - bbox[0]
+                x = content_left + (content_width - text_w) // 2
+            else:
+                x = content_left
+            draw.text((x, body_top), line, font=body_font, fill=body_color)
             body_top += _get_line_height(body_font)
 
     return Image.alpha_composite(img, text_overlay)
@@ -412,30 +497,38 @@ def _layout_fechamento(
     slide: SlideText,
     palette: ColorPalette,
 ) -> Image.Image:
-    """Layout de fechamento/CTA: texto centralizado com destaque accent."""
+    """Layout de fechamento/CTA: card glassmorphism com bordas arredondadas, texto centralizado."""
     w, h = img.size
     padding = int(w * 0.08)
-    max_text_width = w - padding * 2
+    align = _resolve_align(slide, "center")
 
-    # Overlay escuro centralizado
-    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    # Card glassmorphism (mesmo estilo do conteudo, mantém consistência visual)
+    card_margin = int(w * 0.06)
+    card_top = int(h * 0.12)
+    card_bottom = int(h * 0.88)
+    card_box = (card_margin, card_top, w - card_margin, card_bottom)
+
     bg_color = _hex_to_rgba(palette.primary)[:3]
-    _draw_gradient_overlay(overlay, (0, 0, w, h), bg_color, max_alpha=160, direction="full")
+    img = _apply_glassmorphism(img.convert("RGBA"), card_box, bg_color, alpha=160, blur_radius=20, corner_radius=30)
 
-    img = Image.alpha_composite(img.convert("RGBA"), overlay)
+    # Camada de sombra
+    shadow_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
 
     text_overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(text_overlay)
 
+    content_left = card_margin + padding
+    content_width = w - (card_margin + padding) * 2
+
     # CTA ou título como texto principal
     main_text = slide.cta_text or slide.title
-    center_y = int(h * 0.35)
-    title_area_height = int(h * 0.25)
+    center_y = int(h * 0.30)
+    title_area_height = int(h * 0.30)
 
     title_font, title_lines, _ = _fit_text_size(
         main_text,
         "Montserrat-Variable.ttf",
-        max_text_width,
+        content_width,
         title_area_height,
         min_size=28,
         max_size=72,
@@ -443,17 +536,21 @@ def _layout_fechamento(
         weight=700,
     )
 
-    title_region = (padding, center_y, w - padding, center_y + title_area_height)
-    adaptive_color = _adaptive_text_color(img, title_region, palette)
-    title_color = _hex_to_rgba(adaptive_color)
-    y_after = _draw_text_block(draw, title_lines, title_font, w // 2, center_y, title_color)
+    title_color = _hex_to_rgba(palette.text_primary)
+    x_anchor = content_left + content_width // 2 if align == "center" else content_left
+    y_after = _draw_text_block(draw, title_lines, title_font, x_anchor, center_y, title_color,
+                               shadow=True, align=align, shadow_layer=shadow_layer)
 
     # Accent bar abaixo do título
     accent_color = _hex_to_rgba(palette.accent)
     bar_w = 80
     bar_y = y_after + 15
+    if align == "center":
+        bar_x = x_anchor - bar_w // 2
+    else:
+        bar_x = content_left
     draw.rounded_rectangle(
-        (w // 2 - bar_w // 2, bar_y, w // 2 + bar_w // 2, bar_y + 5),
+        (bar_x, bar_y, bar_x + bar_w, bar_y + 5),
         radius=3,
         fill=accent_color,
     )
@@ -464,16 +561,19 @@ def _layout_fechamento(
         body_font, body_lines, _ = _fit_text_size(
             slide.body,
             "Inter-Variable.ttf",
-            max_text_width,
-            int(h * 0.15),
+            content_width,
+            int(h * 0.20),
             min_size=18,
             max_size=30,
             max_lines=3,
             weight=400,
         )
-        body_color = _hex_to_rgba(palette.text_secondary if adaptive_color == palette.text_primary else "#4A4A4A")
-        _draw_text_block(draw, body_lines, body_font, w // 2, body_top, body_color, shadow=False)
+        body_color = _hex_to_rgba(palette.text_secondary)
+        _draw_text_block(draw, body_lines, body_font, x_anchor, body_top, body_color,
+                         shadow=False, align=align)
 
+    # Compor: sombra blur + texto
+    img = _apply_blur_shadow(img, shadow_layer, radius=6)
     return Image.alpha_composite(img, text_overlay)
 
 

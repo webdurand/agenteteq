@@ -79,6 +79,9 @@ def expand_slides_from_description(
             "\n- 'title': texto do titulo que sera sobreposto via tipografia (max 50 chars)"
             "\n- 'body': texto complementar/explicativo (max 120 chars, opcional para capa)"
             "\n- 'cta_text': texto do CTA (APENAS no slide de fechamento, max 40 chars)"
+            "\n- 'text_align': alinhamento do texto no slide ('left' ou 'center'). "
+            "Opcional — se omitido, usa default: capa=center, conteudo=left, fechamento=center. "
+            "Use 'left' quando o conteudo e mais editorial/informativo. Use 'center' para impacto visual."
             "\n\nREGRAS DE DESIGN:"
             "\n1. Defina 'style_anchor': identidade visual compartilhada DETALHADA (estilo artistico, "
             "iluminacao, textura, composicao base, atmosfera, angulo de camera) para COERENCIA VISUAL."
@@ -91,7 +94,7 @@ def expand_slides_from_description(
             "Formato: {"
             "\"style_anchor\": \"descricao detalhada da identidade visual\", "
             "\"color_palette\": {\"primary\": \"#hex\", \"accent\": \"#hex\", \"text_primary\": \"#hex\", \"text_secondary\": \"#hex\"}, "
-            f"\"slides\": [{{\"slide_number\": 1, \"role\": \"capa\", \"prompt\": \"...\", \"title\": \"...\", \"body\": \"...\", \"style\": \"{style}\"}}]"
+            f"\"slides\": [{{\"slide_number\": 1, \"role\": \"capa\", \"prompt\": \"...\", \"title\": \"...\", \"body\": \"...\", \"text_align\": \"center\", \"style\": \"{style}\"}}]"
             "}"
         )
         temperature = 0.5
@@ -189,7 +192,7 @@ async def _process_image_background(
         max_concurrent = int(get_config("max_concurrent_images", "3"))
         sem = asyncio.Semaphore(max_concurrent)
 
-        def _build_full_prompt(slide: Dict[str, Any], is_continuation: bool = False) -> str:
+        def _build_full_prompt(slide: Dict[str, Any], is_continuation: bool = False, has_reference: bool = False) -> str:
             prompt = slide.get("prompt", "")
             style = slide.get("style", "")
             style_anchor = slide.get("style_anchor", "")
@@ -199,6 +202,14 @@ async def _process_image_background(
                 parts.append(f"Style: {style}.")
             if style_anchor:
                 parts.append(f"Visual identity: {style_anchor}.")
+
+            if has_reference:
+                parts.append(
+                    "CRITICAL: Preserve the EXACT appearance of the person in the reference photo. "
+                    "Same face, same hair color and style, same skin tone, same body type. "
+                    "If the person wears glasses, KEEP the glasses. "
+                    "The person MUST be clearly recognizable as the SAME individual from the reference."
+                )
 
             if slide.get("title") or slide.get("cta_text"):
                 if role == "capa":
@@ -232,6 +243,7 @@ async def _process_image_background(
                     slide_number=index + 1,
                     total_slides=len(slides),
                     cta_text=slide.get("cta_text", ""),
+                    text_align=slide.get("text_align", ""),
                 )
                 palette_data = slide.get("color_palette", {})
                 palette = ColorPalette(
@@ -245,13 +257,34 @@ async def _process_image_background(
                 logger.warning("Text overlay falhou para slide %s, usando imagem sem overlay: %s", index + 1, e)
                 return image_bytes
 
+        def _post_process_image(image_bytes: bytes) -> bytes:
+            """Aplica sharpening leve e ajuste de contraste/saturação na imagem gerada."""
+            try:
+                from PIL import ImageEnhance
+                img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+                # Sharpening leve
+                img = img.filter(ImageFilter.UnsharpMask(radius=1.5, percent=80, threshold=3))
+                # Contraste sutil
+                img = ImageEnhance.Contrast(img).enhance(1.08)
+                # Saturação sutil
+                img = ImageEnhance.Color(img).enhance(1.08)
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                return buf.getvalue()
+            except Exception as e:
+                logger.warning("Pós-processamento falhou, usando imagem original: %s", e)
+                return image_bytes
+
         async def _generate_single(slide: Dict[str, Any], index: int, ref: Optional[bytes] = None) -> tuple[bytes, bytes]:
             is_continuation = index > 0
-            full_prompt = _build_full_prompt(slide, is_continuation=is_continuation)
-            if ref is not None and index == 0:
+            has_ref = ref is not None
+            full_prompt = _build_full_prompt(slide, is_continuation=is_continuation, has_reference=has_ref)
+            if has_ref:
                 raw_bytes = await provider.edit(full_prompt, ref, aspect_ratio=aspect_ratio)
             else:
                 raw_bytes = await provider.generate(full_prompt, aspect_ratio=aspect_ratio)
+            # Pós-processamento: sharpening, contraste, saturação
+            raw_bytes = _post_process_image(raw_bytes)
             overlaid_bytes = _apply_overlay(slide, index, raw_bytes)
             return overlaid_bytes, raw_bytes
 
