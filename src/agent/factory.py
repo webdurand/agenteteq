@@ -122,7 +122,10 @@ def create_agent_with_tools(
             "Use analyze_posts para OLHAR posts de QUALQUER conta publica (incluindo as IMAGENS) e responder perguntas — "
             "NAO precisa estar monitorada. Ex: 'sobre o que fala o ultimo post do @fulano?', 'descreve o post mais recente'. "
             "Use view_post_by_url quando o usuario enviar um LINK de post do Instagram (instagram.com/p/... ou /reel/...). "
-            "A tool acessa o post, baixa as imagens e analisa o conteudo visual e textual em detalhe. "
+            "A tool acessa o post, baixa as imagens/video e analisa o conteudo visual e textual em detalhe. "
+            "Para Reels, a tool baixa e analisa o VIDEO COMPLETO (cenas, falas, texto na tela). "
+            "Use view_youtube_video quando o usuario enviar um LINK do YouTube (youtube.com/watch, youtu.be/, youtube.com/shorts/). "
+            "A tool baixa o video em baixa qualidade e analisa o conteudo completo (visual + audio + texto). "
             "Use create_content_script para gerar roteiros de carrossel/video inspirados em uma referencia.\n\n"
             "ALERTAS DE CONTEUDO: Apos salvar uma conta com track_account, OFERECA ativar alertas: "
             "'Quer que eu te avise no WhatsApp quando essa conta postar algo que bombar?' "
@@ -332,7 +335,10 @@ def create_agent_with_tools(
         "- 'texto e imagens', 'completo' → format='text_images'\n"
         "- 'PDF', 'documento', 'quero baixar' → format='pdf'\n"
         "Se o usuario nao especificar, use format='images' (comportamento padrao). "
-        "Infira o formato da frase do usuario naturalmente."
+        "Infira o formato da frase do usuario naturalmente.\n"
+        "TODOS os formatos funcionam em TODOS os canais, incluindo WhatsApp. "
+        "PDFs sao enviados como documento anexado, imagens como midia. "
+        "NUNCA diga que nao consegue enviar PDF ou imagens pelo WhatsApp — SEMPRE chame a tool."
     ]
 
     all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + calendar_instructions + copilot_instructions + interactive_instructions + task_instructions + upsell_instructions + briefing_instructions + repurposing_instructions

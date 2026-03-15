@@ -150,6 +150,9 @@ class ApifyProvider(SocialProvider):
         else:
             posted_at = ""
 
+        # Extract video URL for reels/videos
+        video_url = item.get("videoUrl", "") or item.get("videoPlaybackUrl", "") or ""
+
         return SocialPost(
             platform_post_id=str(post_id),
             content_type=content_type,
@@ -162,10 +165,12 @@ class ApifyProvider(SocialProvider):
             shares_count=0,
             views_count=item.get("videoViewCount", 0) or item.get("viewCount", 0) or 0,
             posted_at=posted_at,
+            video_url=video_url,
             metadata={
                 "shortcode": item.get("shortCode", ""),
                 "url": item.get("url", ""),
                 "location": item.get("locationName", ""),
+                "duration": item.get("videoDuration", 0) or 0,
             },
         )
 

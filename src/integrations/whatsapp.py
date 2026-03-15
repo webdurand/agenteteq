@@ -18,6 +18,9 @@ class WhatsAppProvider(Protocol):
     async def send_list_message(self, to_number: str, body: str, button_text: str, sections: list[dict], footer: Optional[str] = None) -> dict:
         ...
 
+    async def send_document(self, to_number: str, document_url: str, filename: str, caption: Optional[str] = None) -> dict:
+        ...
+
     async def mark_message_as_read_and_typing(self, message_id: str, to_number: str, is_audio: bool = False) -> Optional[dict]:
         ...
 
@@ -71,6 +74,23 @@ class MetaWhatsAppClient:
             "to": to_number,
             "type": "image",
             "image": image_payload,
+        }
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(url, json=payload, headers=self._get_headers())
+            response.raise_for_status()
+            return response.json()
+
+    async def send_document(self, to_number: str, document_url: str, filename: str, caption: Optional[str] = None) -> dict:
+        url = f"{self.base_url}/{self.phone_number_id}/messages"
+        document_payload: dict = {"link": document_url, "filename": filename}
+        if caption:
+            document_payload["caption"] = caption
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": to_number,
+            "type": "document",
+            "document": document_payload,
         }
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(url, json=payload, headers=self._get_headers())
@@ -205,6 +225,22 @@ class EvolutionWhatsAppClient:
             "number": to_number,
             "mediatype": "image",
             "media": image_url,
+            "delay": 1200,
+        }
+        if caption:
+            payload["caption"] = caption
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(url, json=payload, headers=self._get_headers())
+            response.raise_for_status()
+            return response.json()
+
+    async def send_document(self, to_number: str, document_url: str, filename: str, caption: Optional[str] = None) -> dict:
+        url = f"{self.api_url}/message/sendMedia/{self.instance_name}"
+        payload: dict = {
+            "number": to_number,
+            "mediatype": "document",
+            "media": document_url,
+            "fileName": filename,
             "delay": 1200,
         }
         if caption:

@@ -820,6 +820,27 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
                 except Exception as e:
                     logger.error("Erro ao salvar PDF na galeria: %s", e)
 
+                # Send PDF as document on WhatsApp
+                if channel in ("whatsapp", "whatsapp_text", "web_whatsapp"):
+                    try:
+                        import asyncio as _aio
+                        from src.integrations.whatsapp import whatsapp_client as _wpp
+
+                        accounts_label = ", ".join(f"@{u}" for u in username_list[:3])
+                        coro = _wpp.send_document(
+                            user_id,
+                            pdf_url,
+                            filename=f"relatorio_{'-'.join(username_list[:3])}.pdf",
+                            caption=f"Relatorio Competitivo - {accounts_label}",
+                        )
+                        try:
+                            loop = _aio.get_running_loop()
+                            loop.create_task(coro)
+                        except RuntimeError:
+                            _aio.run(coro)
+                    except Exception as e:
+                        logger.error("Erro ao enviar PDF via WhatsApp: %s", e)
+
                 text_summary = render_report_text(report_data, insights)
                 return f"{text_summary}\n\n**Download do PDF:** {pdf_url}"
             except Exception as e:
@@ -878,7 +899,31 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
         if format != "text_images":
             lines.append(f"\n**Insights:**\n{insights[:500]}")
 
-        if image_urls:
+        # Send images as media on WhatsApp
+        if image_urls and channel in ("whatsapp", "whatsapp_text", "web_whatsapp"):
+            try:
+                import asyncio as _aio
+                from src.integrations.whatsapp import whatsapp_client as _wpp
+
+                async def _send_report_images():
+                    total = len(image_urls)
+                    for i, url in enumerate(image_urls):
+                        try:
+                            await _wpp.send_image(
+                                user_id, url,
+                                caption=f"Slide {i + 1}/{total}",
+                            )
+                        except Exception as img_err:
+                            logger.error("Erro ao enviar slide %s do relatorio via WhatsApp: %s", i + 1, img_err)
+
+                try:
+                    loop = _aio.get_running_loop()
+                    loop.create_task(_send_report_images())
+                except RuntimeError:
+                    _aio.run(_send_report_images())
+            except Exception as e:
+                logger.error("Erro ao enviar imagens do relatorio via WhatsApp: %s", e)
+        elif image_urls:
             lines.append("\n**Imagens do relatorio:**")
             for i, url in enumerate(image_urls):
                 lines.append(f"Slide {i + 1}: {url}")
@@ -957,9 +1002,45 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
         }
 
         posts_text = _format_posts_for_analysis([post_dict])
-        post_images = _download_post_images([post_dict], max_images=1)
-
         user_question = question.strip() if question else "Descreva o conteudo deste post de forma detalhada."
+        shortcode = post.metadata.get("shortcode", "")
+        post_url = post.metadata.get("url", url)
+
+        # Video/Reel: download and analyze full video
+        if post.content_type in ("video", "reel") and post.video_url:
+            from src.config.feature_gates import check_video_analysis_limit, log_video_analysis
+            limit_msg = check_video_analysis_limit(user_id)
+            if limit_msg:
+                # Over limit — fallback to thumbnail only
+                logger.info("Video limit reached for %s, using thumbnail", user_id)
+            else:
+                video_duration = post.metadata.get("duration", 0)
+                video_bytes = _download_video(post.video_url)
+                if video_bytes:
+                    logger.info("Analyzing Reel video (%d bytes, ~%.0fs)", len(video_bytes), video_duration)
+                    prompt = (
+                        f"Voce esta assistindo a um Reel/video do Instagram.\n\n"
+                        f"Dados do post:\n{posts_text}\n\n"
+                        "Analise o video COMPLETO em detalhe:\n"
+                        "- Descreva CADA cena/momento do video\n"
+                        "- Transcreva qualquer fala ou texto que apareca\n"
+                        "- Descreva elementos visuais, transicoes, musica/efeitos sonoros\n"
+                        "- Identifique o estilo de edicao e formato do conteudo\n\n"
+                        f"Pergunta do usuario: {user_question}\n\n"
+                        "Responda em portugues de forma clara e detalhada."
+                    )
+                    analysis = _analyze_video(video_bytes, prompt)
+                    log_video_analysis(user_id, video_duration or 30)
+                    return (
+                        f"**Analise do Reel** (video completo)\n"
+                        f"Link: {post_url}\n\n"
+                        f"{analysis}"
+                    )
+                # Fallback: analyze thumbnail if video download fails
+                logger.warning("Video download failed, falling back to thumbnail analysis")
+
+        # Image/Carousel: download all slides
+        post_images = _download_all_carousel_images(post_dict)
 
         prompt = (
             f"Voce esta olhando para um post do Instagram.\n\n"
@@ -967,8 +1048,8 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
         )
         if post_images:
             prompt += (
-                "A imagem anexada corresponde ao post acima.\n"
-                "Analise a imagem em detalhe: o que aparece, cores, texto na imagem, "
+                f"{len(post_images)} imagem(ns) do post estao anexadas (em ordem dos slides).\n"
+                "Analise CADA imagem em detalhe: o que aparece, cores, texto na imagem, "
                 "composicao, estilo visual, e qualquer elemento relevante.\n\n"
             )
         prompt += (
@@ -977,11 +1058,62 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
         )
 
         analysis = _run_analysis(prompt, images=post_images)
-        shortcode = post.metadata.get("shortcode", "")
-        post_url = post.metadata.get("url", url)
         return (
             f"**Analise do post** ({post.content_type})\n"
             f"Link: {post_url}\n\n"
+            f"{analysis}"
+        )
+
+    def view_youtube_video(url: str, question: str = "") -> str:
+        """
+        Analisa o conteudo de um video do YouTube pelo link. Baixa o video em baixa
+        qualidade e usa IA para descrever cenas, transcrever falas e analisar o conteudo.
+        Use quando o usuario enviar um link do YouTube (youtube.com/watch ou youtu.be/).
+
+        Args:
+            url: URL do video do YouTube.
+            question: Pergunta especifica sobre o video (opcional).
+
+        Returns:
+            Analise detalhada do conteudo do video.
+        """
+        import re as _re
+
+        if not _re.search(r"(youtube\.com/watch|youtu\.be/|youtube\.com/shorts/)", url):
+            return "URL invalida. Envie um link do YouTube."
+
+        from src.config.feature_gates import check_video_analysis_limit, log_video_analysis
+        limit_msg = check_video_analysis_limit(user_id)
+        if limit_msg:
+            return limit_msg
+
+        _notify("Baixando video...")
+
+        video_bytes, duration = _download_youtube_video(url)
+        if not video_bytes:
+            return "Nao consegui baixar esse video. Pode ser privado, restrito por idade ou muito longo."
+
+        user_question = question.strip() if question else "Descreva o conteudo deste video de forma detalhada."
+
+        prompt = (
+            f"Voce esta assistindo a um video do YouTube.\n\n"
+            f"Duracao: {duration:.0f} segundos\n"
+            f"URL: {url}\n\n"
+            "Analise o video COMPLETO em detalhe:\n"
+            "- Descreva CADA cena/momento do video\n"
+            "- Transcreva qualquer fala ou texto que apareca na tela\n"
+            "- Descreva elementos visuais, transicoes, musica/efeitos sonoros\n"
+            "- Identifique o estilo de edicao e formato do conteudo\n\n"
+            f"Pergunta do usuario: {user_question}\n\n"
+            "Responda em portugues de forma clara e detalhada."
+        )
+
+        logger.info("Analyzing YouTube video (%d bytes, ~%.0fs)", len(video_bytes), duration)
+        analysis = _analyze_video(video_bytes, prompt)
+        log_video_analysis(user_id, duration or 60)
+        return (
+            f"**Analise do video YouTube**\n"
+            f"Link: {url}\n\n"
             f"{analysis}"
         )
 
@@ -998,6 +1130,7 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
         toggle_trend_alerts,
         generate_competitive_report,
         view_post_by_url,
+        view_youtube_video,
     )
 
 
@@ -1036,6 +1169,28 @@ def _get_best_image_url(post: dict) -> str:
     if media_urls:
         return media_urls[0]
     return post.get("thumbnail_url", "") or ""
+
+
+def _download_all_carousel_images(post: dict, max_slides: int = 10) -> list:
+    """Download all carousel images from a single post. Returns agno Image objects."""
+    import httpx
+    from agno.media import Image
+
+    media_urls = post.get("media_urls") or []
+    content_type = (post.get("content_type") or "").lower()
+    if content_type in ("video", "reel"):
+        thumb = post.get("thumbnail_url", "")
+        return _download_post_images([post], max_images=1) if thumb else []
+
+    images = []
+    for url in media_urls[:max_slides]:
+        try:
+            resp = httpx.get(url, timeout=10.0, follow_redirects=True)
+            if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("image"):
+                images.append(Image(content=resp.content))
+        except Exception as e:
+            logger.debug("Failed to download carousel slide: %s", e)
+    return images
 
 
 def _download_post_images(posts: list[dict], max_images: int = 5) -> list:
@@ -1078,6 +1233,137 @@ def _run_analysis(prompt: str, images: list | None = None) -> str:
     except Exception as e:
         logger.error("Erro na analise LLM: %s", e)
         return "Nao consegui gerar a analise neste momento. Tente novamente."
+
+
+def _download_video(video_url: str, max_size_mb: int = 50) -> bytes | None:
+    """Download a video from URL. Returns bytes or None if too large/failed."""
+    import httpx
+
+    try:
+        with httpx.stream("GET", video_url, timeout=60.0, follow_redirects=True) as resp:
+            if resp.status_code != 200:
+                logger.warning("Video download failed: status=%s", resp.status_code)
+                return None
+            content_length = int(resp.headers.get("content-length", 0))
+            if content_length > max_size_mb * 1024 * 1024:
+                logger.warning("Video too large: %sMB (max %sMB)", content_length // (1024*1024), max_size_mb)
+                return None
+            chunks = []
+            total = 0
+            for chunk in resp.iter_bytes(chunk_size=64 * 1024):
+                total += len(chunk)
+                if total > max_size_mb * 1024 * 1024:
+                    logger.warning("Video exceeded max size during download")
+                    return None
+                chunks.append(chunk)
+            return b"".join(chunks)
+    except Exception as e:
+        logger.error("Failed to download video: %s", e)
+        return None
+
+
+def _download_youtube_video(youtube_url: str) -> tuple[bytes | None, float]:
+    """Download a YouTube video in low quality using yt-dlp. Returns (bytes, duration_seconds)."""
+    import subprocess
+    import tempfile
+    import json
+
+    try:
+        # First get video info for duration
+        info_cmd = ["yt-dlp", "--dump-json", "--no-download", youtube_url]
+        info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=30)
+        duration = 0.0
+        if info_result.returncode == 0:
+            info = json.loads(info_result.stdout)
+            duration = float(info.get("duration", 0))
+
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        # Download lowest quality video
+        cmd = [
+            "yt-dlp",
+            "-f", "worst[ext=mp4]/worst",
+            "--max-filesize", "50M",
+            "-o", tmp_path,
+            "--no-playlist",
+            "--quiet",
+            youtube_url,
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        if result.returncode != 0:
+            logger.error("yt-dlp failed: %s", result.stderr.decode()[:500])
+            return None, duration
+
+        import os
+        with open(tmp_path, "rb") as f:
+            video_bytes = f.read()
+        os.unlink(tmp_path)
+        return video_bytes, duration
+    except Exception as e:
+        logger.error("Failed to download YouTube video: %s", e)
+        return None, 0.0
+
+
+def _analyze_video(video_bytes: bytes, prompt: str, mime_type: str = "video/mp4") -> str:
+    """Analyze a video using Gemini File API (supports full video understanding)."""
+    import os
+    import tempfile
+    import time
+    from google import genai
+    from google.genai import types
+
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return "Chave da API Gemini nao configurada."
+
+    client = genai.Client(api_key=api_key)
+
+    try:
+        # Write to temp file for upload
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            tmp.write(video_bytes)
+            tmp_path = tmp.name
+
+        # Upload to Gemini File API
+        logger.info("Uploading video to Gemini File API (%d bytes)...", len(video_bytes))
+        video_file = client.files.upload(file=tmp_path, config={"mime_type": mime_type})
+        os.unlink(tmp_path)
+
+        # Wait for processing
+        while video_file.state.name == "PROCESSING":
+            time.sleep(2)
+            video_file = client.files.get(name=video_file.name)
+
+        if video_file.state.name == "FAILED":
+            logger.error("Gemini video processing failed")
+            return "Nao consegui processar o video. Tente novamente."
+
+        # Generate content with video
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_uri(file_uri=video_file.uri, mime_type=mime_type),
+                        types.Part.from_text(text=prompt),
+                    ],
+                )
+            ],
+        )
+
+        # Cleanup uploaded file
+        try:
+            client.files.delete(name=video_file.name)
+        except Exception:
+            pass
+
+        return response.text or "Nao consegui gerar a analise."
+
+    except Exception as e:
+        logger.error("Video analysis failed: %s", e)
+        return f"Erro ao analisar video: {e}"
 
 
 def _format_relative_time(iso_str: str) -> str:

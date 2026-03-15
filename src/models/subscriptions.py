@@ -17,6 +17,7 @@ FREE_LIMITS = {
     "max_deep_research_daily": 1,
     "social_monitoring_enabled": True,
     "max_tracked_accounts": 3,
+    "video_analysis_max_minutes_monthly": 0,
 }
 
 PAID_LIMITS = {
@@ -29,6 +30,7 @@ PAID_LIMITS = {
     "max_deep_research_daily": 3,
     "social_monitoring_enabled": True,
     "max_tracked_accounts": 20,
+    "video_analysis_max_minutes_monthly": 30,
 }
 
 

@@ -210,6 +210,73 @@ def log_feature_usage(user_id: str, feature_key: str, channel: str = "web"):
 
 
 # ---------------------------------------------------------------------------
+# Video analysis monthly limits
+# ---------------------------------------------------------------------------
+
+def _sum_video_minutes(user_id: str) -> float:
+    """Soma minutos de análise de vídeo no mês corrente."""
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    with get_db() as session:
+        total_sec = (
+            session.query(func.sum(UsageEvent.latency_ms))
+            .filter(
+                UsageEvent.user_id == user_id,
+                UsageEvent.tool_name == "video_analysis",
+                UsageEvent.created_at >= month_start,
+            )
+            .scalar()
+        ) or 0
+    # latency_ms stores video duration in seconds for video_analysis events
+    return int(total_sec) / 60.0
+
+
+def check_video_analysis_limit(user_id: str) -> Optional[str]:
+    """Retorna mensagem de erro se o limite mensal de vídeo foi atingido, None se pode prosseguir."""
+    plan = get_user_plan(user_id)
+    if plan.get("_is_admin"):
+        return None
+
+    limit = int(_get_limit(plan, "video_analysis_max_minutes_monthly", 0))
+    if limit <= 0:
+        return (
+            "A analise de video nao esta disponivel no seu plano atual. "
+            "Faca upgrade para analisar videos completos de Reels e YouTube!"
+        )
+
+    used = round(_sum_video_minutes(user_id), 1)
+    if used >= limit:
+        return (
+            f"Voce atingiu seu limite mensal de {limit} minutos de analise de video. "
+            f"Seu uso reseta no proximo mes."
+        )
+    return None
+
+
+def get_video_minutes_remaining(user_id: str) -> float:
+    """Retorna minutos de vídeo restantes no mês."""
+    plan = get_user_plan(user_id)
+    if plan.get("_is_admin"):
+        return 999999.0
+    limit = int(_get_limit(plan, "video_analysis_max_minutes_monthly", 0))
+    used = _sum_video_minutes(user_id)
+    return max(0.0, limit - used)
+
+
+def log_video_analysis(user_id: str, duration_seconds: float, channel: str = "web"):
+    """Registra uso de análise de vídeo (duration em segundos, armazenado em latency_ms)."""
+    from src.memory.analytics import log_event
+    log_event(
+        user_id=user_id,
+        channel=channel,
+        event_type="feature_usage",
+        tool_name="video_analysis",
+        status="success",
+        latency_ms=int(duration_seconds),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Limit helpers for task_queue (concurrent + daily)
 # ---------------------------------------------------------------------------
 
@@ -262,6 +329,13 @@ _MINUTE_FEATURES = {
     "voice_live_max_minutes_daily": {
         "key": "voice_live_minutes",
         "label": "Minutos de voz real-time",
+    },
+}
+
+_MONTHLY_MINUTE_FEATURES = {
+    "video_analysis_max_minutes_monthly": {
+        "key": "video_analysis_minutes",
+        "label": "Análise de vídeo (mensal)",
     },
 }
 
@@ -349,6 +423,28 @@ def get_all_usage_summary(user_id: str) -> dict:
             "remaining": remaining,
             "label": label,
             "unit": "min",
+        }
+
+    # Monthly minute-based features (video analysis)
+    for config_key, meta in _MONTHLY_MINUTE_FEATURES.items():
+        fkey = meta["key"]
+        label = meta["label"]
+
+        if is_admin:
+            features[fkey] = {"enabled": True, "limit": -1, "used": 0, "remaining": -1, "label": label, "unlimited": True}
+            continue
+
+        limit = int(_get_limit(plan, config_key, 0))
+        used_min = round(_sum_video_minutes(user_id), 1)
+        remaining = max(0, round(limit - used_min, 1))
+        features[fkey] = {
+            "enabled": limit > 0,
+            "limit": limit,
+            "used": used_min,
+            "remaining": remaining,
+            "label": label,
+            "unit": "min",
+            "period": "monthly",
         }
 
     return {
