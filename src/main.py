@@ -50,14 +50,21 @@ from src.queue.task_queue import recover_stale_tasks
 from src.events_broadcast import listen_ws_events
 
 
+async def _deferred_startup():
+    """Executa tarefas pesadas de startup em background, sem bloquear health checks."""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, ensure_tables)
+    await loop.run_in_executor(None, ensure_default_plans)
+    await loop.run_in_executor(None, recover_stale_tasks)
+    await loop.run_in_executor(None, start_scheduler)
+    logger.info("Startup em background finalizado.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     set_main_loop(asyncio.get_running_loop())
-    ensure_tables()
-    ensure_default_plans()
-    recover_stale_tasks()
     asyncio.create_task(listen_ws_events())
-    start_scheduler()
+    asyncio.create_task(_deferred_startup())
     yield
     shutdown_scheduler()
 
@@ -90,6 +97,10 @@ app.add_middleware(
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     return JSONResponse(status_code=500, content={"detail": "Erro interno do servidor"})
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 app.include_router(whatsapp_router)
 app.include_router(web_router)
