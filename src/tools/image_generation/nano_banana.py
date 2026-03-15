@@ -46,10 +46,14 @@ def _extract_image_from_response(response) -> bytes:
 
     raise Exception("Resposta recebida mas sem inline_data de imagem.")
 
+def _is_retryable_error(err_str: str) -> bool:
+    return any(k in err_str for k in ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE"))
+
 class NanoBananaProvider(ImageProvider):
     """
-    Implementação do ImageProvider usando modelos Gemini de geração de imagem
-    (Nano Banana). Usa generate_content() com Modality.IMAGE.
+    Implementação do ImageProvider usando modelos Gemini de geração de imagem.
+    Suporta fallback automático para modelo alternativo quando o primário
+    retorna 429/503.
     """
 
     def __init__(self):
@@ -58,31 +62,62 @@ class NanoBananaProvider(ImageProvider):
             raise ValueError("GOOGLE_API_KEY ou GEMINI_API_KEY não está configurada.")
         self.client = genai.Client(api_key=self.api_key)
         self.model_name = os.getenv("IMAGE_MODEL", "gemini-3.1-flash-image-preview")
+        self.fallback_model = os.getenv("IMAGE_FALLBACK_MODEL", "")
+
+    def _call_api(self, model: str, contents, config):
+        """Single API call to a specific model."""
+        return self.client.models.generate_content(
+            model=model,
+            contents=contents,
+            config=config,
+        )
 
     def _call_with_retry(self, contents, config, context: str = "generate"):
-        """Call Gemini API with exponential backoff on 429/503."""
+        """Call Gemini API with exponential backoff on 429/503, then fallback model."""
+        last_error = None
+
+        # Try primary model with retries
         for attempt in range(_MAX_RETRIES + 1):
             try:
-                return self.client.models.generate_content(
-                    model=self.model_name,
-                    contents=contents,
-                    config=config,
-                )
+                return self._call_api(self.model_name, contents, config)
             except Exception as e:
+                last_error = e
                 err_str = str(e)
-                is_retryable = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "503" in err_str or "UNAVAILABLE" in err_str
-                if not is_retryable or attempt == _MAX_RETRIES:
-                    if is_retryable:
-                        raise QuotaExhaustedError(
-                            f"Quota do Gemini esgotada após {attempt + 1} tentativas: {err_str}"
-                        ) from e
+                if not _is_retryable_error(err_str):
                     raise
-                delay = _BASE_DELAY * (2 ** attempt)
-                logger.warning(
-                    "[%s] Gemini retornou erro retryable (tentativa %s/%s), aguardando %ss: %s",
-                    context, attempt + 1, _MAX_RETRIES, delay, err_str[:120],
-                )
-                time.sleep(delay)
+                if attempt < _MAX_RETRIES:
+                    delay = _BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        "[%s] %s retornou erro retryable (tentativa %s/%s), aguardando %ss: %s",
+                        context, self.model_name, attempt + 1, _MAX_RETRIES, delay, err_str[:120],
+                    )
+                    time.sleep(delay)
+
+        # Primary exhausted — try fallback model if configured
+        if self.fallback_model:
+            logger.warning(
+                "[%s] Modelo primario %s esgotou retries. Tentando fallback: %s",
+                context, self.model_name, self.fallback_model,
+            )
+            for attempt in range(_MAX_RETRIES + 1):
+                try:
+                    return self._call_api(self.fallback_model, contents, config)
+                except Exception as e:
+                    last_error = e
+                    err_str = str(e)
+                    if not _is_retryable_error(err_str):
+                        raise
+                    if attempt < _MAX_RETRIES:
+                        delay = _BASE_DELAY * (2 ** attempt)
+                        logger.warning(
+                            "[%s] %s retornou erro retryable (tentativa %s/%s), aguardando %ss: %s",
+                            context, self.fallback_model, attempt + 1, _MAX_RETRIES, delay, err_str[:120],
+                        )
+                        time.sleep(delay)
+
+        raise QuotaExhaustedError(
+            f"Quota esgotada em todos os modelos após retries: {last_error}"
+        ) from last_error
 
     async def generate(self, prompt: str, aspect_ratio: str = "1:1") -> bytes:
         loop = asyncio.get_event_loop()
