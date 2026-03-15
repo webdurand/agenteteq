@@ -42,6 +42,10 @@ class SocialProvider(ABC):
         """Fetch recent posts from a profile."""
         ...
 
+    async def get_post_by_url(self, post_url: str) -> SocialPost:
+        """Fetch a single post by its direct URL."""
+        raise NotImplementedError("get_post_by_url not supported by this provider")
+
     @abstractmethod
     def supported_platforms(self) -> list[str]:
         """Return list of platforms this provider supports."""

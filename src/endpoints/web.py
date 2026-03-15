@@ -13,7 +13,7 @@ from src.agent.factory import create_agent_with_tools
 from src.agent.response_utils import extract_final_response, parse_interactive_elements
 from src.integrations.tts import get_tts
 from src.config.feature_gates import is_feature_enabled
-from src.memory.identity import get_user, update_user_name, update_last_seen, is_new_session, is_plan_active
+from src.memory.identity import get_user, update_user_name, update_last_seen, is_new_session, is_plan_active, get_or_rotate_session
 from src.memory.extractor import extract_and_save_facts
 from src.tools.memory_manager import add_memory
 from src.auth.jwt import decode_token
@@ -170,8 +170,11 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
 
     notifier = WebSocketNotifier(websocket, loop)
     agent_channel = "web_voice" if mode != "text" else "web_text"
+    current_user = get_user(phone_number) or {}
+    web_new_session = is_new_session(current_user, threshold_hours=4)
+    web_session_id = get_or_rotate_session(phone_number, force_new=web_new_session)
     agent = create_agent_with_tools(
-        phone_number,
+        web_session_id,
         notifier,
         include_explore=True,
         user_id=phone_number,
@@ -259,6 +262,8 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
             if not final_text:
                 final_text = "Desculpa, tive um problema ao processar sua mensagem. Pode repetir?"
                 logger.info("[WEB WS] Retry tambem vazio, usando mensagem padrao")
+                log_event(user_id=phone_number, channel="web", event_type="empty_response", status="error",
+                          extra_data={"original_message": prompt[:200]})
 
     await asyncio.sleep(0)
 
@@ -522,12 +527,13 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                 # Refresh user p/ pegar is_new_session fresquinho
                 current_user = get_user(phone_number)
                 new_session = is_new_session(current_user, threshold_hours=4)
+                voice_session_id = get_or_rotate_session(phone_number, force_new=new_session)
 
                 await websocket.send_json({"type": "status", "text": "Ouvindo..."})
 
                 notifier = WebSocketNotifier(websocket, loop)
                 agent = create_agent_with_tools(
-                    phone_number,
+                    voice_session_id,
                     notifier,
                     user_id=phone_number,
                     channel="web_voice",

@@ -18,7 +18,7 @@ from src.integrations.status_notifier import StatusNotifier
 from src.agent.factory import create_agent_with_tools
 from src.agent.response_utils import extract_final_response, split_whatsapp_messages, parse_interactive_elements
 from src.agent.prompts import GREETING_INJECTION
-from src.memory.identity import get_user, create_user, update_user_name, update_last_seen, is_new_session, is_plan_active
+from src.memory.identity import get_user, create_user, update_user_name, update_last_seen, is_new_session, is_plan_active, get_or_rotate_session
 from src.memory.knowledge import get_vector_db
 from src.memory.extractor import extract_and_save_facts
 from src.tools.memory_manager import add_memory
@@ -357,50 +357,8 @@ def parse_webhook_payload(data: dict) -> list:
 
 async def _send_whatsapp_response(to_number: str, text: str, reply_to_message_id: str | None = None):
     """Send agent response to WhatsApp, using interactive elements (buttons/lists) if present."""
-    parsed = parse_interactive_elements(text)
-
-    if parsed["buttons"]:
-        body = parsed["body"]
-        if len(body) > 1024:
-            parts = split_whatsapp_messages(body)
-            for i, part in enumerate(parts[:-1]):
-                rid = reply_to_message_id if i == 0 else None
-                await whatsapp_client.send_text_message(to_number, part, reply_to_message_id=rid)
-            try:
-                await whatsapp_client.send_button_message(to_number, parts[-1], parsed["buttons"])
-            except Exception as e:
-                logger.warning("Fallback de botoes para texto: %s", e)
-                await whatsapp_client.send_text_message(to_number, parts[-1])
-        else:
-            try:
-                await whatsapp_client.send_button_message(
-                    to_number, body or "Escolha uma opcao:", parsed["buttons"],
-                )
-            except Exception as e:
-                logger.warning("Fallback de botoes para texto: %s", e)
-                fallback = body + "\n\n" + "\n".join(f"• {b['title']}" for b in parsed["buttons"])
-                await whatsapp_client.send_text_message(to_number, fallback, reply_to_message_id=reply_to_message_id)
-    elif parsed["list"]:
-        body = parsed["body"]
-        lst = parsed["list"]
-        try:
-            await whatsapp_client.send_list_message(
-                to_number, body or "Escolha uma opcao:", lst["button_text"], lst["sections"],
-            )
-        except Exception as e:
-            logger.warning("Fallback de lista para texto: %s", e)
-            text_rows = []
-            for sec in lst["sections"]:
-                for row in sec.get("rows", []):
-                    desc = f" — {row['description']}" if row.get("description") else ""
-                    text_rows.append(f"• {row['title']}{desc}")
-            fallback = body + "\n\n" + "\n".join(text_rows)
-            await whatsapp_client.send_text_message(to_number, fallback, reply_to_message_id=reply_to_message_id)
-    else:
-        parts = split_whatsapp_messages(text)
-        for i, part in enumerate(parts):
-            rid = reply_to_message_id if i == 0 else None
-            await whatsapp_client.send_text_message(to_number, part, reply_to_message_id=rid)
+    from src.integrations.whatsapp_sender import send_whatsapp_with_interactive
+    await send_whatsapp_with_interactive(to_number, text, reply_to_message_id)
 
 
 async def orchestrate_message(event: dict):
@@ -436,16 +394,19 @@ async def orchestrate_message(event: dict):
             )
             return
 
-        if is_new_session(user, threshold_hours=4):
-            logger.info("Nova sessao detectada para %s. Aplicando greeting injection.", from_number)
+        new_session = is_new_session(user, threshold_hours=4)
+        session_id = get_or_rotate_session(from_number, force_new=new_session)
+
+        if new_session:
+            logger.info("Nova sessao detectada para %s (session=%s). Aplicando greeting injection.", from_number, session_id[-8:])
             notifier = StatusNotifier(to_number=from_number, reply_to_message_id=message_id)
-            agent = create_agent_with_tools(from_number, notifier, user_id=from_number)
+            agent = create_agent_with_tools(session_id, notifier, user_id=from_number)
             await process_aggregated_message(from_number, message_id, event, agent, injection=GREETING_INJECTION)
             update_last_seen(from_number)
             return
 
         notifier = StatusNotifier(to_number=from_number, reply_to_message_id=message_id)
-        agent = create_agent_with_tools(from_number, notifier, include_explore=True, user_id=from_number)
+        agent = create_agent_with_tools(session_id, notifier, include_explore=True, user_id=from_number)
 
         await process_aggregated_message(from_number, message_id, event, agent)
         update_last_seen(from_number)
@@ -581,6 +542,17 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
     log_agent_tools(from_number, "whatsapp", response)
     asyncio.create_task(asyncio.to_thread(log_run_metrics, from_number, "whatsapp", response))
     final_text = extract_final_response(response)
+
+    if not final_text.strip():
+        logger.warning("Resposta vazia para %s. Retentando...", from_number)
+        retry_response = await asyncio.to_thread(agent.run, "Continue sua resposta anterior.", **kwargs)
+        final_text = extract_final_response(retry_response)
+    if not final_text.strip():
+        logger.error("Resposta vazia apos retry para %s", from_number)
+        log_event(user_id=from_number, channel="whatsapp", event_type="empty_response", status="error",
+                  extra_data={"original_message": text_body[:200]})
+        final_text = "Desculpa, tive um problema ao processar sua mensagem. Pode repetir?"
+
     asyncio.create_task(asyncio.to_thread(extract_and_save_facts, from_number, text_body, final_text))
 
     if not _is_test_number(from_number):

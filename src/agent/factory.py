@@ -18,6 +18,7 @@ def create_agent_with_tools(
     channel: str = "whatsapp",
     extra_instructions: list[str] | None = None,
     include_scheduler: bool = True,
+    include_knowledge: bool = True,
 ):
     phone = user_id or session_id
     search_tools = [
@@ -94,7 +95,7 @@ def create_agent_with_tools(
             "Use save_carousel_preset para salvar (nome, cores, style_anchor, formato). "
             "Use list_carousel_presets para listar os presets salvos. "
             "Quando o usuario pedir carrossel e mencionar um preset (ex: 'usa meu estilo escuro', "
-            "'usa o preset Clean'), passe preset_name no generate_carousel_tool. "
+            "'usa o preset Clean'), passe preset_name no generate_image. "
             "O preset sobrescreve o branding padrao quando especificado. "
             "NAO salve presets automaticamente — SEMPRE pergunte primeiro."
         )
@@ -120,6 +121,8 @@ def create_agent_with_tools(
             "Use get_trending_content para ver os posts com mais engajamento de uma conta JA monitorada. "
             "Use analyze_posts para OLHAR posts de QUALQUER conta publica (incluindo as IMAGENS) e responder perguntas — "
             "NAO precisa estar monitorada. Ex: 'sobre o que fala o ultimo post do @fulano?', 'descreve o post mais recente'. "
+            "Use view_post_by_url quando o usuario enviar um LINK de post do Instagram (instagram.com/p/... ou /reel/...). "
+            "A tool acessa o post, baixa as imagens e analisa o conteudo visual e textual em detalhe. "
             "Use create_content_script para gerar roteiros de carrossel/video inspirados em uma referencia.\n\n"
             "ALERTAS DE CONTEUDO: Apos salvar uma conta com track_account, OFERECA ativar alertas: "
             "'Quer que eu te avise no WhatsApp quando essa conta postar algo que bombar?' "
@@ -190,7 +193,7 @@ def create_agent_with_tools(
         "foque no que e mais relevante para ACAO).\n\n"
 
         "ACOES — ofereça multiplos caminhos (use botoes no WhatsApp):\n"
-        "- Gerar carrossel inspirado → use generate_carousel_tool (aplique branding do usuario)\n"
+        "- Gerar carrossel inspirado → use generate_image (aplique branding do usuario)\n"
         "- Gerar roteiro de video/reels → responda com roteiro estruturado\n"
         "- Monitorar a conta → se identificar o @ da conta, ofereça preview_account/track_account\n"
         "- Ver mais posts dessa conta → use analyze_posts\n"
@@ -312,7 +315,7 @@ def create_agent_with_tools(
         "REPURPOSING DE CONTEUDO: Quando o usuario pedir para criar conteudo em multiplos formatos "
         "(ex: 'cria em 3 formatos', 'adapta pra instagram e youtube', 'quero carrossel e roteiro', "
         "'faz um post e um video sobre X'), execute MULTIPLAS tools sequencialmente:\n"
-        "1. Gere o carrossel com generate_carousel_tool (se pedido)\n"
+        "1. Gere o carrossel com generate_image (se pedido)\n"
         "2. Gere o roteiro de video com create_content_script (se pedido)\n"
         "3. Gere o texto de blog (se pedido) diretamente na resposta\n"
         "4. Consolide tudo numa resposta unica mostrando cada formato\n"
@@ -340,4 +343,6 @@ def create_agent_with_tools(
         channel=channel,
         extra_instructions=all_instructions if all_instructions else None,
         include_scheduler=include_scheduler,
+        include_knowledge=include_knowledge,
+        user_id=user_id or session_id,
     )

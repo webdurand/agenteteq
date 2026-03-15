@@ -240,6 +240,32 @@ def update_last_seen(phone_number: str):
         logger.error("Erro ao atualizar last_seen_at de %s: %s", phone_number, e)
 
 
+def get_or_rotate_session(phone_number: str, force_new: bool = False) -> str:
+    """
+    Returns the current session_id for the user, or creates a new one if
+    ``force_new`` is True (e.g. gap > 4 h detected by ``is_new_session``).
+
+    The rotated session_id is stored in ``users.current_session_id`` so it
+    survives restarts.  Format: ``<phone>_<random8>``.
+    """
+    try:
+        with get_db() as session:
+            user = session.query(User).filter_by(phone_number=phone_number).first()
+            if not user:
+                return phone_number  # fallback
+
+            if user.current_session_id and not force_new:
+                return user.current_session_id
+
+            import uuid
+            new_session = f"{phone_number}_{uuid.uuid4().hex[:8]}"
+            user.current_session_id = new_session
+            return new_session
+    except Exception as e:
+        logger.error("Erro ao rotacionar sessao de %s: %s", phone_number, e)
+        return phone_number  # fallback
+
+
 def is_new_session(user: dict, threshold_hours: int = 4) -> bool:
     """
     Retorna True se o usuario ficou mais de threshold_hours sem enviar mensagens

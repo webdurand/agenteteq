@@ -895,6 +895,78 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
             )
         return "Alertas de tendencias desativados."
 
+    def view_post_by_url(url: str, question: str = "") -> str:
+        """
+        Acessa um post especifico do Instagram pelo link e descreve/analisa o conteudo
+        visual e textual. Use quando o usuario enviar um link de post do Instagram
+        (instagram.com/p/... ou instagram.com/reel/...).
+
+        Args:
+            url: URL do post do Instagram (ex: https://www.instagram.com/p/ABC123/).
+            question: Pergunta especifica sobre o post (opcional).
+
+        Returns:
+            Analise detalhada do conteudo do post (visual + texto).
+        """
+        import re as _re
+        from src.social import get_social_provider
+
+        # Valida URL
+        if not _re.search(r"instagram\.com/(p|reel|reels)/", url):
+            return "URL invalida. Envie um link de post do Instagram (instagram.com/p/... ou /reel/...)."
+
+        _notify(f"Acessando post...")
+
+        try:
+            provider = get_social_provider("instagram")
+            post = _run_async(provider.get_post_by_url(url))
+        except Exception as e:
+            logger.error("Erro ao buscar post por URL %s: %s", url, e)
+            return f"Nao consegui acessar esse post: {str(e)}"
+
+        # Formata dados do post
+        post_dict = {
+            "platform_post_id": post.platform_post_id,
+            "content_type": post.content_type,
+            "caption": post.caption,
+            "hashtags": post.hashtags,
+            "media_urls": post.media_urls,
+            "thumbnail_url": post.thumbnail_url,
+            "likes_count": post.likes_count,
+            "comments_count": post.comments_count,
+            "views_count": post.views_count,
+            "posted_at": post.posted_at,
+        }
+
+        posts_text = _format_posts_for_analysis([post_dict])
+        post_images = _download_post_images([post_dict], max_images=1)
+
+        user_question = question.strip() if question else "Descreva o conteudo deste post de forma detalhada."
+
+        prompt = (
+            f"Voce esta olhando para um post do Instagram.\n\n"
+            f"Dados do post:\n{posts_text}\n\n"
+        )
+        if post_images:
+            prompt += (
+                "A imagem anexada corresponde ao post acima.\n"
+                "Analise a imagem em detalhe: o que aparece, cores, texto na imagem, "
+                "composicao, estilo visual, e qualquer elemento relevante.\n\n"
+            )
+        prompt += (
+            f"Pergunta do usuario: {user_question}\n\n"
+            "Responda em portugues de forma clara e detalhada."
+        )
+
+        analysis = _run_analysis(prompt, images=post_images)
+        shortcode = post.metadata.get("shortcode", "")
+        post_url = post.metadata.get("url", url)
+        return (
+            f"**Analise do post** ({post.content_type})\n"
+            f"Link: {post_url}\n\n"
+            f"{analysis}"
+        )
+
     return (
         preview_account,
         track_account,
@@ -907,6 +979,7 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
         toggle_alerts,
         toggle_trend_alerts,
         generate_competitive_report,
+        view_post_by_url,
     )
 
 

@@ -51,6 +51,7 @@ class User(Base):
     terms_accepted_at = Column(DateTime(timezone=True))
     trend_alerts_enabled = Column(String, default="false")
     last_trend_alert_at = Column(DateTime(timezone=True))
+    current_session_id = Column(String, nullable=True)
 
     chat_messages = relationship("ChatMessage", back_populates="user")
     tasks = relationship("Task", back_populates="user")
@@ -75,6 +76,7 @@ class User(Base):
             "role": self.role or "user",
             "stripe_customer_id": self.stripe_customer_id,
             "terms_accepted_version": self.terms_accepted_version,
+            "current_session_id": self.current_session_id,
         }
 
 

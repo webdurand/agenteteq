@@ -48,16 +48,42 @@ async def process_task_queue():
         return
 
     try:
-        if task["task_type"] == "carousel":
-            from src.tools.carousel_generator import _process_carousel_background
+        if task["task_type"] == "image":
+            from src.tools.image_generator import _process_image_background
             payload = task["payload"]
-            
+
             reference_bytes = None
             ref_url = payload.get("reference_image_url")
             if ref_url:
                 reference_bytes = await _download_image(ref_url)
-            
-            await _process_carousel_background(
+
+            await _process_image_background(
+                carousel_id=payload["carousel_id"],
+                user_id=task["user_id"],
+                slides=payload["slides"],
+                channel=task["channel"],
+                aspect_ratio=payload.get("aspect_ratio", "4:3"),
+                reference_image=reference_bytes,
+                task_id=task["id"],
+                sequential_slides=payload.get("sequential_slides", True),
+                is_edit=payload.get("is_edit", False),
+            )
+            if not is_task_cancelled(task["id"]):
+                complete_task(task["id"], {"status": "success", "type": "image"})
+            else:
+                logger.info("Task %s cancelada durante processamento, nao marcando como done", task["id"])
+
+        elif task["task_type"] == "carousel":
+            # Legacy fallback for in-flight tasks
+            from src.tools.image_generator import _process_image_background
+            payload = task["payload"]
+
+            reference_bytes = None
+            ref_url = payload.get("reference_image_url")
+            if ref_url:
+                reference_bytes = await _download_image(ref_url)
+
+            await _process_image_background(
                 carousel_id=payload["carousel_id"],
                 user_id=task["user_id"],
                 slides=payload["slides"],
@@ -71,14 +97,15 @@ async def process_task_queue():
                 complete_task(task["id"], {"status": "success", "type": "carousel"})
             else:
                 logger.info("Task %s cancelada durante processamento, nao marcando como done", task["id"])
-            
+
         elif task["task_type"] == "image_edit":
+            # Legacy fallback for in-flight tasks
             from src.tools.image_editor import _process_edit_background
             payload = task["payload"]
-            
+
             ref_url = payload["reference_url"]
             reference_bytes = await _download_image(ref_url)
-            
+
             await _process_edit_background(
                 user_id=task["user_id"],
                 edit_prompt=payload["edit_instructions"],

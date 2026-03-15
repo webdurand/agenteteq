@@ -44,7 +44,16 @@ def dispatch_proactive_message(reminder_id: int):
             return
             
         if reminder["status"] != "active":
-            logger.info("Reminder %s nao esta ativo (status: %s). Abortando.", reminder_id, reminder['status'])
+            logger.info("Reminder %s nao esta ativo (status: %s). Removendo job orfao.", reminder_id, reminder['status'])
+            try:
+                from src.scheduler.engine import get_scheduler
+                scheduler = get_scheduler()
+                job_id = reminder.get("apscheduler_job_id")
+                if job_id and scheduler.get_job(job_id):
+                    scheduler.remove_job(job_id)
+                    logger.info("Job orfao %s removido do APScheduler.", job_id)
+            except Exception as e:
+                logger.warning("Nao foi possivel remover job orfao: %s", e)
             return
 
         user_phone = reminder["user_id"]
@@ -68,7 +77,14 @@ def dispatch_proactive_message(reminder_id: int):
                 from src.agent.factory import create_agent_with_tools
                 from src.agent.response_utils import extract_final_response
 
+                from datetime import datetime
+                from zoneinfo import ZoneInfo
+                now_br = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
+
                 reminder_instructions = [
+                    f"DATA E HORA ATUAL: {now_br} (Horario de Brasilia).",
+                    "EXECUCAO INDEPENDENTE: Esta e uma execucao isolada. Voce NAO tem contexto de execucoes anteriores. "
+                    "OBRIGATORIO: Use as ferramentas (tools) para buscar dados em tempo real. NUNCA reutilize dados de contexto.",
                     "EXECUCAO DE LEMBRETE AGENDADO: Voce esta executando um lembrete que o usuario agendou anteriormente.",
                     "NAO peca mais informacoes, NAO tente agendar nada novo, NAO faca perguntas.",
                     "Execute as instrucoes diretamente e envie o resultado pronto.",
@@ -93,6 +109,7 @@ def dispatch_proactive_message(reminder_id: int):
                     channel=agent_channel,
                     extra_instructions=reminder_instructions,
                     include_scheduler=False,
+                    include_knowledge=False,
                 )
                 response = agent.run(task_instructions, knowledge_filters={"user_id": user_phone})
 
@@ -110,8 +127,8 @@ def dispatch_proactive_message(reminder_id: int):
 
         # 2. Enviar pelo canal especifico
         if channel == "whatsapp_text":
-            from src.integrations.whatsapp import whatsapp_client
-            asyncio.run(whatsapp_client.send_text_message(user_phone, response_content))
+            from src.integrations.whatsapp_sender import send_whatsapp_with_interactive
+            asyncio.run(send_whatsapp_with_interactive(user_phone, response_content))
             logger.info("Mensagem enviada com sucesso para %s via whatsapp_text.", user_phone)
             
         elif channel == "whatsapp_call":
@@ -125,9 +142,9 @@ def dispatch_proactive_message(reminder_id: int):
             
             if not ws_manager.is_online(user_phone):
                 logger.info("Usuario %s nao esta online na web. Fazendo fallback para whatsapp_text.", user_phone)
-                from src.integrations.whatsapp import whatsapp_client
+                from src.integrations.whatsapp_sender import send_whatsapp_with_interactive
                 fallback_msg = f"(Lembrete do Agente de Voz)\n\n{response_content}"
-                asyncio.run(whatsapp_client.send_text_message(user_phone, fallback_msg))
+                asyncio.run(send_whatsapp_with_interactive(user_phone, fallback_msg))
             else:
                 logger.info("Usuario %s online na web. Gerando audio para falar...", user_phone)
                 tts = get_tts()
@@ -151,7 +168,6 @@ def dispatch_proactive_message(reminder_id: int):
 
         elif channel == "web_text":
             from src.endpoints.web import ws_manager
-            from src.integrations.whatsapp import whatsapp_client
 
             msg_payload = {
                 "type": "response",
@@ -165,15 +181,16 @@ def dispatch_proactive_message(reminder_id: int):
                 logger.info("Lembrete em texto enviado com sucesso para %s via web_text.", user_phone)
             else:
                 logger.info("Usuario %s nao esta online na web. Fallback para WhatsApp.", user_phone)
+                from src.integrations.whatsapp_sender import send_whatsapp_with_interactive
                 fallback_msg = f"(Lembrete da web)\n\n{response_content}"
-                asyncio.run(whatsapp_client.send_text_message(user_phone, fallback_msg))
+                asyncio.run(send_whatsapp_with_interactive(user_phone, fallback_msg))
 
         elif channel == "web_whatsapp":
             from src.endpoints.web import ws_manager
-            from src.integrations.whatsapp import whatsapp_client
+            from src.integrations.whatsapp_sender import send_whatsapp_with_interactive
 
             # 1) Sempre envia no WhatsApp
-            asyncio.run(whatsapp_client.send_text_message(user_phone, response_content))
+            asyncio.run(send_whatsapp_with_interactive(user_phone, response_content))
             logger.info("Lembrete enviado para %s via whatsapp_text (canal combinado).", user_phone)
 
             # 2) Tenta enviar na web (se online)

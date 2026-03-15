@@ -165,43 +165,29 @@ VOICE_TOOLS_DECLARATIONS = [
         }
     },
     {
-        "name": "generate_carousel",
-        "description": "Gera imagens (carrossel ou imagem unica) em background. Passe uma descricao simples do que gerar e a quantidade de slides.",
+        "name": "generate_image",
+        "description": "Gera ou edita imagens em background. Para imagem unica, passe 1 slide. Para carrossel, passe N slides. Para editar foto, preencha reference_source.",
         "parameters": {
             "type": "object",
             "properties": {
                 "title": {"type": "string", "description": "Titulo curto da geracao"},
-                "description": {"type": "string", "description": "Descricao do que gerar, ex: 'paisagens brasileiras variadas', '10 gatos em estilo anime'"},
-                "num_slides": {"type": "integer", "description": "Quantidade de imagens/slides a gerar (padrao 5)"},
+                "description": {"type": "string", "description": "Descricao do que gerar, ex: 'paisagens brasileiras variadas', '10 gatos em estilo anime'. Para edicao, descreva a modificacao."},
+                "num_slides": {"type": "integer", "description": "Quantidade de imagens/slides a gerar (padrao 1 para edicao, 5 para carrossel)"},
                 "style": {"type": "string", "description": "Estilo visual, ex: Fotorrealista, Cinematico, Clean/Mockup, Anime, Aquarela"},
-                "format": {"type": "string", "description": "Formato da imagem, ex: 1350x1080, 1080x1080, 16:9"},
-                "use_reference_image": {"type": "boolean", "description": "Usar imagem de referencia da conversa"},
-                "sequential_slides": {"type": "boolean", "description": "Se True (padrao), gera slide 1 como referencia visual para os demais, garantindo coerencia visual. Use False para colecoes independentes."},
-                "delivery_channel": {"type": "string", "description": "OBRIGATORIO quando o usuario mencionar WhatsApp/zap/wpp como destino. Valores: 'whatsapp', 'web', 'ambos'. Se nao informado, entrega no canal atual. Exemplos: 'manda no zap' -> delivery_channel='whatsapp'. 'envia na web' -> delivery_channel='web'."}
+                "format": {"type": "string", "description": "Formato da imagem, ex: 1350x1080, 1080x1080, 16:9, 1:1"},
+                "reference_source": {"type": "string", "description": "Para EDICAO de foto: 'original' (foto do usuario), 'last_generated' (ultima gerada), 'auto'. Vazio para gerar do zero."},
+                "sequential_slides": {"type": "boolean", "description": "Se True (padrao), gera slide 1 como referencia visual para os demais. Use False para colecoes independentes."},
+                "delivery_channel": {"type": "string", "description": "OBRIGATORIO quando o usuario mencionar WhatsApp/zap/wpp como destino. Valores: 'whatsapp', 'web', 'ambos'. Se nao informado, entrega no canal atual."}
             },
             "required": ["title", "description"]
         }
     },
     {
-        "name": "list_carousels",
-        "description": "Lista os carrosseis ja gerados pelo usuario.",
+        "name": "list_gallery",
+        "description": "Lista as imagens e carrosseis ja gerados pelo usuario.",
         "parameters": {
             "type": "object",
             "properties": {}
-        }
-    },
-    {
-        "name": "edit_image",
-        "description": "Edita uma imagem existente em background.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "edit_instructions": {"type": "string", "description": "Instrucao detalhada de edicao"},
-                "source": {"type": "string", "description": "original, last_generated ou auto"},
-                "format": {"type": "string", "description": "Formato de saida, ex: 1:1, 4:3, 16:9"},
-                "delivery_channel": {"type": "string", "description": "OBRIGATORIO quando o usuario mencionar WhatsApp/zap/wpp como destino. Valores: 'whatsapp', 'web', 'ambos'. Se nao informado, entrega no canal atual. Exemplos: 'manda no zap' -> delivery_channel='whatsapp'. 'envia na web' -> delivery_channel='web'."}
-            },
-            "required": ["edit_instructions"]
         }
     },
     {
@@ -589,8 +575,8 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
                 publish_post = create_blog_tools(user_id, channel="web_voice")[0]
                 return {"result": publish_post(**args)}
 
-            elif function_name == "generate_carousel":
-                from src.tools.carousel_generator import create_carousel_tools, expand_slides_from_description
+            elif function_name == "generate_image":
+                from src.tools.image_generator import create_image_tools, expand_slides_from_description
                 from src.queue.task_queue import pop_limit_flag
                 from src.integrations.channel_router import resolve_channel
 
@@ -604,6 +590,46 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
 
                 # Voice Live envia formato simplificado (description + num_slides)
                 # em vez do array completo de slides.
+                reference_source = args.pop("reference_source", "") or ""
+                if "description" in args and "slides" not in args:
+                    description = args.pop("description")
+                    num_slides = int(args.pop("num_slides", 1 if reference_source else 5) or 5)
+                    style = args.pop("style", "Fotorrealista") or "Fotorrealista"
+                    sequential = args.get("sequential_slides", True)
+                    args["slides"] = expand_slides_from_description(description, num_slides, style, sequential=sequential)
+
+                if reference_source:
+                    args["reference_source"] = reference_source
+
+                generate_image, _ = create_image_tools(user_id, channel=effective_channel)
+                tool_result = generate_image(**args)
+                limit_info = pop_limit_flag(user_id)
+                if limit_info:
+                    return {
+                        "result": limit_info["message"],
+                        "limit_reached": True,
+                        "plan_type": limit_info.get("plan_type", "free"),
+                    }
+                return {"result": tool_result}
+
+            elif function_name == "list_gallery":
+                from src.tools.image_generator import create_image_tools
+                _, list_gallery = create_image_tools(user_id, channel="web_voice")
+                return {"result": list_gallery()}
+
+            # Legacy voice tool names (backwards compat)
+            elif function_name == "generate_carousel":
+                from src.tools.image_generator import create_image_tools, expand_slides_from_description
+                from src.queue.task_queue import pop_limit_flag
+                from src.integrations.channel_router import resolve_channel
+
+                delivery = args.pop("delivery_channel", None)
+                effective_channel = resolve_channel(delivery) if delivery else "web_voice"
+                if not effective_channel:
+                    effective_channel = "web_voice"
+                if effective_channel == "whatsapp_text":
+                    effective_channel = "web_whatsapp"
+
                 if "description" in args and "slides" not in args:
                     description = args.pop("description")
                     num_slides = int(args.pop("num_slides", 5) or 5)
@@ -611,8 +637,12 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
                     sequential = args.get("sequential_slides", True)
                     args["slides"] = expand_slides_from_description(description, num_slides, style, sequential=sequential)
 
-                generate_carousel, _ = create_carousel_tools(user_id, channel=effective_channel)
-                tool_result = generate_carousel(**args)
+                # Map old use_reference_image to new reference_source
+                if args.pop("use_reference_image", False):
+                    args["reference_source"] = "auto"
+
+                generate_image, _ = create_image_tools(user_id, channel=effective_channel)
+                tool_result = generate_image(**args)
                 limit_info = pop_limit_flag(user_id)
                 if limit_info:
                     return {
@@ -623,12 +653,12 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
                 return {"result": tool_result}
 
             elif function_name == "list_carousels":
-                from src.tools.carousel_generator import create_carousel_tools
-                _, list_carousels = create_carousel_tools(user_id, channel="web_voice")
-                return {"result": list_carousels()}
+                from src.tools.image_generator import create_image_tools
+                _, list_gallery = create_image_tools(user_id, channel="web_voice")
+                return {"result": list_gallery()}
 
             elif function_name == "edit_image":
-                from src.tools.image_editor import create_image_editor_tools
+                from src.tools.image_generator import create_image_tools, expand_slides_from_description
                 from src.queue.task_queue import pop_limit_flag
                 from src.integrations.channel_router import resolve_channel
 
@@ -636,12 +666,19 @@ async def execute_voice_tool(user_id: str, function_name: str, args: dict) -> di
                 effective_channel = resolve_channel(delivery) if delivery else "web_voice"
                 if not effective_channel:
                     effective_channel = "web_voice"
-                # Auto-upgrade: voz pedindo WhatsApp -> ambos (web + whatsapp) para manter feedback visual
                 if effective_channel == "whatsapp_text":
                     effective_channel = "web_whatsapp"
 
-                edit_image = create_image_editor_tools(user_id, channel=effective_channel)
-                tool_result = edit_image(**args)
+                # Map old edit_image args to generate_image args
+                edit_instructions = args.pop("edit_instructions", "")
+                source = args.pop("source", "auto")
+                args["slides"] = [{"prompt": edit_instructions}]
+                args["reference_source"] = source
+                if "title" not in args:
+                    args["title"] = f"Edição: {edit_instructions[:60]}"
+
+                generate_image, _ = create_image_tools(user_id, channel=effective_channel)
+                tool_result = generate_image(**args)
                 limit_info = pop_limit_flag(user_id)
                 if limit_info:
                     return {

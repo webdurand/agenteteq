@@ -83,66 +83,91 @@ class ApifyProvider(SocialProvider):
 
         posts: list[SocialPost] = []
         for item in (data or []):
-            post_id = item.get("id", "") or item.get("shortCode", "") or str(item.get("pk", ""))
-            if not post_id:
-                continue
-
-            # Determine content type
-            item_type = (item.get("type", "") or "").lower()
-            if item_type in ("video", "reel"):
-                content_type = "video"
-            elif item_type == "carousel" or item.get("childPosts"):
-                content_type = "carousel"
-            else:
-                content_type = "image"
-
-            # Extract caption
-            caption = item.get("caption", "") or ""
-            if isinstance(caption, dict):
-                caption = caption.get("text", "")
-
-            # Extract hashtags from caption
-            hashtags = re.findall(r"#(\w+)", caption)
-
-            # Extract media URLs
-            media_urls = []
-            display_url = item.get("displayUrl", "") or item.get("imageUrl", "")
-            if display_url:
-                media_urls.append(display_url)
-            for child in item.get("childPosts", []) or []:
-                child_url = child.get("displayUrl", "") or child.get("imageUrl", "")
-                if child_url:
-                    media_urls.append(child_url)
-
-            # Parse timestamp
-            timestamp = item.get("timestamp", "") or item.get("takenAtTimestamp", "")
-            if isinstance(timestamp, (int, float)):
-                posted_at = datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
-            elif isinstance(timestamp, str):
-                posted_at = timestamp
-            else:
-                posted_at = ""
-
-            posts.append(SocialPost(
-                platform_post_id=str(post_id),
-                content_type=content_type,
-                caption=caption,
-                hashtags=hashtags,
-                media_urls=media_urls,
-                thumbnail_url=display_url,
-                likes_count=item.get("likesCount", 0) or 0,
-                comments_count=item.get("commentsCount", 0) or 0,
-                shares_count=0,
-                views_count=item.get("videoViewCount", 0) or item.get("viewCount", 0) or 0,
-                posted_at=posted_at,
-                metadata={
-                    "shortcode": item.get("shortCode", ""),
-                    "url": item.get("url", ""),
-                    "location": item.get("locationName", ""),
-                },
-            ))
+            post = self._parse_post(item)
+            if post:
+                posts.append(post)
 
         return posts
+
+    async def get_post_by_url(self, post_url: str) -> SocialPost:
+        """Fetch a single post by its direct URL via Apify instagram-scraper."""
+        data = await self._run_actor(
+            "apify/instagram-scraper",
+            {
+                "directUrls": [post_url],
+                "resultsType": "posts",
+                "resultsLimit": 1,
+            },
+        )
+        if not data:
+            raise ValueError(f"Post nao encontrado: {post_url}")
+        post = self._parse_post(data[0])
+        if not post:
+            raise ValueError(f"Nao foi possivel parsear o post: {post_url}")
+        return post
+
+    # ──────────────── parsing ────────────────
+
+    def _parse_post(self, item: dict) -> SocialPost | None:
+        """Parse a single Apify post item into a SocialPost dataclass."""
+        post_id = item.get("id", "") or item.get("shortCode", "") or str(item.get("pk", ""))
+        if not post_id:
+            return None
+
+        # Determine content type
+        item_type = (item.get("type", "") or "").lower()
+        if item_type in ("video", "reel"):
+            content_type = "video"
+        elif item_type == "carousel" or item.get("childPosts"):
+            content_type = "carousel"
+        else:
+            content_type = "image"
+
+        # Extract caption
+        caption = item.get("caption", "") or ""
+        if isinstance(caption, dict):
+            caption = caption.get("text", "")
+
+        # Extract hashtags from caption
+        hashtags = re.findall(r"#(\w+)", caption)
+
+        # Extract media URLs
+        media_urls = []
+        display_url = item.get("displayUrl", "") or item.get("imageUrl", "")
+        if display_url:
+            media_urls.append(display_url)
+        for child in item.get("childPosts", []) or []:
+            child_url = child.get("displayUrl", "") or child.get("imageUrl", "")
+            if child_url:
+                media_urls.append(child_url)
+
+        # Parse timestamp
+        timestamp = item.get("timestamp", "") or item.get("takenAtTimestamp", "")
+        if isinstance(timestamp, (int, float)):
+            posted_at = datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+        elif isinstance(timestamp, str):
+            posted_at = timestamp
+        else:
+            posted_at = ""
+
+        return SocialPost(
+            platform_post_id=str(post_id),
+            content_type=content_type,
+            caption=caption,
+            hashtags=hashtags,
+            media_urls=media_urls,
+            thumbnail_url=display_url,
+            likes_count=item.get("likesCount", 0) or 0,
+            comments_count=item.get("commentsCount", 0) or 0,
+            shares_count=0,
+            views_count=item.get("videoViewCount", 0) or item.get("viewCount", 0) or 0,
+            posted_at=posted_at,
+            metadata={
+                "shortcode": item.get("shortCode", ""),
+                "url": item.get("url", ""),
+                "location": item.get("locationName", ""),
+            },
+        )
 
     # ──────────────── internal ────────────────
 
