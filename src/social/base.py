@@ -29,6 +29,7 @@ class SocialPost:
     views_count: int
     posted_at: str
     video_url: str = ""
+    owner_username: str = ""
     metadata: dict = field(default_factory=dict)
 
 

@@ -999,12 +999,14 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
             "comments_count": post.comments_count,
             "views_count": post.views_count,
             "posted_at": post.posted_at,
+            "owner_username": post.owner_username,
         }
 
         posts_text = _format_posts_for_analysis([post_dict])
         user_question = question.strip() if question else "Descreva o conteudo deste post de forma detalhada."
         shortcode = post.metadata.get("shortcode", "")
         post_url = post.metadata.get("url", url)
+        owner_info = f"Autor: @{post.owner_username}\n" if post.owner_username else ""
 
         # Video/Reel: download and analyze full video
         if post.content_type in ("video", "reel") and post.video_url:
@@ -1033,19 +1035,29 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
                     log_video_analysis(user_id, video_duration or 30)
                     return (
                         f"**Analise do Reel** (video completo)\n"
+                        f"{owner_info}"
                         f"Link: {post_url}\n\n"
                         f"{analysis}"
                     )
                 # Fallback: analyze thumbnail if video download fails
-                logger.warning("Video download failed, falling back to thumbnail analysis")
+                logger.warning("Video download failed for %s, falling back to thumbnail analysis", post_url)
 
         # Image/Carousel: download all slides
         post_images = _download_all_carousel_images(post_dict)
 
-        prompt = (
-            f"Voce esta olhando para um post do Instagram.\n\n"
-            f"Dados do post:\n{posts_text}\n\n"
-        )
+        is_video_fallback = post.content_type in ("video", "reel")
+        if is_video_fallback:
+            prompt = (
+                f"Voce esta olhando a MINIATURA (thumbnail) de um Reel/video do Instagram.\n"
+                "IMPORTANTE: Voce NAO esta vendo o video, apenas a imagem de capa.\n"
+                "Descreva apenas o que ve na imagem. NAO invente o conteudo do video.\n\n"
+                f"Dados do post:\n{posts_text}\n\n"
+            )
+        else:
+            prompt = (
+                f"Voce esta olhando para um post do Instagram.\n\n"
+                f"Dados do post:\n{posts_text}\n\n"
+            )
         if post_images:
             prompt += (
                 f"{len(post_images)} imagem(ns) do post estao anexadas (em ordem dos slides).\n"
@@ -1058,8 +1070,18 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
         )
 
         analysis = _run_analysis(prompt, images=post_images)
+        if is_video_fallback:
+            return (
+                f"**Analise do Reel** (apenas thumbnail - nao foi possivel baixar o video)\n"
+                f"{owner_info}"
+                f"Link: {post_url}\n\n"
+                f"⚠️ Atencao: esta analise e baseada apenas na miniatura do video, "
+                f"nao no conteudo completo do Reel.\n\n"
+                f"{analysis}"
+            )
         return (
             f"**Analise do post** ({post.content_type})\n"
+            f"{owner_info}"
             f"Link: {post_url}\n\n"
             f"{analysis}"
         )
@@ -1143,8 +1165,11 @@ def _format_posts_for_analysis(posts: list[dict]) -> str:
     for i, post in enumerate(posts, 1):
         caption = (post.get("caption", "") or "")[:300]
         hashtags = post.get("hashtags", []) or []
+        owner = post.get("owner_username", "")
+        owner_line = f"  Autor: @{owner}\n" if owner else ""
         lines.append(
             f"Post {i} [{post.get('content_type', 'post')}]:\n"
+            f"{owner_line}"
             f"  Likes: {post.get('likes_count', 0):,} | "
             f"Comentarios: {post.get('comments_count', 0):,} | "
             f"Views: {post.get('views_count', 0):,}\n"

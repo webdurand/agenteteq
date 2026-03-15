@@ -153,6 +153,17 @@ class ApifyProvider(SocialProvider):
         # Extract video URL for reels/videos
         video_url = item.get("videoUrl", "") or item.get("videoPlaybackUrl", "") or ""
 
+        # Extract owner/author info
+        owner_username = item.get("ownerUsername", "") or item.get("ownerFullName", "")
+        if not owner_username:
+            # Try to extract from the post URL
+            post_url_str = item.get("url", "") or item.get("inputUrl", "")
+            if "instagram.com/" in post_url_str:
+                parts = post_url_str.split("instagram.com/")[-1].strip("/").split("/")
+                # URLs like instagram.com/username/p/... or instagram.com/reel/...
+                if parts and parts[0] not in ("p", "reel", "reels", "tv", "stories"):
+                    owner_username = parts[0]
+
         return SocialPost(
             platform_post_id=str(post_id),
             content_type=content_type,
@@ -166,6 +177,7 @@ class ApifyProvider(SocialProvider):
             views_count=item.get("videoViewCount", 0) or item.get("viewCount", 0) or 0,
             posted_at=posted_at,
             video_url=video_url,
+            owner_username=owner_username or "",
             metadata={
                 "shortcode": item.get("shortCode", ""),
                 "url": item.get("url", ""),
