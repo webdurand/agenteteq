@@ -295,8 +295,10 @@ def complete_task(task_id: str, result: dict):
             task.updated_at = now_iso
 
 
-def fail_task(task_id: str, error: str):
+def fail_task(task_id: str, error: str) -> bool:
+    """Mark task as failed. Returns True if all retries exhausted (final failure)."""
     now_iso = datetime.now(timezone.utc).isoformat()
+    final = False
     with get_db() as session:
         task = session.get(BackgroundTask, task_id)
         if task:
@@ -305,7 +307,9 @@ def fail_task(task_id: str, error: str):
             else:
                 task.status = "failed"
                 task.result = json.dumps({"error": error})
+                final = True
             task.updated_at = now_iso
+    return final
 
 
 def is_task_cancelled(task_id: str) -> bool:

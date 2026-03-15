@@ -121,7 +121,43 @@ async def process_task_queue():
             
     except Exception as e:
         logger.error("Erro ao processar task %s: %s", task['id'], e, exc_info=True)
-        fail_task(task["id"], str(e))
+        final = fail_task(task["id"], str(e))
+        if final:
+            await _notify_task_failure(task)
+
+async def _notify_task_failure(task: dict):
+    """Notify user when a background task exhausts all retries."""
+    user_id = task.get("user_id", "")
+    channel = task.get("channel", "")
+    if not user_id:
+        return
+
+    send_whatsapp = channel in ("whatsapp_text", "whatsapp", "web_whatsapp")
+    send_web = channel in ("web", "web_voice", "web_text", "web_whatsapp")
+
+    if send_whatsapp:
+        try:
+            from src.integrations.whatsapp import whatsapp_client
+            await whatsapp_client.send_text_message(
+                user_id,
+                "❌ Não consegui completar a tarefa após várias tentativas. Tente novamente em alguns minutos.",
+            )
+        except Exception as e:
+            logger.error("Falha ao notificar usuario %s via WhatsApp: %s", user_id[:8], e)
+
+    if send_web:
+        try:
+            from src.endpoints.web import ws_manager
+            payload = task.get("payload", {})
+            carousel_id = payload.get("carousel_id", "")
+            if carousel_id:
+                await ws_manager.send_personal_message(user_id, {
+                    "type": "carousel_failed",
+                    "carousel_id": carousel_id,
+                })
+        except Exception as e:
+            logger.error("Falha ao notificar usuario %s via WS: %s", user_id[:8], e)
+
 
 def _run_worker_sync():
     from src.events import _main_loop

@@ -1,5 +1,6 @@
 import os
 import asyncio
+import time
 from concurrent.futures import ThreadPoolExecutor
 from google import genai
 from google.genai.types import GenerateContentConfig, ImageConfig, Modality, Part
@@ -7,8 +8,15 @@ from .base import ImageProvider
 import logging
 
 _FALLBACK_ENABLED = os.getenv("IMAGE_FALLBACK_ENABLED", "false").lower() == "true"
+_MAX_RETRIES = 3
+_BASE_DELAY = 2  # seconds
 
 logger = logging.getLogger(__name__)
+
+
+class QuotaExhaustedError(Exception):
+    """Raised when the Gemini API quota is exhausted after all retries."""
+    pass
 
 _image_executor = None
 
@@ -51,6 +59,31 @@ class NanoBananaProvider(ImageProvider):
         self.client = genai.Client(api_key=self.api_key)
         self.model_name = os.getenv("IMAGE_MODEL", "gemini-3.1-flash-image-preview")
 
+    def _call_with_retry(self, contents, config, context: str = "generate"):
+        """Call Gemini API with exponential backoff on 429/503."""
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                return self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=contents,
+                    config=config,
+                )
+            except Exception as e:
+                err_str = str(e)
+                is_retryable = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "503" in err_str or "UNAVAILABLE" in err_str
+                if not is_retryable or attempt == _MAX_RETRIES:
+                    if is_retryable:
+                        raise QuotaExhaustedError(
+                            f"Quota do Gemini esgotada após {attempt + 1} tentativas: {err_str}"
+                        ) from e
+                    raise
+                delay = _BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    "[%s] Gemini retornou erro retryable (tentativa %s/%s), aguardando %ss: %s",
+                    context, attempt + 1, _MAX_RETRIES, delay, err_str[:120],
+                )
+                time.sleep(delay)
+
     async def generate(self, prompt: str, aspect_ratio: str = "1:1") -> bytes:
         loop = asyncio.get_event_loop()
 
@@ -60,11 +93,7 @@ class NanoBananaProvider(ImageProvider):
                 response_modalities=[Modality.IMAGE],
                 image_config=ImageConfig(aspect_ratio=aspect_ratio, image_size="1K"),
             )
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-                config=config,
-            )
+            response = self._call_with_retry(prompt, config, "generate")
 
             try:
                 return _extract_image_from_response(response)
@@ -73,11 +102,7 @@ class NanoBananaProvider(ImageProvider):
                     raise
                 logger.info("Tentando prompt fallback...")
                 fallback_prompt = f"Professional editorial photo for tech blog, clean modern design, {prompt[:120]}"
-                response = self.client.models.generate_content(
-                    model=self.model_name,
-                    contents=fallback_prompt,
-                    config=config,
-                )
+                response = self._call_with_retry(fallback_prompt, config, "generate_fallback")
                 return _extract_image_from_response(response)
 
         return await loop.run_in_executor(_get_executor(), _generate)
@@ -95,11 +120,7 @@ class NanoBananaProvider(ImageProvider):
             image_part = Part.from_bytes(data=reference_image, mime_type="image/png")
             contents = [image_part, prompt]
 
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=contents,
-                config=config,
-            )
+            response = self._call_with_retry(contents, config, "edit")
             return _extract_image_from_response(response)
 
         return await loop.run_in_executor(_get_executor(), _edit)

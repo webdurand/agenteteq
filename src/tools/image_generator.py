@@ -398,6 +398,14 @@ async def _process_image_background(
         update_carousel_status(carousel_id, "failed", slides)
         emit_event_sync(user_id, "carousel_generated")
 
+        from src.tools.image_generation.nano_banana import QuotaExhaustedError
+        is_quota = isinstance(e, QuotaExhaustedError)
+        fail_msg = (
+            "⚠️ O limite de geração de imagens foi atingido. Tente novamente em alguns minutos."
+            if is_quota
+            else "❌ Não consegui gerar o carrossel. Tente novamente em alguns minutos."
+        )
+
         if send_web:
             try:
                 await ws_manager.send_personal_message(user_id, {
@@ -410,6 +418,13 @@ async def _process_image_background(
                     "__CAROUSEL_GENERATING__",
                     f"__CAROUSEL_FAILED__{carousel_id}",
                 )
+            except Exception:
+                pass
+
+        if send_whatsapp:
+            try:
+                from src.integrations.whatsapp import whatsapp_client
+                await whatsapp_client.send_text_message(user_id, fail_msg)
             except Exception:
                 pass
 
