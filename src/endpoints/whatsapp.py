@@ -526,7 +526,7 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
                 if not _is_test_number(from_number):
                     await whatsapp_client.send_text_message(from_number, shortcut_msg, reply_to_message_id=message_id)
                     latency = int((time.time() - start_time) * 1000)
-                    log_event(user_id=from_number, channel="whatsapp", event_type="message_sent", status="success", latency_ms=latency, extra_data={"cost_usd": 0.005})
+                    log_event(user_id=from_number, channel="whatsapp", event_type="message_sent", status="success", latency_ms=latency, extra_data={"cost_usd": 0.0})
                 return
         except Exception as e:
             logger.error("Falha no atalho de lembrete rapido: %s", e)
@@ -577,4 +577,4 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
         logger.info("Enviando resposta para %s", from_number)
         await _send_whatsapp_response(from_number, final_text, reply_to_message_id=message_id)
         latency = int((time.time() - start_time) * 1000)
-        log_event(user_id=from_number, channel="whatsapp", event_type="message_sent", status="success", latency_ms=latency, extra_data={"cost_usd": 0.005})
+        log_event(user_id=from_number, channel="whatsapp", event_type="message_sent", status="success", latency_ms=latency, extra_data={"cost_usd": 0.0})

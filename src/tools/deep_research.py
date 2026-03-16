@@ -156,6 +156,13 @@ def create_deep_research_tool(notifier: StatusNotifier, user_id: str) -> Callabl
         limit_msg = check_daily_feature_limit(user_id, "max_deep_research_daily")
         if limit_msg:
             return limit_msg
+
+        # Check monthly total budget (hard cap)
+        from src.config.feature_gates import check_monthly_total_budget
+        budget_msg = check_monthly_total_budget(user_id)
+        if budget_msg:
+            return budget_msg
+
         if notifier:
             notifier.notify("Beleza, vou dar uma olhada e já te respondo!")
 
@@ -176,6 +183,18 @@ def create_deep_research_tool(notifier: StatusNotifier, user_id: str) -> Callabl
 
         _save_research_to_memory(topic, final_content, user_id)
         log_feature_usage(user_id, "max_deep_research_daily")
+
+        # Log estimated cost for deep research (includes internal search calls)
+        try:
+            from src.memory.analytics import log_event
+            log_event(
+                user_id=user_id, channel="api",
+                event_type="web_search_cost", tool_name="deep_research",
+                status="success",
+                extra_data={"cost_usd": 0.025, "topic": topic[:100]},
+            )
+        except Exception:
+            pass
 
         logger.info("Pesquisa concluída.")
         return final_content

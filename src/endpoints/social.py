@@ -130,25 +130,6 @@ async def api_get_content(
     return {"posts": posts}
 
 
-# --- Analytics (historical snapshots) ---
-@router.get("/accounts/{account_id}/analytics")
-async def api_get_analytics(
-    account_id: int,
-    days: int = Query(30, ge=1, le=365),
-    user=Depends(get_current_user),
-):
-    from src.models.social import get_account_snapshots, get_growth_summary
-
-    account = get_tracked_account(account_id)
-    if not account or account["user_id"] != user["phone_number"]:
-        raise HTTPException(status_code=404, detail="Conta nao encontrada.")
-
-    snapshots = get_account_snapshots(account_id, days=days)
-    growth = get_growth_summary(account_id, days=days)
-
-    return {"snapshots": snapshots, "growth": growth}
-
-
 # --- Force refresh ---
 @router.post("/accounts/{account_id}/refresh")
 async def api_refresh_account(
@@ -204,7 +185,6 @@ def _fetch_posts_background(account_id: int, user_id: str, platform: str, userna
                 "likes_count": p.likes_count,
                 "comments_count": p.comments_count,
                 "views_count": p.views_count,
-                "engagement_rate": "",
                 "posted_at": p.posted_at,
             }
             for p in posts

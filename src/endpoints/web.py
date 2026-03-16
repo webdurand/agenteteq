@@ -328,6 +328,10 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
             logger.info("[WEB WS] TTS: %s bytes | %s", len(audio_out), mime_type)
             audio_b64 = base64.b64encode(audio_out).decode() if audio_out else ""
             log_feature_usage(phone_number, "max_tts_daily", channel="web")
+            try:
+                log_event(user_id=phone_number, channel="web", event_type="tts_synthesis", tool_name="gemini_tts", status="success", extra_data={"cost_usd": 0.002})
+            except Exception:
+                pass
         except Exception as e:
             logger.info("[WEB WS] TTS falhou, enviando só texto: %s", e)
             mime_type = "browser"

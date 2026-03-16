@@ -19,39 +19,51 @@ def dispatch_proactive_message(reminder_id: int):
     Funcao chamada pelo APScheduler quando um job agendado dispara.
     Busca o lembrete no banco, cria o agente, executa e envia.
 
+    Usa pg_try_advisory_lock para garantir que apenas 1 pod execute cada reminder.
+    A conexao que segura o lock fica aberta durante toda a execucao.
+
     Args:
         reminder_id: ID do lembrete na tabela reminders.
     """
     from src.db.session import get_engine, _is_sqlite
     engine = get_engine() if not _is_sqlite() else None
-    
-    if engine:
-        from sqlalchemy import text
-        with engine.connect() as conn:
-            # Hash reminder_id to use as int lock key
-            lock_acquired = conn.execute(text("SELECT pg_try_advisory_lock(hashtext(:id))"), {"id": str(reminder_id)}).scalar()
+
+    lock_conn = None
+    try:
+        if engine:
+            from sqlalchemy import text
+            lock_conn = engine.connect()
+            lock_acquired = lock_conn.execute(
+                text("SELECT pg_try_advisory_lock(hashtext(:id))"),
+                {"id": str(reminder_id)}
+            ).scalar()
             if not lock_acquired:
                 logger.info("Outro pod ja esta processando o reminder %s. Abortando localmente.", reminder_id)
+                lock_conn.close()
+                lock_conn = None
                 return
-    
-    logger.info("Disparando reminder_id %s...", reminder_id)
-    try:
+
+        logger.info("Disparando reminder_id %s...", reminder_id)
+
         from src.models.reminders import get_reminder, mark_fired
-        
+
         reminder = get_reminder(reminder_id)
         if not reminder:
             logger.info("Reminder %s nao encontrado no banco. Abortando.", reminder_id)
             return
-            
+
         if reminder["status"] != "active":
             logger.info("Reminder %s nao esta ativo (status: %s). Removendo job orfao.", reminder_id, reminder['status'])
             try:
                 from src.scheduler.engine import get_scheduler
                 scheduler = get_scheduler()
-                job_id = reminder.get("apscheduler_job_id")
-                if job_id and scheduler.get_job(job_id):
-                    scheduler.remove_job(job_id)
-                    logger.info("Job orfao %s removido do APScheduler.", job_id)
+                for jid in [f"reminder_{reminder_id}", reminder.get("apscheduler_job_id")]:
+                    if jid:
+                        try:
+                            scheduler.remove_job(jid)
+                            logger.info("Job orfao %s removido do APScheduler.", jid)
+                        except Exception:
+                            pass
             except Exception as e:
                 logger.warning("Nao foi possivel remover job orfao: %s", e)
             return
@@ -60,7 +72,7 @@ def dispatch_proactive_message(reminder_id: int):
         task_instructions = reminder["task_instructions"]
         channel = reminder["notification_channel"]
         workflow_id = reminder.get("workflow_id")
-        
+
         logger.info("Reminder %s | User: %s | Channel: %s | Workflow: %s | Task: %s...",
                      reminder_id, user_phone, channel, workflow_id, task_instructions[:60])
 
@@ -118,7 +130,7 @@ def dispatch_proactive_message(reminder_id: int):
                     log_run_metrics(user_phone, agent_channel, response)
                 except Exception:
                     pass
-                
+
                 if response and response.content:
                     response_content = extract_final_response(response)
                 else:
@@ -130,16 +142,16 @@ def dispatch_proactive_message(reminder_id: int):
             from src.integrations.whatsapp_sender import send_whatsapp_with_interactive
             asyncio.run(send_whatsapp_with_interactive(user_phone, response_content))
             logger.info("Mensagem enviada com sucesso para %s via whatsapp_text.", user_phone)
-            
+
         elif channel == "whatsapp_call":
             # Futuro: Implementar chamada de audio WhatsApp aqui
             logger.info("[FUTURO] Ligacao WhatsApp para %s solicitada. Falaria: %s", user_phone, response_content)
-            
+
         elif channel == "web_voice":
             from src.endpoints.web import ws_manager
             from src.integrations.tts import get_tts
             import base64
-            
+
             if not ws_manager.is_online(user_phone):
                 logger.info("Usuario %s nao esta online na web. Fazendo fallback para whatsapp_text.", user_phone)
                 from src.integrations.whatsapp_sender import send_whatsapp_with_interactive
@@ -155,7 +167,7 @@ def dispatch_proactive_message(reminder_id: int):
                     logger.info("TTS falhou: %s", e)
                     audio_b64 = ""
                     mime_type = "browser"
-                
+
                 msg_payload = {
                     "type": "response",
                     "text": response_content,
@@ -205,7 +217,7 @@ def dispatch_proactive_message(reminder_id: int):
                 logger.info("Lembrete enviado para %s via web_text (canal combinado).", user_phone)
             else:
                 logger.info("Usuario %s offline na web. Entrega feita apenas no WhatsApp.", user_phone)
-            
+
         else:
             logger.info("Canal nao suportado: %s", channel)
 
@@ -217,17 +229,17 @@ def dispatch_proactive_message(reminder_id: int):
     except Exception as e:
         logger.error("Erro ao disparar reminder %s: %s", reminder_id, e)
         traceback.print_exc()
-        
+
     finally:
-        if engine:
+        if lock_conn:
             try:
                 from sqlalchemy import text
-
-                with engine.connect() as conn:
-                    conn.execute(text("SELECT pg_advisory_unlock(hashtext(:id))"), {"id": str(reminder_id)})
-                    conn.commit()
+                lock_conn.execute(text("SELECT pg_advisory_unlock(hashtext(:id))"), {"id": str(reminder_id)})
+                lock_conn.commit()
             except Exception as e:
                 logger.error("Erro ao liberar lock do reminder %s: %s", reminder_id, e)
+            finally:
+                lock_conn.close()
 
 
 def _execute_workflow_for_reminder(workflow_id: str, user_phone: str, channel: str) -> str | None:

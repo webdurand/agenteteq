@@ -9,24 +9,19 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Engagement spike threshold: post must have >= SPIKE_MULTIPLIER * avg to trigger alert
-SPIKE_MULTIPLIER = 2.0
-
 
 def fetch_all_tracked_accounts():
     """
     Called by APScheduler every N hours.
-    Iterates all active tracked accounts, fetches new content, updates metadata.
-    If a new post spikes above average engagement and alerts are enabled, notifies the user.
+    Iterates all active tracked accounts, fetches new posts, stores them.
+    Skips accounts whose owner is on a free plan or doesn't have social_monitoring_enabled.
     """
     from src.models.social import (
         list_all_active_tracked_accounts,
         save_content_batch,
-        update_account_metadata,
-        get_avg_engagement,
-        save_account_snapshot,
     )
     from src.social import get_social_provider
+    from src.config.feature_gates import get_user_plan, is_feature_enabled
 
     accounts = list_all_active_tracked_accounts()
     if not accounts:
@@ -40,52 +35,64 @@ def fetch_all_tracked_accounts():
     # Collect new posts per user for trend detection
     user_new_posts: dict[str, list[dict]] = {}
 
+    # Track skipped free users to avoid repeated plan lookups
+    skipped_users: set[str] = set()
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
+    # --- Phase 1: Filter eligible accounts and group by (platform, username) ---
+    # This ensures each unique social account is fetched from the API only once,
+    # even when multiple users track the same account.
+    eligible_accounts: list[dict] = []
     for account in accounts:
-        account_id = account["id"]
-        platform = account["platform"]
-        username = account["username"]
         user_id = account["user_id"]
-        alerts_on = account.get("alerts_enabled", False)
 
+        # Skip free users and users without social_monitoring_enabled
+        if user_id in skipped_users:
+            continue
+        plan = get_user_plan(user_id)
+        if plan.get("code") == "free" or not is_feature_enabled(user_id, "social_monitoring_enabled"):
+            skipped_users.add(user_id)
+            logger.debug(
+                "Social fetcher: pulando @%s/%s — usuario %s no plano free ou sem social_monitoring_enabled",
+                account["platform"], account["username"], user_id[:8],
+            )
+            continue
+
+        eligible_accounts.append(account)
+
+    # Group eligible accounts by (platform, username) for deduplication
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    for account in eligible_accounts:
+        key = (account["platform"], account["username"])
+        grouped.setdefault(key, []).append(account)
+
+    unique_count = len(grouped)
+    total_count = len(eligible_accounts)
+    if unique_count < total_count:
+        logger.info(
+            "Social fetcher: %d conta(s) elegivel(is), %d unica(s) — %d chamada(s) de API economizada(s)",
+            total_count, unique_count, total_count - unique_count,
+        )
+
+    # --- Phase 2: Fetch each unique (platform, username) once ---
+    # Cache fetched results: (platform, username) -> posts_dicts or None on error
+    fetch_cache: dict[tuple[str, str], list[dict] | None] = {}
+
+    for (platform, username), user_accounts in grouped.items():
         # Get or create provider for this platform
         if platform not in providers:
             try:
                 providers[platform] = get_social_provider(platform)
             except Exception as e:
                 logger.error("Social provider nao disponivel para %s: %s", platform, e)
+                fetch_cache[(platform, username)] = None
                 continue
         provider = providers[platform]
 
         try:
-            # Fetch profile update
-            profile = loop.run_until_complete(
-                provider.get_profile(platform, username)
-            )
-            update_account_metadata(
-                account_id,
-                display_name=profile.display_name,
-                bio=profile.bio,
-                followers_count=profile.followers_count,
-                posts_count=profile.posts_count,
-                profile_pic_url=profile.profile_pic_url,
-            )
-
-            # Save historical snapshot
-            try:
-                avg_eng = get_avg_engagement(account_id)
-                save_account_snapshot(
-                    account_id,
-                    followers_count=profile.followers_count,
-                    posts_count=profile.posts_count,
-                    avg_engagement=avg_eng,
-                )
-            except Exception as e:
-                logger.warning("Snapshot save failed for account %d: %s", account_id, e)
-
-            # Fetch recent posts
+            # Fetch recent posts only (no profile scraping) — ONE call per unique account
             posts = loop.run_until_complete(
                 provider.get_recent_posts(platform, username, limit=20)
             )
@@ -101,46 +108,54 @@ def fetch_all_tracked_accounts():
                     "likes_count": p.likes_count,
                     "comments_count": p.comments_count,
                     "views_count": p.views_count,
-                    "engagement_rate": "",
                     "posted_at": p.posted_at,
                 }
                 for p in posts
             ]
 
-            new_posts = save_content_batch(account_id, user_id, platform, posts_dicts)
+            fetch_cache[(platform, username)] = posts_dicts
             logger.info(
-                "Social fetcher: @%s/%s — %d novos posts, %d atualizados",
-                platform, username, len(new_posts), len(posts_dicts) - len(new_posts),
+                "Social fetcher: @%s/%s — %d posts obtidos (compartilhado com %d usuario(s))",
+                platform, username, len(posts_dicts), len(user_accounts),
             )
 
-            # Collect for trend detection
-            if new_posts:
-                if user_id not in user_new_posts:
-                    user_new_posts[user_id] = []
-                user_new_posts[user_id].append({
-                    "username": username,
-                    "platform": platform,
-                    "posts": new_posts,
-                })
-
-            # Spike detection — only if alerts enabled and there are new posts
-            if alerts_on and new_posts:
-                try:
-                    avg = get_avg_engagement(account_id)
-                    if avg > 0:
-                        for post in new_posts:
-                            # For YouTube, use views as primary metric; for others, likes
-                            engagement = post.get("views_count", 0) if platform == "youtube" else post.get("likes_count", 0)
-                            if engagement >= avg * SPIKE_MULTIPLIER:
-                                _send_spike_alert(
-                                    loop, user_id, username, platform,
-                                    post, engagement, avg,
-                                )
-                except Exception as e:
-                    logger.error("Social fetcher: erro ao checar spikes de @%s: %s", username, e)
-
         except Exception as e:
-            logger.error("Social fetcher: erro em @%s/%s: %s", platform, username, e)
+            logger.error("Social fetcher: erro ao buscar @%s/%s: %s", platform, username, e)
+            fetch_cache[(platform, username)] = None
+
+    # --- Phase 3: Save posts per user-account pair ---
+    for (platform, username), user_accounts in grouped.items():
+        posts_dicts = fetch_cache.get((platform, username))
+        if posts_dicts is None:
+            continue
+
+        for account in user_accounts:
+            account_id = account["id"]
+            user_id = account["user_id"]
+
+            try:
+                new_posts = save_content_batch(account_id, user_id, platform, posts_dicts)
+                logger.info(
+                    "Social fetcher: @%s/%s [user %s] — %d novos posts, %d atualizados",
+                    platform, username, user_id[:8],
+                    len(new_posts), len(posts_dicts) - len(new_posts),
+                )
+
+                # Collect for trend detection
+                if new_posts:
+                    if user_id not in user_new_posts:
+                        user_new_posts[user_id] = []
+                    user_new_posts[user_id].append({
+                        "username": username,
+                        "platform": platform,
+                        "posts": new_posts,
+                    })
+
+            except Exception as e:
+                logger.error(
+                    "Social fetcher: erro ao salvar @%s/%s para user %s: %s",
+                    platform, username, user_id[:8], e,
+                )
 
     # Cross-account trend detection
     if user_new_posts:
@@ -152,62 +167,3 @@ def fetch_all_tracked_accounts():
 
     loop.close()
     logger.info("Social fetcher: ciclo completo.")
-
-
-def _send_spike_alert(
-    loop: asyncio.AbstractEventLoop,
-    user_id: str,
-    username: str,
-    platform: str,
-    post: dict,
-    likes: int,
-    avg: float,
-):
-    """Send a proactive WhatsApp alert about a high-engagement post."""
-    from src.integrations.whatsapp import whatsapp_client
-
-    multiplier = likes / avg if avg > 0 else 0
-    caption_preview = (post.get("caption", "") or "")[:120]
-    if len(post.get("caption", "") or "") > 120:
-        caption_preview += "..."
-
-    if platform == "youtube":
-        metric_label = "Views"
-    else:
-        metric_label = "Likes"
-
-    body = (
-        f"Alerta: @{username} postou algo que ta bombando!\n\n"
-        f'"{caption_preview}"\n\n'
-        f"{metric_label}: {likes:,} ({multiplier:.0f}x acima da media)\n"
-        f"Comentarios: {post.get('comments_count', 0):,}"
-    )
-
-    buttons = [
-        {"id": "btn_script", "title": "Criar roteiro"},
-        {"id": "btn_carousel", "title": "Criar carrossel"},
-        {"id": "btn_view", "title": "Ver detalhes"},
-    ]
-
-    try:
-        loop.run_until_complete(
-            whatsapp_client.send_button_message(user_id, body, buttons)
-        )
-        logger.info(
-            "Social alert enviado para %s: @%s post com %d likes (%.0fx avg)",
-            user_id[:8], username, likes, multiplier,
-        )
-    except Exception as e:
-        # Fallback to plain text if buttons fail
-        logger.warning("Falha ao enviar alert com botoes, tentando texto: %s", e)
-        try:
-            fallback = (
-                f"{body}\n\n"
-                "Quer que eu crie conteudo inspirado nesse post? "
-                "Responda: roteiro, carrossel ou ver detalhes."
-            )
-            loop.run_until_complete(
-                whatsapp_client.send_text_message(user_id, fallback)
-            )
-        except Exception as e2:
-            logger.error("Social alert: falha total para %s: %s", user_id[:8], e2)

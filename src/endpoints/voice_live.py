@@ -12,7 +12,7 @@ from src.integrations.gemini_live import GeminiLiveClient
 from src.agent.voice_tools import get_voice_tools_for_user, execute_voice_tool
 from src.memory.analytics import log_event
 from src.models.chat_messages import save_message
-from src.config.feature_gates import is_feature_enabled, check_voice_live_minutes
+from src.config.feature_gates import is_feature_enabled, check_voice_live_minutes, check_monthly_total_budget
 from src.utils.privacy import mask_phone
 import logging
 
@@ -105,6 +105,12 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
     minutes_msg = check_voice_live_minutes(phone_number)
     if minutes_msg:
         await websocket.send_json({"type": "feature_blocked", "feature": "voice_live_minutes", "message": minutes_msg})
+        await websocket.close(code=1000)
+        return
+
+    budget_msg = check_monthly_total_budget(phone_number)
+    if budget_msg:
+        await websocket.send_json({"type": "feature_blocked", "feature": "monthly_budget", "message": budget_msg})
         await websocket.close(code=1000)
         return
 
@@ -328,6 +334,7 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
         await client.close()
         ws_manager.disconnect(phone_number, websocket=websocket)
         duration_ms = int((time.monotonic() - session_start_monotonic) * 1000)
+        duration_min = duration_ms / 60_000.0
         log_event(
             user_id=phone_number,
             channel="web_live",
@@ -335,5 +342,6 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
             tool_name="voice_live",
             status="success",
             latency_ms=duration_ms,
+            extra_data={"cost_usd": round(duration_min * 0.045, 4), "duration_min": round(duration_min, 2)},
         )
         logger.info("[VOICE LIVE] Sessao encerrada: %s durou %ss", mask_phone(phone_number), duration_ms // 1000)

@@ -662,7 +662,6 @@ class TrackedAccount(Base):
     posts_count = Column(Integer)
     metadata_json = Column(Text, default="{}")
     status = Column(String, default="active")           # active, paused, error
-    alerts_enabled = Column(String, default="false")    # "true" / "false"
     last_fetched_at = Column(String)
     created_at = Column(String, nullable=False)
     updated_at = Column(String)
@@ -680,7 +679,6 @@ class TrackedAccount(Base):
             "followers_count": self.followers_count,
             "posts_count": self.posts_count,
             "status": self.status,
-            "alerts_enabled": self.alerts_enabled == "true",
             "last_fetched_at": self.last_fetched_at,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -707,7 +705,6 @@ class SocialContent(Base):
     likes_count = Column(Integer, default=0)
     comments_count = Column(Integer, default=0)
     views_count = Column(Integer, default=0)
-    engagement_rate = Column(String)
     posted_at = Column(String)
     fetched_at = Column(String, nullable=False)
     analysis_summary = Column(Text)
@@ -727,7 +724,6 @@ class SocialContent(Base):
             "likes_count": self.likes_count,
             "comments_count": self.comments_count,
             "views_count": self.views_count,
-            "engagement_rate": self.engagement_rate,
             "posted_at": self.posted_at,
             "fetched_at": self.fetched_at,
             "analysis_summary": self.analysis_summary,
@@ -769,29 +765,6 @@ class ContentPlan(Base):
             "notes": self.notes,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
-        }
-
-
-class AccountSnapshot(Base):
-    __tablename__ = "account_snapshots"
-    __table_args__ = (
-        Index("idx_snapshots_account_date", "tracked_account_id", "fetched_at"),
-    )
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    tracked_account_id = Column(Integer, ForeignKey("tracked_accounts.id"), nullable=False)
-    followers_count = Column(Integer, default=0)
-    posts_count = Column(Integer, default=0)
-    avg_engagement = Column(Float, default=0.0)
-    fetched_at = Column(String, nullable=False)
-
-    def to_dict(self) -> dict:
-        return {
-            "tracked_account_id": self.tracked_account_id,
-            "followers_count": self.followers_count,
-            "posts_count": self.posts_count,
-            "avg_engagement": self.avg_engagement,
-            "fetched_at": self.fetched_at,
         }
 
 

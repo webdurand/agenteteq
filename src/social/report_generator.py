@@ -19,7 +19,6 @@ from typing import Optional
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 import numpy as np
 from fpdf import FPDF
 from PIL import Image, ImageDraw, ImageFont
@@ -135,9 +134,6 @@ def collect_report_data(
         get_tracked_account_by_username,
         get_top_content,
         get_recent_content,
-        get_account_snapshots,
-        get_growth_summary,
-        get_avg_engagement,
     )
 
     if not platforms:
@@ -175,9 +171,6 @@ def collect_report_data(
 
         top_post = top_posts[0] if top_posts else {}
 
-        growth = get_growth_summary(account["id"], days=period_days)
-        snapshots = get_account_snapshots(account["id"], days=period_days)
-
         # Content type distribution
         content_types: dict[str, int] = Counter()
         for p in recent_posts:
@@ -209,10 +202,7 @@ def collect_report_data(
             "engagement_rate": round(engagement_rate, 2),
             "top_post_caption": (top_post.get("caption", "") or "")[:150],
             "top_post_likes": top_post.get("likes_count", 0),
-            "growth_pct": growth.get("pct", 0.0),
-            "growth_delta": growth.get("followers_delta", 0),
-            # New enriched fields for dashboard
-            "snapshots": snapshots,
+            # Enriched fields for dashboard
             "content_types": dict(content_types),
             "top_posts": top_posts[:5],
             "posting_frequency": posting_frequency,
@@ -224,7 +214,6 @@ def collect_report_data(
     # Build comparison rankings
     followers_ranking = sorted(accounts_data, key=lambda a: a["followers"], reverse=True)
     engagement_ranking = sorted(accounts_data, key=lambda a: a["engagement_rate"], reverse=True)
-    growth_ranking = sorted(accounts_data, key=lambda a: a["growth_pct"], reverse=True)
 
     title = "Relatorio Competitivo" if len(accounts_data) > 1 else f"Relatorio @{accounts_data[0]['username']}"
 
@@ -236,7 +225,6 @@ def collect_report_data(
         "comparison": {
             "followers_ranking": [(a["username"], a["followers"]) for a in followers_ranking],
             "engagement_ranking": [(a["username"], a["engagement_rate"]) for a in engagement_ranking],
-            "growth_ranking": [(a["username"], f"+{a['growth_pct']}%") for a in growth_ranking],
         },
     }
 
@@ -256,7 +244,6 @@ def generate_insights(report_data: dict) -> str:
                 f"@{a['username']} ({a['platform']}): "
                 f"{_format_number(a['followers'])} seguidores, "
                 f"eng. rate {a['engagement_rate']}%, "
-                f"crescimento 30d: +{a['growth_pct']}%, "
                 f"media {_format_number(a['avg_likes'])} likes/post"
             )
 
@@ -360,93 +347,6 @@ def _chart_engagement_comparison(accounts: list[dict], theme: str = "dark") -> i
     for label in ax.get_yticklabels():
         label.set_color(t["text"])
         label.set_fontsize(11)
-    fig.tight_layout()
-    return _chart_to_bytes(fig)
-
-
-def _chart_followers_timeline(accounts: list[dict], theme: str = "dark") -> io.BytesIO | None:
-    """Line chart showing follower growth over time."""
-    # Check if any account has enough snapshots
-    has_data = any(len(a.get("snapshots", [])) >= 2 for a in accounts)
-    if not has_data:
-        return None
-
-    t = THEMES[theme]
-    fig, ax = plt.subplots(figsize=(7, 4))
-    fig.set_facecolor(t["bg"])
-    _apply_chart_style(ax, theme)
-
-    for i, acc in enumerate(accounts):
-        snapshots = acc.get("snapshots", [])
-        if len(snapshots) < 2:
-            continue
-        dates = []
-        followers = []
-        for s in snapshots:
-            try:
-                dt = datetime.fromisoformat(s["fetched_at"])
-                dates.append(dt)
-                followers.append(s["followers_count"])
-            except (ValueError, KeyError):
-                continue
-        if len(dates) < 2:
-            continue
-        color = CHART_COLORS_HEX[i % len(CHART_COLORS_HEX)]
-        ax.plot(dates, followers, color=color, linewidth=2, marker="o", markersize=3,
-                label=f"@{acc['username']}")
-
-    ax.legend(facecolor=t["card_bg"], edgecolor=t["grid"], labelcolor=t["text"],
-              fontsize=9, loc="upper left")
-    ax.set_ylabel("Seguidores", color=t["text_secondary"], fontsize=10)
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m"))
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-    fig.autofmt_xdate(rotation=30)
-    for label in ax.get_xticklabels():
-        label.set_color(t["text_secondary"])
-    fig.tight_layout()
-    return _chart_to_bytes(fig)
-
-
-def _chart_engagement_timeline(accounts: list[dict], theme: str = "dark") -> io.BytesIO | None:
-    """Line chart showing engagement evolution over time."""
-    has_data = any(
-        len(a.get("snapshots", [])) >= 2 and any(s.get("avg_engagement") for s in a.get("snapshots", []))
-        for a in accounts
-    )
-    if not has_data:
-        return None
-
-    t = THEMES[theme]
-    fig, ax = plt.subplots(figsize=(7, 4))
-    fig.set_facecolor(t["bg"])
-    _apply_chart_style(ax, theme)
-
-    for i, acc in enumerate(accounts):
-        snapshots = acc.get("snapshots", [])
-        dates = []
-        engagement = []
-        for s in snapshots:
-            try:
-                avg_eng = s.get("avg_engagement")
-                if avg_eng is not None and avg_eng > 0:
-                    dates.append(datetime.fromisoformat(s["fetched_at"]))
-                    engagement.append(avg_eng)
-            except (ValueError, KeyError):
-                continue
-        if len(dates) < 2:
-            continue
-        color = CHART_COLORS_HEX[i % len(CHART_COLORS_HEX)]
-        ax.plot(dates, engagement, color=color, linewidth=2, marker="o", markersize=3,
-                label=f"@{acc['username']}")
-
-    ax.legend(facecolor=t["card_bg"], edgecolor=t["grid"], labelcolor=t["text"],
-              fontsize=9, loc="upper left")
-    ax.set_ylabel("Engajamento Medio", color=t["text_secondary"], fontsize=10)
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m"))
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-    fig.autofmt_xdate(rotation=30)
-    for label in ax.get_xticklabels():
-        label.set_color(t["text_secondary"])
     fig.tight_layout()
     return _chart_to_bytes(fig)
 
@@ -722,7 +622,6 @@ def render_dashboard_pdf(report_data: dict, insights: str = "", theme: str = "da
             metrics = [
                 ("Seguidores", _format_number(acc["followers"])),
                 ("Engajamento", f"{acc['engagement_rate']}%"),
-                ("Crescimento", f"+{acc['growth_pct']}%"),
                 ("Media Likes", _format_number(acc["avg_likes"])),
                 ("Media Comments", _format_number(acc["avg_comments"])),
                 ("Posts/Semana", f"{acc.get('posting_frequency', 0)}"),
@@ -747,40 +646,7 @@ def render_dashboard_pdf(report_data: dict, insights: str = "", theme: str = "da
             if chart:
                 pdf.embed_chart(chart)
 
-        # ── Page 4: Followers Timeline ──
-        has_snapshots = any(len(a.get("snapshots", [])) >= 2 for a in accounts)
-        if has_snapshots:
-            pdf.dark_page()
-            pdf.section_title("Evolucao de Seguidores")
-            chart = _chart_followers_timeline(accounts, theme)
-            if chart:
-                pdf.embed_chart(chart)
-                pdf.ln(5)
-                r, g, b = t["text_muted_rgb"]
-                pdf.set_text_color(r, g, b)
-                pdf.set_font("DejaVu", "", 8)
-                pdf.cell(0, 5, f"Dados dos ultimos {period} dias (snapshots a cada 6 horas)", ln=True)
-
-            # Engagement timeline — separate page
-            eng_chart = _chart_engagement_timeline(accounts, theme)
-            if eng_chart:
-                pdf.dark_page()
-                pdf.section_title("Evolucao do Engajamento")
-                pdf.embed_chart(eng_chart)
-        else:
-            # No snapshots - show note
-            pdf.dark_page()
-            pdf.section_title("Evolucao Temporal")
-            r, g, b = t["text_secondary_rgb"]
-            pdf.set_text_color(r, g, b)
-            pdf.set_font("DejaVu", "", 11)
-            pdf.multi_cell(0, 7,
-                "Dados historicos insuficientes para graficos de evolucao.\n\n"
-                "Os snapshots sao coletados automaticamente a cada 6 horas. "
-                "Gere o relatorio novamente em alguns dias para ver os graficos de tendencia."
-            )
-
-        # ── Page 5: Engagement Analysis ──
+        # ── Page 4: Engagement Analysis ──
         pdf.dark_page()
         pdf.section_title("Analise de Engajamento")
         chart = _chart_engagement_comparison(accounts, theme)
@@ -977,12 +843,6 @@ def render_report_slides(report_data: dict, insights: str = "") -> list[bytes]:
     slides.append(_render_overview(report_data))
     slides.append(_render_followers_chart(report_data))
     slides.append(_render_engagement_chart(report_data))
-
-    # Growth slide only if we have growth data
-    has_growth = any(a.get("growth_pct", 0) != 0 for a in report_data["accounts"])
-    if has_growth:
-        slides.append(_render_growth_chart(report_data))
-
     slides.append(_render_top_posts(report_data))
 
     if insights:
@@ -1012,7 +872,6 @@ def render_report_text(report_data: dict, insights: str = "") -> str:
             f"- Posts: {acc['posts']:,}\n"
             f"- Taxa de engajamento: {acc['engagement_rate']}%\n"
             f"- Media de likes: {acc['avg_likes']:,}\n"
-            f"- Crescimento 30d: +{acc['growth_pct']}%\n"
         )
 
     # Rankings
@@ -1026,11 +885,6 @@ def render_report_text(report_data: dict, insights: str = "") -> str:
         lines.append("\n### Ranking de Engajamento\n")
         for i, (username, rate) in enumerate(comp["engagement_ranking"], 1):
             lines.append(f"{i}. @{username}: {rate}%")
-
-    if comp.get("growth_ranking"):
-        lines.append("\n### Ranking de Crescimento (30d)\n")
-        for i, (username, growth) in enumerate(comp["growth_ranking"], 1):
-            lines.append(f"{i}. @{username}: {growth}")
 
     # Top posts
     lines.append("\n### Top Posts\n")
@@ -1090,7 +944,6 @@ def render_report_pdf(report_data: dict, insights: str = "") -> bytes:
         pdf.set_font("Helvetica", "", 10)
         pdf.cell(0, 6, f"Seguidores: {acc['followers']:,}  |  Posts: {acc['posts']:,}", ln=True)
         pdf.cell(0, 6, f"Engajamento: {acc['engagement_rate']}%  |  Media likes: {acc['avg_likes']:,}", ln=True)
-        pdf.cell(0, 6, f"Crescimento 30d: +{acc['growth_pct']}%", ln=True)
         if acc.get("top_post_caption"):
             caption = _strip_emoji(acc["top_post_caption"])[:100]
             pdf.set_font("Helvetica", "I", 9)
@@ -1261,7 +1114,6 @@ def _render_overview(data: dict) -> bytes:
             ("Posts", _format_number(acc["posts"])),
             ("Eng. Rate", f"{acc['engagement_rate']}%"),
             ("Media Likes", _format_number(acc["avg_likes"])),
-            ("Crescimento", f"+{acc['growth_pct']}%"),
         ]
         my = cy + 95
         for label, val in metrics:
@@ -1287,17 +1139,6 @@ def _render_engagement_chart(data: dict) -> bytes:
     _draw_header(draw, "Taxa de Engajamento (%)")
 
     bars = [(a["username"], a["engagement_rate"]) for a in data["accounts"]]
-    bars.sort(key=lambda x: x[1], reverse=True)
-    _draw_horizontal_bars(draw, bars, y_start=200)
-
-    return _to_bytes(img)
-
-
-def _render_growth_chart(data: dict) -> bytes:
-    img, draw = _new_slide()
-    _draw_header(draw, "Crescimento 30 dias (%)")
-
-    bars = [(a["username"], a["growth_pct"]) for a in data["accounts"]]
     bars.sort(key=lambda x: x[1], reverse=True)
     _draw_horizontal_bars(draw, bars, y_start=200)
 

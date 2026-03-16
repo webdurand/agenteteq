@@ -2,10 +2,8 @@ import json
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import func
-
 from src.db.session import get_db
-from src.db.models import TrackedAccount, SocialContent, User, AccountSnapshot
+from src.db.models import TrackedAccount, SocialContent, User
 
 
 def track_account(
@@ -192,7 +190,6 @@ def save_content_batch(
                 existing.likes_count = post.get("likes_count", existing.likes_count)
                 existing.comments_count = post.get("comments_count", existing.comments_count)
                 existing.views_count = post.get("views_count", existing.views_count)
-                existing.engagement_rate = post.get("engagement_rate", existing.engagement_rate)
                 existing.fetched_at = now
             else:
                 content = SocialContent(
@@ -208,7 +205,6 @@ def save_content_batch(
                     likes_count=post.get("likes_count", 0),
                     comments_count=post.get("comments_count", 0),
                     views_count=post.get("views_count", 0),
-                    engagement_rate=post.get("engagement_rate", ""),
                     posted_at=post.get("posted_at", ""),
                     fetched_at=now,
                 )
@@ -258,34 +254,6 @@ def list_all_active_tracked_accounts() -> list[dict]:
     return [r.to_dict() for r in rows]
 
 
-def set_alerts_enabled(account_id: int, user_id: str, enabled: bool) -> bool:
-    """Toggle alerts for a tracked account. Returns True if updated."""
-    now = datetime.now(timezone.utc).isoformat()
-    with get_db() as db:
-        account = db.get(TrackedAccount, account_id)
-        if not account or account.user_id != user_id:
-            return False
-        account.alerts_enabled = "true" if enabled else "false"
-        account.updated_at = now
-    return True
-
-
-def get_avg_engagement(account_id: int, limit: int = 50) -> float:
-    """Return average likes_count for the last `limit` posts of an account."""
-    with get_db() as db:
-        avg = (
-            db.query(func.avg(SocialContent.likes_count))
-            .filter(
-                SocialContent.tracked_account_id == account_id,
-                SocialContent.likes_count > 0,
-            )
-            .order_by(SocialContent.posted_at.desc())
-            .limit(limit)
-            .scalar()
-        )
-    return float(avg) if avg else 0.0
-
-
 # ──────────────── Trend alerts (user-level) ────────────────
 
 
@@ -325,63 +293,3 @@ def update_last_trend_alert(user_id: str) -> None:
         user = db.query(User).filter(User.phone_number == user_id).first()
         if user:
             user.last_trend_alert_at = now
-
-
-# ──────────────── Account Snapshots (historical tracking) ────────────────
-
-
-def save_account_snapshot(
-    account_id: int,
-    followers_count: int = 0,
-    posts_count: int = 0,
-    avg_engagement: float = 0.0,
-) -> None:
-    """Save a point-in-time snapshot of account metrics."""
-    now = datetime.now(timezone.utc).isoformat()
-    with get_db() as db:
-        snapshot = AccountSnapshot(
-            tracked_account_id=account_id,
-            followers_count=followers_count,
-            posts_count=posts_count,
-            avg_engagement=avg_engagement,
-            fetched_at=now,
-        )
-        db.add(snapshot)
-
-
-def get_account_snapshots(account_id: int, days: int = 30) -> list[dict]:
-    """Get historical snapshots for an account within the last N days."""
-    from datetime import timedelta
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    with get_db() as db:
-        rows = (
-            db.query(AccountSnapshot)
-            .filter(
-                AccountSnapshot.tracked_account_id == account_id,
-                AccountSnapshot.fetched_at >= cutoff,
-            )
-            .order_by(AccountSnapshot.fetched_at.asc())
-            .all()
-        )
-    return [r.to_dict() for r in rows]
-
-
-def get_growth_summary(account_id: int, days: int = 30) -> dict:
-    """Calculate growth summary from snapshots."""
-    snapshots = get_account_snapshots(account_id, days=days)
-    if len(snapshots) < 2:
-        return {"followers_delta": 0, "pct": 0.0, "data_points": len(snapshots)}
-
-    first = snapshots[0]
-    last = snapshots[-1]
-    delta = last["followers_count"] - first["followers_count"]
-    pct = (delta / first["followers_count"] * 100) if first["followers_count"] > 0 else 0.0
-
-    return {
-        "followers_delta": delta,
-        "pct": round(pct, 1),
-        "data_points": len(snapshots),
-        "first_followers": first["followers_count"],
-        "last_followers": last["followers_count"],
-        "period_days": days,
-    }

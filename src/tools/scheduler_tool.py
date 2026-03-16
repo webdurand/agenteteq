@@ -140,6 +140,7 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
                 notification_channel=notification_channel
             )
 
+            deterministic_id = f"reminder_{reminder_id}"
             job = None
             if trigger_type == "date":
                 if minutes_from_now is not None:
@@ -158,6 +159,8 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
                     dispatch_proactive_message,
                     trigger="date",
                     run_date=run_dt,
+                    id=deterministic_id,
+                    replace_existing=True,
                     kwargs={"reminder_id": reminder_id},
                     misfire_grace_time=300,
                 )
@@ -181,6 +184,8 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
                     month=month,
                     day_of_week=day_of_week,
                     timezone=user_tz,
+                    id=deterministic_id,
+                    replace_existing=True,
                     kwargs={"reminder_id": reminder_id},
                     misfire_grace_time=300,
                 )
@@ -194,6 +199,8 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
                     dispatch_proactive_message,
                     trigger="interval",
                     minutes=interval_minutes,
+                    id=deterministic_id,
+                    replace_existing=True,
                     kwargs={"reminder_id": reminder_id},
                     misfire_grace_time=300,
                 )
@@ -253,12 +260,11 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
                 job_id = r.get("apscheduler_job_id")
                 
                 next_run_str = "aguardando"
-                if job_id:
-                    job = scheduler.get_job(job_id)
-                    if job and job.next_run_time:
-                        # Convert to user timezone for display
-                        next_run_dt = job.next_run_time.astimezone(user_tz)
-                        next_run_str = next_run_dt.strftime("%d/%m/%Y %H:%M %Z")
+                deterministic_id = f"reminder_{reminder_id}"
+                job = scheduler.get_job(deterministic_id) or (scheduler.get_job(job_id) if job_id else None)
+                if job and job.next_run_time:
+                    next_run_dt = job.next_run_time.astimezone(user_tz)
+                    next_run_str = next_run_dt.strftime("%d/%m/%Y %H:%M %Z")
                 
                 lines.append(f"• ID: {reminder_id} | Proximo disparo: {next_run_str} | Instrucao: {instructions}...")
 
@@ -293,14 +299,14 @@ def create_scheduler_tools(user_phone: str, channel: str = "unknown"):
             if not reminder or reminder["user_id"] != user_phone:
                 return f"Nao encontrei nenhum agendamento com o ID '{job_id}'. Usa list_schedules pra ver os IDs ativos."
                 
-            aps_job_id = reminder.get("apscheduler_job_id")
-            if aps_job_id:
-                try:
-                    scheduler.remove_job(aps_job_id)
-                    logger.info("Job do APScheduler %s removido com sucesso.", aps_job_id)
-                except Exception as e:
-                    # Pode ser que o job ja nao exista no APScheduler, mas tudo bem
-                    logger.warning("Aviso ao remover job do APScheduler: %s", e)
+            deterministic_id = f"reminder_{reminder_id}"
+            for jid in [deterministic_id, reminder.get("apscheduler_job_id")]:
+                if jid:
+                    try:
+                        scheduler.remove_job(jid)
+                        logger.info("Job do APScheduler %s removido com sucesso.", jid)
+                    except Exception:
+                        pass
             
             cancel_reminder(reminder_id)
             from src.events import emit_event_sync

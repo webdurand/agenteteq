@@ -21,7 +21,6 @@ from src.models.social import (
     get_top_content,
     get_recent_content,
     update_account_metadata,
-    set_alerts_enabled,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,7 +92,6 @@ def _fetch_and_store(account: dict) -> list[dict]:
             "likes_count": p.likes_count,
             "comments_count": p.comments_count,
             "views_count": p.views_count,
-            "engagement_rate": "",
             "posted_at": p.posted_at,
         }
         for p in posts
@@ -695,39 +693,6 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
             f"{script}"
         )
 
-    def toggle_alerts(platform: str = "instagram", username: str = "", enabled: bool = True) -> str:
-        """
-        Ativa ou desativa alertas proativos para uma conta monitorada.
-        Quando ativado, voce recebe uma notificacao no WhatsApp sempre que a conta
-        postar algo com engajamento muito acima da media.
-
-        Args:
-            platform: Plataforma (instagram, youtube).
-            username: Username da conta monitorada.
-            enabled: True para ativar alertas, False para desativar.
-
-        Returns:
-            Confirmacao.
-        """
-        username = username.lstrip("@").lower().strip()
-        if not username:
-            return "Informe o username da conta."
-
-        account = get_tracked_account_by_username(user_id, platform, username)
-        if not account:
-            return f"@{username} nao esta sendo monitorada. Use track_account primeiro."
-
-        ok = set_alerts_enabled(account["id"], user_id, enabled)
-        if not ok:
-            return "Nao consegui atualizar as configuracoes de alerta."
-
-        if enabled:
-            return (
-                f"Alertas ativados para @{username}! "
-                f"Vou te avisar no WhatsApp quando ela postar algo que bombar."
-            )
-        return f"Alertas desativados para @{username}."
-
     def generate_competitive_report(usernames: str = "", platforms: str = "instagram", format: str = "images", theme: str = "dark", delivery_channel: str = "") -> str:
         """
         Gera um relatorio comparando perfis monitorados.
@@ -907,7 +872,7 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
         for acc in report_data["accounts"]:
             lines.append(
                 f"• @{acc['username']}: {acc['followers']:,} seg. | "
-                f"eng. {acc['engagement_rate']}% | crescimento +{acc['growth_pct']}%"
+                f"eng. {acc['engagement_rate']}%"
             )
 
         if format != "text_images":
@@ -1169,7 +1134,6 @@ def create_social_tools(user_id: str, channel: str = "unknown", notifier=None):
         get_trending_content,
         analyze_posts,
         create_content_script,
-        toggle_alerts,
         toggle_trend_alerts,
         generate_competitive_report,
         view_post_by_url,

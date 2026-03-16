@@ -768,6 +768,12 @@ def create_image_tools(user_id: str, channel: str = "web"):
         if limit_msg:
             return limit_msg
 
+        # Check monthly total budget (hard cap)
+        from src.config.feature_gates import check_monthly_total_budget
+        budget_msg = check_monthly_total_budget(user_id)
+        if budget_msg:
+            return budget_msg
+
         # Apply preset or brand profile
         preset_applied = False
         if preset_name:
@@ -888,6 +894,19 @@ def create_image_tools(user_id: str, channel: str = "web"):
                 "sequential_slides": sequential_slides,
                 "is_edit": is_edit,
             })
+
+            # Log estimated image generation cost
+            try:
+                from src.memory.analytics import log_event as _log_cost
+                num_images = len(slides)
+                _log_cost(
+                    user_id=user_id, channel=effective_channel,
+                    event_type="image_generation", tool_name="gemini_image",
+                    status="queued",
+                    extra_data={"cost_usd": round(0.039 * num_images, 4), "num_images": num_images},
+                )
+            except Exception:
+                pass
 
             canal_label = "WhatsApp" if "whatsapp" in effective_channel else "painel de Imagens na web"
             ref_msg = " usando a imagem enviada como referência" if ref_url else ""

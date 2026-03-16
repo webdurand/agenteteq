@@ -123,23 +123,33 @@ def reconcile_reminders():
         
         for r in active_reminders:
             reminder_id = r["id"]
-            job_id = r.get("apscheduler_job_id")
             trigger_type = r.get("trigger_type")
             config = r.get("trigger_config", {})
-            
-            if job_id and scheduler.get_job(job_id):
+
+            deterministic_id = f"reminder_{reminder_id}"
+            if scheduler.get_job(deterministic_id):
                 continue
-                
+
+            # Limpar job antigo (formato legado) se existir
+            old_job_id = r.get("apscheduler_job_id")
+            if old_job_id and old_job_id != deterministic_id:
+                try:
+                    scheduler.remove_job(old_job_id)
+                    logger.info("Job legado %s removido para reminder %s.", old_job_id, reminder_id)
+                except Exception:
+                    pass
+
             logger.info("Reminder %s (%s) sem job ativo. Recriando...", reminder_id, trigger_type)
-            
+
             user_tz_str = config.get("timezone", "America/Sao_Paulo")
             user_tz = zoneinfo.ZoneInfo(user_tz_str)
-            
+
             job = None
+
             if trigger_type == "date":
                 run_date_str = config.get("run_date")
                 minutes_from_now = config.get("minutes_from_now")
-                
+
                 run_dt = None
                 if run_date_str:
                     run_dt = datetime.fromisoformat(run_date_str) if isinstance(run_date_str, str) else run_date_str
@@ -152,16 +162,18 @@ def reconcile_reminders():
                         if created_at.tzinfo is None:
                             created_at = created_at.replace(tzinfo=timezone.utc)
                         run_dt = created_at + timedelta(minutes=minutes_from_now)
-                
+
                 if run_dt:
                     if run_dt <= datetime.now(timezone.utc):
                         logger.info("Reminder %s 'date' ja passou da hora. Disparando agora...", reminder_id)
                         run_dt = datetime.now(timezone.utc) + timedelta(seconds=5)
-                        
+
                     job = scheduler.add_job(
                         dispatch_proactive_message,
                         trigger="date",
                         run_date=run_dt,
+                        id=deterministic_id,
+                        replace_existing=True,
                         kwargs={"reminder_id": reminder_id},
                         misfire_grace_time=300,
                     )
@@ -175,6 +187,8 @@ def reconcile_reminders():
                             trigger="cron",
                             minute=parts[0], hour=parts[1], day=parts[2], month=parts[3], day_of_week=parts[4],
                             timezone=user_tz,
+                            id=deterministic_id,
+                            replace_existing=True,
                             kwargs={"reminder_id": reminder_id},
                             misfire_grace_time=300,
                         )
@@ -185,6 +199,8 @@ def reconcile_reminders():
                         dispatch_proactive_message,
                         trigger="interval",
                         minutes=interval_minutes,
+                        id=deterministic_id,
+                        replace_existing=True,
                         kwargs={"reminder_id": reminder_id},
                         misfire_grace_time=300,
                     )

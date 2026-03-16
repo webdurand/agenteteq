@@ -1,4 +1,6 @@
+import json
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -182,6 +184,8 @@ def get_tools_summary(user: dict = Depends(require_admin)):
 
 @router.get("/health/summary")
 def get_health_summary(user: dict = Depends(require_admin)):
+    from src.config.feature_gates import get_monthly_total_cost
+
     db_status = "ok"
     try:
         with get_db() as session:
@@ -189,9 +193,137 @@ def get_health_summary(user: dict = Depends(require_admin)):
     except Exception:
         logger.exception("Health check do banco falhou")
         db_status = "error"
+
+    # ── Provider monitoring (last 24h) ────────────────────────────────────
+    providers: dict = {}
+    budget_alerts: list = []
+
+    if db_status == "ok" and not _is_sqlite():
+        try:
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+
+            with get_db() as session:
+                # Fetch all usage_events in last 24h for relevant event types
+                _EVENT_TYPES = [
+                    "rapidapi_call", "apify_call",
+                    "web_search_cost", "llm_usage", "tts_synthesis",
+                ]
+                placeholders = ", ".join(f":t{i}" for i in range(len(_EVENT_TYPES)))
+                params = {f"t{i}": t for i, t in enumerate(_EVENT_TYPES)}
+                params["cutoff"] = cutoff
+                rows = session.execute(text(f"""
+                    SELECT event_type, status, extra_data
+                    FROM usage_events
+                    WHERE event_type IN ({placeholders})
+                      AND created_at >= :cutoff
+                """), params).fetchall()
+
+                # Aggregate counts and costs
+                rapidapi_calls = 0
+                apify_calls = 0
+                social_errors = 0
+                social_cost = 0.0
+                search_cost = 0.0
+                llm_cost = 0.0
+                tts_cost = 0.0
+
+                for row in rows:
+                    evt_type, status, extra_data_raw = row[0], row[1], row[2]
+                    cost = 0.0
+                    if extra_data_raw:
+                        try:
+                            meta = json.loads(extra_data_raw)
+                            cost = float(meta.get("cost_usd", 0.0) or 0.0)
+                        except (ValueError, TypeError):
+                            pass
+
+                    if evt_type == "rapidapi_call":
+                        rapidapi_calls += 1
+                        social_cost += cost
+                        if status == "error":
+                            social_errors += 1
+                    elif evt_type == "apify_call":
+                        apify_calls += 1
+                        social_cost += cost
+                        if status == "error":
+                            social_errors += 1
+                    elif evt_type == "web_search_cost":
+                        search_cost += cost
+                    elif evt_type == "llm_usage":
+                        llm_cost += cost
+                    elif evt_type == "tts_synthesis":
+                        tts_cost += cost
+
+                total_social = rapidapi_calls + apify_calls
+                fallback_rate = (
+                    f"{(apify_calls / total_social * 100):.1f}%"
+                    if total_social > 0 else "0.0%"
+                )
+
+                # Determine social provider status
+                if social_errors == 0:
+                    social_status = "healthy"
+                elif total_social > 0 and social_errors / total_social < 0.5:
+                    social_status = "degraded"
+                else:
+                    social_status = "error" if total_social > 0 else "healthy"
+
+                providers = {
+                    "social": {
+                        "primary": "rapidapi",
+                        "fallback": "apify",
+                        "last_24h": {
+                            "rapidapi_calls": rapidapi_calls,
+                            "apify_fallback_calls": apify_calls,
+                            "fallback_rate": fallback_rate,
+                            "total_cost_usd": round(social_cost, 4),
+                            "errors": social_errors,
+                        },
+                        "status": social_status,
+                    },
+                    "search": {
+                        "active": os.getenv("SEARCH_PROVIDER", "duckduckgo"),
+                        "cost_24h": round(search_cost, 4),
+                    },
+                    "llm": {
+                        "active": os.getenv("LLM_MODEL", "gemini-2.5-flash"),
+                        "cost_24h": round(llm_cost, 4),
+                    },
+                    "tts": {
+                        "active": os.getenv("TTS_PROVIDER", "gemini"),
+                        "cost_24h": round(tts_cost, 4),
+                    },
+                }
+
+                # ── Budget alerts (users above 80% of monthly limit) ──────
+                active_user_rows = session.execute(text("""
+                    SELECT DISTINCT user_id
+                    FROM usage_events
+                    WHERE created_at >= :cutoff
+                """), {"cutoff": cutoff}).fetchall()
+
+                for r in active_user_rows:
+                    uid = r[0]
+                    try:
+                        used, budget = get_monthly_total_cost(uid)
+                        if budget > 0 and used / budget >= 0.8:
+                            budget_alerts.append({
+                                "user_id": uid,
+                                "used_usd": round(used, 4),
+                                "budget_usd": round(budget, 4),
+                                "pct": round(used / budget * 100, 1),
+                            })
+                    except Exception:
+                        logger.debug("Budget check failed for user %s", uid)
+
+        except Exception:
+            logger.exception("Health summary: provider monitoring failed")
+
     return {
         "status": "online" if db_status == "ok" else "degraded",
         "database": db_status,
+        "providers": providers,
+        "budget_alerts": budget_alerts,
     }
 
 
@@ -456,12 +588,13 @@ _COST_USD = {
     "voice_live_per_min": 0.045,     # áudio in/out via gemini-2.5-flash-native-audio
     "tts_per_synthesis": 0.002,      # ~200 tokens text in + 500 tokens audio out
     "image_per_unit": 0.039,         # gemini-3-pro-image-preview por imagem gerada
-    "search_per_call": 0.0,          # DuckDuckGo (padrão) é grátis
+    "search_per_call": 0.0,          # DuckDuckGo é grátis (Tavily seria 0.01)
     "deep_research_per_call": 0.025, # ~5 chamadas flash (decisor + pesquisadores)
     "whisper_per_minute": 0.006,     # OpenAI Whisper transcrição
-    "apify_per_run": 0.07,           # Apify Instagram scraping (média profile+posts)
+    "apify_per_run": 0.10,           # Apify Instagram scraping (só posts, sem profile)
+    "rapidapi_per_call": 0.003,      # RapidAPI Instagram scraper (primário)
     "cloudinary_per_gb": 0.01,       # Cloudinary storage/bandwidth
-    "whatsapp_per_message": 0.005,   # Meta WhatsApp Cloud API (média)
+    "whatsapp_per_message": 0.0,     # Evolution API self-hosted (custo fixo servidor)
 }
 _USD_TO_BRL = 5.80
 

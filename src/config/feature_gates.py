@@ -304,6 +304,37 @@ def _sum_llm_cost_monthly(user_id: str) -> float:
     return round(total, 4)
 
 
+_COST_EVENT_TYPES = (
+    "llm_usage", "whisper_transcription", "apify_call", "rapidapi_call",
+    "cloudinary_upload", "web_search_cost", "image_generation",
+    "tts_synthesis", "voice_live_session",
+)
+
+
+def _sum_total_cost_monthly(user_id: str) -> float:
+    """Soma TODOS os custos rastreados (USD) no mes corrente."""
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    with get_db() as session:
+        rows = (
+            session.query(UsageEvent.extra_data)
+            .filter(
+                UsageEvent.user_id == user_id,
+                UsageEvent.event_type.in_(_COST_EVENT_TYPES),
+                UsageEvent.created_at >= month_start,
+            )
+            .all()
+        )
+    total = 0.0
+    for (ed,) in rows:
+        try:
+            meta = json.loads(ed) if ed else {}
+            total += meta.get("cost_usd", 0) or 0
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return round(total, 4)
+
+
 def check_monthly_llm_budget(user_id: str) -> bool:
     """Retorna True se o budget mensal de LLM foi excedido (soft warning, nao bloqueia)."""
     plan = get_user_plan(user_id)
@@ -314,6 +345,39 @@ def check_monthly_llm_budget(user_id: str) -> bool:
         return False
     used = _sum_llm_cost_monthly(user_id)
     return used >= budget
+
+
+def check_monthly_total_budget(user_id: str) -> Optional[str]:
+    """
+    Hard limit: retorna mensagem de erro se o budget mensal TOTAL foi excedido.
+    Bloqueia novas ações quando o custo total (LLM + imagens + TTS + voz + busca + etc)
+    ultrapassa max_total_cost_monthly_usd.
+    """
+    plan = get_user_plan(user_id)
+    if plan.get("_is_admin"):
+        return None
+    budget = float(_get_limit(plan, "max_total_cost_monthly_usd", 0))
+    if budget <= 0:
+        return None
+    used = _sum_total_cost_monthly(user_id)
+    if used >= budget:
+        return (
+            f"Voce atingiu seu limite mensal de uso da plataforma "
+            f"(${used:.2f}/${budget:.2f} USD). "
+            f"Seu limite reseta no proximo mes. "
+            f"Faca upgrade para continuar usando!"
+        )
+    return None
+
+
+def get_monthly_total_cost(user_id: str) -> tuple[float, float]:
+    """Retorna (custo_usado, budget_limite) para o mes corrente."""
+    plan = get_user_plan(user_id)
+    if plan.get("_is_admin"):
+        return 0.0, 999999.0
+    budget = float(_get_limit(plan, "max_total_cost_monthly_usd", 0))
+    used = _sum_total_cost_monthly(user_id)
+    return used, budget
 
 
 # ---------------------------------------------------------------------------
@@ -396,10 +460,17 @@ _MONTHLY_MINUTE_FEATURES = {
 }
 
 _MONTHLY_BUDGET_FEATURES = {
+    "max_total_cost_monthly_usd": {
+        "key": "total_budget",
+        "label": "Orçamento mensal total",
+        "unit": "USD",
+        "sum_fn": "_sum_total_cost_monthly",
+    },
     "max_llm_cost_monthly_usd": {
         "key": "llm_budget",
         "label": "Orçamento mensal de IA",
         "unit": "USD",
+        "sum_fn": "_sum_llm_cost_monthly",
     },
 }
 
@@ -511,7 +582,11 @@ def get_all_usage_summary(user_id: str) -> dict:
             "period": "monthly",
         }
 
-    # Monthly budget features (LLM cost)
+    # Monthly budget features (LLM cost + total cost)
+    _sum_fns = {
+        "_sum_llm_cost_monthly": _sum_llm_cost_monthly,
+        "_sum_total_cost_monthly": _sum_total_cost_monthly,
+    }
     for config_key, meta in _MONTHLY_BUDGET_FEATURES.items():
         fkey = meta["key"]
         label = meta["label"]
@@ -522,7 +597,8 @@ def get_all_usage_summary(user_id: str) -> dict:
             continue
 
         budget = float(_get_limit(plan, config_key, 0))
-        used_cost = round(_sum_llm_cost_monthly(user_id), 2)
+        sum_fn = _sum_fns.get(meta.get("sum_fn", ""), _sum_llm_cost_monthly)
+        used_cost = round(sum_fn(user_id), 2)
         remaining_cost = max(0, round(budget - used_cost, 2))
         features[fkey] = {
             "enabled": budget > 0,
@@ -614,19 +690,30 @@ def get_limits_context(user_id: str) -> str:
         else:
             parts.append(f"{meta['label']}: {remaining}/{limit}min restantes")
 
-    # Monthly LLM budget (soft warning)
-    budget = float(_get_limit(plan, "max_llm_cost_monthly_usd", 0))
-    if budget > 0:
-        llm_cost = _sum_llm_cost_monthly(user_id)
-        if llm_cost >= budget:
+    # Monthly total budget (HARD LIMIT)
+    total_budget = float(_get_limit(plan, "max_total_cost_monthly_usd", 0))
+    if total_budget > 0:
+        total_cost = _sum_total_cost_monthly(user_id)
+        if total_cost >= total_budget:
             parts.append(
-                f"Orcamento mensal de IA: EXCEDIDO (${llm_cost:.2f}/${budget:.2f}). "
-                "Avise o usuario de forma natural que o limite mensal de IA foi atingido, "
-                "mas como estamos em fase de testes e o Durand e legal, pode continuar usando normalmente."
+                f"Orcamento mensal TOTAL: LIMITE ATINGIDO (${total_cost:.2f}/${total_budget:.2f}). "
+                "O usuario NAO pode usar funcionalidades que geram custo ate o proximo mes. "
+                "Informe de forma gentil e sugira upgrade."
             )
             any_hit = True
-        elif llm_cost / budget >= 0.8:
-            parts.append(f"Orcamento mensal de IA: ${llm_cost:.2f}/${budget:.2f} (quase no limite)")
+        elif total_budget > 0 and total_cost / total_budget >= 0.8:
+            parts.append(f"Orcamento mensal total: ${total_cost:.2f}/${total_budget:.2f} (⚠️ quase no limite)")
+            any_near = True
+
+    # Monthly LLM budget (informativo, dentro do total)
+    llm_budget = float(_get_limit(plan, "max_llm_cost_monthly_usd", 0))
+    if llm_budget > 0:
+        llm_cost = _sum_llm_cost_monthly(user_id)
+        if llm_cost >= llm_budget:
+            parts.append(f"Orcamento de IA: ${llm_cost:.2f}/${llm_budget:.2f} (excedido)")
+            any_hit = True
+        elif llm_budget > 0 and llm_cost / llm_budget >= 0.8:
+            parts.append(f"Orcamento de IA: ${llm_cost:.2f}/${llm_budget:.2f} (quase no limite)")
             any_near = True
 
     # Disabled features worth mentioning

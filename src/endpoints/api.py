@@ -173,8 +173,9 @@ async def api_get_reminders(
         for r in reminders:
             job_id = r.get("apscheduler_job_id")
             r["next_run_str"] = None
-            if job_id and r.get("status") == "active":
-                job = scheduler.get_job(job_id)
+            if r.get("status") == "active":
+                deterministic_id = f"reminder_{r['id']}"
+                job = scheduler.get_job(deterministic_id) or (scheduler.get_job(job_id) if job_id else None)
                 if job and job.next_run_time:
                     next_dt = job.next_run_time.astimezone(user_tz)
                     r["next_run_str"] = next_dt.isoformat()
