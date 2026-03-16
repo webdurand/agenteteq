@@ -582,34 +582,8 @@ def get_all_usage_summary(user_id: str) -> dict:
             "period": "monthly",
         }
 
-    # Monthly budget features (LLM cost + total cost)
-    _sum_fns = {
-        "_sum_llm_cost_monthly": _sum_llm_cost_monthly,
-        "_sum_total_cost_monthly": _sum_total_cost_monthly,
-    }
-    for config_key, meta in _MONTHLY_BUDGET_FEATURES.items():
-        fkey = meta["key"]
-        label = meta["label"]
-        unit = meta.get("unit", "USD")
-
-        if is_admin:
-            features[fkey] = {"enabled": True, "limit": -1, "used": 0, "remaining": -1, "label": label, "unlimited": True}
-            continue
-
-        budget = float(_get_limit(plan, config_key, 0))
-        sum_fn = _sum_fns.get(meta.get("sum_fn", ""), _sum_llm_cost_monthly)
-        used_cost = round(sum_fn(user_id), 2)
-        remaining_cost = max(0, round(budget - used_cost, 2))
-        features[fkey] = {
-            "enabled": budget > 0,
-            "limit": budget,
-            "used": used_cost,
-            "remaining": remaining_cost,
-            "label": label,
-            "unit": unit,
-            "period": "monthly",
-            "budget_exceeded": used_cost >= budget if budget > 0 else False,
-        }
+    # Monthly budget features — internal only, NOT exposed to user UI.
+    # The hard cap (check_monthly_total_budget) still enforces limits server-side.
 
     # Monthly resets_at (1o dia do proximo mes)
     next_month = (now.replace(day=28) + timedelta(days=4)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
