@@ -762,15 +762,9 @@ def create_image_tools(user_id: str, channel: str = "web"):
             Mensagem de confirmação imediata.
         """
         from src.tools.image_generation.base import resolve_aspect_ratio
-        from src.queue.task_queue import check_daily_limit
+        from src.config.feature_gates import check_budget
 
-        limit_msg = check_daily_limit(user_id)
-        if limit_msg:
-            return limit_msg
-
-        # Check monthly total budget (hard cap)
-        from src.config.feature_gates import check_monthly_total_budget
-        budget_msg = check_monthly_total_budget(user_id)
+        budget_msg = check_budget(user_id)
         if budget_msg:
             return budget_msg
 

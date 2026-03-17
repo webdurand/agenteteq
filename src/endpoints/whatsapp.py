@@ -25,7 +25,7 @@ from src.tools.memory_manager import add_memory
 from src.memory.analytics import log_event, log_agent_tools, log_run_metrics
 from src.db.session import get_db
 from src.db.models import ProcessedMessage, MessageBuffer
-from src.config.feature_gates import check_daily_feature_limit, log_feature_usage
+from src.config.feature_gates import check_budget
 
 router = APIRouter()
 
@@ -426,8 +426,8 @@ async def orchestrate_message(event: dict):
 async def process_aggregated_message(from_number: str, message_id: str, event: dict, agent, injection: str | None = None):
     start_time = time.time()
 
-    # Enforcement: limite diario de mensagens WhatsApp
-    limit_msg = check_daily_feature_limit(from_number, "max_whatsapp_messages_daily")
+    # Enforcement: budget mensal
+    limit_msg = check_budget(from_number)
     if limit_msg:
         if not _is_test_number(from_number):
             try:
@@ -449,8 +449,6 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
             "image_count": len(images),
         },
     )
-    log_feature_usage(from_number, "max_whatsapp_messages_daily", channel="whatsapp")
-
     if len(images) > 10:
         try:
             if not _is_test_number(from_number):
@@ -478,13 +476,12 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
             agent_audios.append(Audio(content=a_bytes))
     else:
         for a_bytes in audio_bytes_list:
-            # Enforcement: limite diario de transcricoes
-            audio_limit_msg = check_daily_feature_limit(from_number, "max_audio_transcriptions_daily")
+            # Enforcement: budget mensal
+            audio_limit_msg = check_budget(from_number)
             if audio_limit_msg:
                 texts += f"\n\n[Audio nao transcrito: {audio_limit_msg}]"
                 continue
             transcript = await transcriber.transcribe(a_bytes, user_id=from_number)
-            log_feature_usage(from_number, "max_audio_transcriptions_daily", channel="whatsapp")
             texts += f"\n\n[Áudio transcrito]: {transcript}"
 
     image_bytes_list = []

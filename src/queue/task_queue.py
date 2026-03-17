@@ -48,7 +48,11 @@ def get_usage_status(user_id: str) -> dict:
     }
 
     if _is_admin:
-        status["context"] = get_limits_context(user_id)
+        try:
+            status["context"] = get_limits_context(user_id)
+        except Exception as e:
+            logger.error("Erro ao gerar limits context para admin: %s", e)
+            status["context"] = "[STATUS LIMITES: Admin, sem limites]"
         return status
 
     max_daily = get_plan_limit(user_id, "max_tasks_per_user_daily", 5)
@@ -75,7 +79,11 @@ def get_usage_status(user_id: str) -> dict:
         else:
             status["limit_message"] = f"Limite diário de {max_daily} gerações atingido. Tente novamente amanhã!"
 
-    status["context"] = get_limits_context(user_id)
+    try:
+        status["context"] = get_limits_context(user_id)
+    except Exception as e:
+        logger.error("Erro ao gerar limits context: %s", e)
+        status["context"] = "[STATUS LIMITES: erro ao calcular]"
     return status
 
 
@@ -90,36 +98,15 @@ def get_usage_context(user_id: str) -> str:
 
 def check_daily_limit(user_id: str) -> Optional[str]:
     """
-    Verifica se o usuário atingiu o limite diário de runs.
-    Retorna mensagem de erro se atingiu, None se pode prosseguir.
-    Seta um flag thread-safe que _process_text pode ler para enviar resposta determinística.
+    Verifica se o usuário tem budget disponível para gerar imagens.
+    Retorna mensagem de erro se esgotado, None se pode prosseguir.
     """
-    if is_admin_unlimited(user_id):
-        return None
-
-    plan_type = get_user_plan_type(user_id)
-    max_daily = get_plan_limit(user_id, "max_tasks_per_user_daily", 5)
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-
-    with get_db() as session:
-        daily = session.query(func.count(BackgroundTask.id)).filter(
-            BackgroundTask.user_id == user_id,
-            BackgroundTask.created_at >= cutoff,
-        ).scalar()
-
-    if daily >= max_daily:
-        if plan_type in ("trial", "free"):
-            message = (
-                f"Poxa, seu limite de {max_daily} gerações de hoje acabou no plano gratuito. "
-                "Mas você pode virar Premium agora e repor seu limite!"
-            )
-        else:
-            message = f"Limite diário de {max_daily} gerações atingido. Tente novamente amanhã!"
-
-        set_limit_flag(user_id, {"message": message, "plan_type": plan_type})
-        return message
-
-    return None
+    from src.config.feature_gates import check_budget
+    msg = check_budget(user_id)
+    if msg:
+        plan_type = get_user_plan_type(user_id)
+        set_limit_flag(user_id, {"message": msg, "plan_type": plan_type})
+    return msg
 
 
 def enqueue_task(user_id: str, task_type: str, channel: str, payload: Dict[str, Any]) -> dict:
@@ -131,7 +118,6 @@ def enqueue_task(user_id: str, task_type: str, channel: str, payload: Dict[str, 
 
         if not _is_admin:
             max_concurrent = get_plan_limit(user_id, "max_tasks_per_user", 2)
-            max_daily = get_plan_limit(user_id, "max_tasks_per_user_daily", 5)
 
             concurrent = session.query(func.count(BackgroundTask.id)).filter(
                 BackgroundTask.user_id == user_id,
@@ -141,24 +127,12 @@ def enqueue_task(user_id: str, task_type: str, channel: str, payload: Dict[str, 
             if concurrent >= max_concurrent:
                 return {"status": "limit_reached", "pending_count": concurrent}
 
-            cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-            daily = session.query(func.count(BackgroundTask.id)).filter(
-                BackgroundTask.user_id == user_id,
-                BackgroundTask.created_at >= cutoff,
-            ).scalar()
-
-            if daily >= max_daily:
-                # Mantem comportamento deterministico no websocket: mesmo que o agente
-                # parafraseie o retorno da tool, o frontend recebe o evento limit_reached.
-                if plan_type in ("trial", "free"):
-                    message = (
-                        f"Poxa, seu limite de {max_daily} gerações de hoje acabou no plano gratuito. "
-                        "Mas você pode virar Premium agora e repor seu limite!"
-                    )
-                else:
-                    message = f"Limite diário de {max_daily} gerações atingido. Tente novamente amanhã!"
-                set_limit_flag(user_id, {"message": message, "plan_type": plan_type})
-                return {"status": "daily_limit", "daily_limit": max_daily}
+            # Budget check (replaces daily limit)
+            from src.config.feature_gates import check_budget
+            budget_msg = check_budget(user_id)
+            if budget_msg:
+                set_limit_flag(user_id, {"message": budget_msg, "plan_type": plan_type})
+                return {"status": "budget_exceeded", "message": budget_msg}
 
         cancelled = session.query(BackgroundTask).filter(
             BackgroundTask.user_id == user_id,

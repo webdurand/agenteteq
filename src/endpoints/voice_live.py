@@ -12,7 +12,7 @@ from src.integrations.gemini_live import GeminiLiveClient
 from src.agent.voice_tools import get_voice_tools_for_user, execute_voice_tool
 from src.memory.analytics import log_event
 from src.models.chat_messages import save_message
-from src.config.feature_gates import is_feature_enabled, check_voice_live_minutes, check_monthly_total_budget
+from src.config.feature_gates import is_feature_enabled, check_budget
 from src.utils.privacy import mask_phone
 import logging
 
@@ -102,13 +102,7 @@ async def voice_live_websocket(websocket: WebSocket, token: str = Query(...)):
         await websocket.close(code=1000)
         return
 
-    minutes_msg = check_voice_live_minutes(phone_number)
-    if minutes_msg:
-        await websocket.send_json({"type": "feature_blocked", "feature": "voice_live_minutes", "message": minutes_msg})
-        await websocket.close(code=1000)
-        return
-
-    budget_msg = check_monthly_total_budget(phone_number)
+    budget_msg = check_budget(phone_number)
     if budget_msg:
         await websocket.send_json({"type": "feature_blocked", "feature": "monthly_budget", "message": budget_msg})
         await websocket.close(code=1000)

@@ -12,7 +12,7 @@ from src.tools.web_search import (
     get_search_toolkit,
     get_scraper_toolkit,
 )
-from src.config.feature_gates import check_daily_feature_limit, log_feature_usage
+from src.config.feature_gates import check_budget, is_feature_enabled
 import logging
 
 logger = logging.getLogger(__name__)
@@ -153,13 +153,10 @@ def create_deep_research_tool(notifier: StatusNotifier, user_id: str) -> Callabl
         Para buscas simples e rápidas, prefira a tool web_search.
         """
         logger.info("Iniciando pesquisa sobre: %s", topic)
-        limit_msg = check_daily_feature_limit(user_id, "max_deep_research_daily")
-        if limit_msg:
-            return limit_msg
+        if not is_feature_enabled(user_id, "deep_research_enabled"):
+            return "A pesquisa aprofundada não está disponível no seu plano atual."
 
-        # Check monthly total budget (hard cap)
-        from src.config.feature_gates import check_monthly_total_budget
-        budget_msg = check_monthly_total_budget(user_id)
+        budget_msg = check_budget(user_id)
         if budget_msg:
             return budget_msg
 
@@ -182,7 +179,6 @@ def create_deep_research_tool(notifier: StatusNotifier, user_id: str) -> Callabl
             final_content = initial_results
 
         _save_research_to_memory(topic, final_content, user_id)
-        log_feature_usage(user_id, "max_deep_research_daily")
 
         # Log estimated cost for deep research (includes internal search calls)
         try:

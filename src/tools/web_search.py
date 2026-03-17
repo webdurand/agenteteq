@@ -3,7 +3,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from src.integrations.status_notifier import StatusNotifier
-from src.config.feature_gates import check_daily_feature_limit, log_feature_usage
+from src.config.feature_gates import check_budget
 
 _BLOCKED_DOMAINS = ("instagram.com", "facebook.com", "linkedin.com", "tiktok.com", "x.com", "twitter.com")
 
@@ -169,16 +169,15 @@ def create_web_search_tool(notifier: StatusNotifier, user_id: str = None):
         Apos resultados relevantes, salve os achados com add_memory para referencia futura.
         """
         if user_id:
-            limit_msg = check_daily_feature_limit(user_id, "max_searches_daily")
-            if limit_msg:
-                return limit_msg
+            budget_msg = check_budget(user_id)
+            if budget_msg:
+                return budget_msg
         if notifier:
             notifier.notify("Beleza, vou dar uma olhada e já te respondo!")
         result = web_search_raw(query, max_results, topic=topic, days=days)
         if user_id:
             provider = os.getenv("SEARCH_PROVIDER", "duckduckgo").lower()
             _search_cost = {"duckduckgo": 0.0, "tavily": 0.01, "exa": 0.005, "serper": 0.005, "brave": 0.0}
-            log_feature_usage(user_id, "max_searches_daily")
             try:
                 from src.memory.analytics import log_event
                 log_event(

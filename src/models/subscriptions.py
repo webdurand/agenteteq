@@ -8,45 +8,31 @@ from src.db.models import BillingPlan, Subscription, BillingEvent
 
 
 FREE_LIMITS = {
+    # Budget único mensal (USD, exibido como 0-100%)
+    "monthly_budget_usd": 0.50,
+    # Concurrent task limit (image generation queue)
     "max_tasks_per_user": 2,
-    "max_tasks_per_user_daily": 5,
+    # Feature gates (boolean on/off)
     "voice_live_enabled": False,
-    "voice_live_max_minutes_daily": 0,
     "tts_enabled": False,
-    "max_tts_daily": 0,
-    "max_searches_daily": 5,
-    "max_deep_research_daily": 0,
     "social_monitoring_enabled": False,
-    "max_tracked_accounts": 0,
-    "video_analysis_max_minutes_monthly": 0,
-    "max_messages_daily": 20,
-    "max_whatsapp_messages_daily": 10,
-    "max_audio_transcriptions_daily": 2,
-    "max_images_daily": 3,
-    "max_llm_cost_monthly_usd": 0.50,
-    "max_total_cost_monthly_usd": 0.50,
+    "deep_research_enabled": False,
     "canvas_editor_enabled": False,
+    "max_tracked_accounts": 0,
 }
 
 PAID_LIMITS = {
+    # Budget único mensal (USD, exibido como 0-100%)
+    "monthly_budget_usd": 10.00,
+    # Concurrent task limit (image generation queue)
     "max_tasks_per_user": 5,
-    "max_tasks_per_user_daily": 20,
+    # Feature gates (boolean on/off)
     "voice_live_enabled": True,
-    "voice_live_max_minutes_daily": 10,
     "tts_enabled": True,
-    "max_tts_daily": 30,
-    "max_searches_daily": 30,
-    "max_deep_research_daily": 1,
     "social_monitoring_enabled": True,
-    "max_tracked_accounts": 5,
-    "video_analysis_max_minutes_monthly": 30,
-    "max_messages_daily": 150,
-    "max_whatsapp_messages_daily": 80,
-    "max_audio_transcriptions_daily": 10,
-    "max_images_daily": 15,
-    "max_llm_cost_monthly_usd": 10.00,
-    "max_total_cost_monthly_usd": 10.00,
+    "deep_research_enabled": True,
     "canvas_editor_enabled": False,
+    "max_tracked_accounts": 5,
 }
 
 

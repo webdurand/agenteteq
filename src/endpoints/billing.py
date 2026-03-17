@@ -1,5 +1,6 @@
 import os
 import logging
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from typing import Optional
@@ -308,6 +309,72 @@ def cancel(user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
         
+# ---------------------------------------------------------------------------
+# Budget Add-on: comprar mais limite (R$99,90 avulso)
+# ---------------------------------------------------------------------------
+
+@router.post("/addon")
+def purchase_addon(user: dict = Depends(get_current_user)):
+    """
+    Cria um PaymentIntent para comprar limite adicional (R$99,90).
+    Após confirmação do pagamento, o budget do usuário é ampliado em $10 USD
+    por 30 dias.
+    """
+    import stripe
+
+    customer_id = get_or_create_customer(user)
+    amount_cents = 9990  # R$99,90
+
+    try:
+        intent = stripe.PaymentIntent.create(
+            amount=amount_cents,
+            currency="brl",
+            customer=customer_id,
+            metadata={
+                "user_id": user["phone_number"],
+                "type": "budget_addon",
+                "budget_usd": "10.00",
+            },
+        )
+        return {
+            "client_secret": intent.client_secret,
+            "payment_intent_id": intent.id,
+        }
+    except Exception as e:
+        logger.exception("Erro ao criar PaymentIntent para add-on")
+        raise HTTPException(status_code=500, detail="Erro ao processar pagamento")
+
+
+@router.post("/addon/confirm")
+def confirm_addon(user: dict = Depends(get_current_user)):
+    """
+    Chamado pelo frontend após confirmação do pagamento.
+    Registra o add-on no banco para ampliar o budget.
+    """
+    from datetime import timedelta
+    from src.db.models import BudgetAddOn
+    from src.db.session import get_db
+
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(days=30)
+
+    with get_db() as session:
+        addon = BudgetAddOn(
+            user_id=user["phone_number"],
+            amount_usd=10.00,
+            purchased_at=now.isoformat(),
+            expires_at=expires.isoformat(),
+        )
+        session.add(addon)
+
+    from src.config.feature_gates import get_budget_summary
+    return {
+        "ok": True,
+        "message": "Limite adicionado com sucesso! +100% por 30 dias.",
+        "budget": get_budget_summary(user["phone_number"]),
+    }
+
+
 webhook_router = APIRouter(tags=["webhooks"])
 
 @webhook_router.post("/webhook/stripe")

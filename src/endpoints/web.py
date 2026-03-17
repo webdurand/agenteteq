@@ -12,7 +12,7 @@ def split_into_sentences(text: str) -> list[str]:
 from src.agent.factory import create_agent_with_tools
 from src.agent.response_utils import extract_final_response, parse_interactive_elements
 from src.integrations.tts import get_tts
-from src.config.feature_gates import is_feature_enabled, check_daily_feature_limit, log_feature_usage
+from src.config.feature_gates import is_feature_enabled, check_budget, get_user_plan_type
 from src.memory.identity import get_user, update_user_name, update_last_seen, is_new_session, is_plan_active, get_or_rotate_session
 from src.memory.extractor import extract_and_save_facts
 from src.tools.memory_manager import add_memory
@@ -91,16 +91,23 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     if images_b64 is None:
         images_b64 = []
 
-    # Enforcement: limite diario de mensagens (chat web)
-    limit_msg = check_daily_feature_limit(phone_number, "max_messages_daily")
-    if limit_msg:
-        await websocket.send_json({"type": "response", "text": limit_msg, "done": True})
+    # Enforcement: orcamento mensal
+    try:
+        budget_msg = check_budget(phone_number)
+    except Exception as e:
+        logger.error("[WEB WS] Erro ao verificar budget: %s", e)
+        budget_msg = None
+    if budget_msg:
+        await websocket.send_json({
+            "type": "limit_reached",
+            "message": budget_msg,
+            "plan_type": get_user_plan_type(phone_number),
+        })
         return
 
     start_time = time.time()
     log_event(user_id=phone_number, channel="web", event_type="message_received", status="success",
               extra_data={"mode": mode, "image_count": len(images_b64) if images_b64 else 0})
-    log_feature_usage(phone_number, "max_messages_daily", channel="web")
     
     # Decodificar imagens
     image_bytes_list = []
@@ -208,9 +215,13 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     if new_session:
         prompt = GREETING_INJECTION + "\n\n" + prompt
 
-    usage_status = await asyncio.to_thread(get_usage_status, phone_number)
-    usage_ctx = usage_status.get("context") or await asyncio.to_thread(get_usage_context, phone_number)
-    prompt = f"{usage_ctx}\n\n{prompt}"
+    try:
+        usage_status = await asyncio.to_thread(get_usage_status, phone_number)
+        usage_ctx = usage_status.get("context") or ""
+    except Exception as e:
+        logger.error("[WEB WS] Erro ao obter usage status: %s", e)
+        usage_ctx = ""
+    prompt = f"{usage_ctx}\n\n{prompt}" if usage_ctx else prompt
 
     kwargs = {"knowledge_filters": {"user_id": phone_number}}
     if agent_images:
@@ -320,14 +331,13 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     mime_type = "none"
 
     tts_enabled = is_feature_enabled(phone_number, "tts_enabled")
-    tts_limit_msg = check_daily_feature_limit(phone_number, "max_tts_daily") if tts_enabled else None
-    if mode != "text" and tts_enabled and not tts_limit_msg:
+    tts_budget_msg = check_budget(phone_number) if tts_enabled else None
+    if mode != "text" and tts_enabled and not tts_budget_msg:
         await websocket.send_json({"type": "status", "text": "Gerando áudio..."})
         try:
             audio_out, mime_type = await tts.synthesize(final_text)
             logger.info("[WEB WS] TTS: %s bytes | %s", len(audio_out), mime_type)
             audio_b64 = base64.b64encode(audio_out).decode() if audio_out else ""
-            log_feature_usage(phone_number, "max_tts_daily", channel="web")
             try:
                 log_event(user_id=phone_number, channel="web", event_type="tts_synthesis", tool_name="gemini_tts", status="success", extra_data={"cost_usd": 0.002})
             except Exception:
@@ -335,7 +345,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
         except Exception as e:
             logger.info("[WEB WS] TTS falhou, enviando só texto: %s", e)
             mime_type = "browser"
-    elif mode != "text" and (not tts_enabled or tts_limit_msg):
+    elif mode != "text" and (not tts_enabled or tts_budget_msg):
         mime_type = "browser"
 
     await asyncio.sleep(0)
@@ -583,16 +593,19 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                         extract_and_save_facts, phone_number, "Áudio do usuário", response_content
                     ))
                 else:
-                    # Enforcement: limite diario de transcricoes
-                    audio_limit_msg = check_daily_feature_limit(phone_number, "max_audio_transcriptions_daily")
-                    if audio_limit_msg:
-                        await websocket.send_json({"type": "response", "text": audio_limit_msg, "done": True})
+                    # Enforcement: orcamento mensal (transcricao de audio)
+                    audio_budget_msg = check_budget(phone_number)
+                    if audio_budget_msg:
+                        await websocket.send_json({
+                            "type": "limit_reached",
+                            "message": audio_budget_msg,
+                            "plan_type": get_user_plan_type(phone_number),
+                        })
                         continue
 
                     from src.integrations.transcriber import transcriber
 
                     transcript = await transcriber.transcribe(audio_bytes, filename=f"audio.{audio_fmt}", user_id=phone_number)
-                    log_feature_usage(phone_number, "max_audio_transcriptions_daily", channel="web")
                     await websocket.send_json({"type": "transcript", "text": transcript})
                     await websocket.send_json({"type": "status", "text": "Pensando..."})
 
@@ -659,14 +672,13 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                 audio_b64 = ""
                 mime_type = "audio/wav"
                 tts_ok = is_feature_enabled(phone_number, "tts_enabled")
-                tts_daily_limit = check_daily_feature_limit(phone_number, "max_tts_daily") if tts_ok else None
-                if tts_ok and not tts_daily_limit:
+                tts_budget = check_budget(phone_number) if tts_ok else None
+                if tts_ok and not tts_budget:
                     await websocket.send_json({"type": "status", "text": "Gerando áudio..."})
                     try:
                         audio_out, mime_type = await tts.synthesize(response_content)
                         logger.info("[WEB WS] TTS gerado: %s bytes | mime=%s", len(audio_out), mime_type)
                         audio_b64 = base64.b64encode(audio_out).decode() if audio_out else ""
-                        log_feature_usage(phone_number, "max_tts_daily", channel="web")
                     except Exception as e:
                         logger.info("[WEB WS] TTS falhou, enviando só texto: %s", e)
                         mime_type = "browser"

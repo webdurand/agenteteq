@@ -357,11 +357,23 @@ class Subscription(Base):
             "provider_subscription_id": self.provider_subscription_id,
             "status": self.status,
             "trial_end": self.trial_end,
+            "current_period_start": self.current_period_start,
             "current_period_end": self.current_period_end,
             "cancel_at_period_end": bool(self.cancel_at_period_end),
             "payment_method_summary": self.payment_method_summary,
             "last_invoice_id": self.last_invoice_id,
         }
+
+
+class BudgetAddOn(Base):
+    __tablename__ = "budget_addons"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, nullable=False)
+    amount_usd = Column(Float, nullable=False)
+    purchased_at = Column(String, nullable=False, default=lambda: _utcnow().isoformat())
+    expires_at = Column(String, nullable=False)
+    stripe_payment_id = Column(String)
 
 
 class BillingEvent(Base):
