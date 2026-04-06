@@ -54,7 +54,10 @@ async def process_task_queue():
 
             reference_bytes = None
             ref_url = payload.get("reference_image_url")
-            if ref_url:
+            generation_mode = payload.get("generation_mode", "ai")
+
+            # Only download reference for AI mode (HTML carousel handles its own download)
+            if ref_url and generation_mode != "html":
                 reference_bytes = await _download_image(ref_url)
 
             await _process_image_background(
@@ -67,6 +70,10 @@ async def process_task_queue():
                 task_id=task["id"],
                 sequential_slides=payload.get("sequential_slides", True),
                 is_edit=payload.get("is_edit", False),
+                generation_mode=generation_mode,
+                format=payload.get("format", "1080x1080"),
+                reference_image_url=ref_url,
+                brand_profile=payload.get("brand_profile"),
             )
             if not is_task_cancelled(task["id"]):
                 complete_task(task["id"], {"status": "success", "type": "image"})

@@ -1,8 +1,10 @@
 """
-Unified image generation tool — replaces carousel_generator + image_editor.
+Unified image generation tool — 2 fluxos:
 
-Handles single images, carousels (multi-slide), and image editing via a single
-`generate_image` tool with a `reference_source` parameter.
+1. IMAGEM IA PURA (single/batch) — providers de IA com fallback
+2. CARROSSEL HTML — LLM gera HTML/CSS do zero + Playwright renderiza
+
+Ambos passam por Content Strategist para refinamento de conteúdo.
 """
 
 import asyncio
@@ -13,7 +15,7 @@ from datetime import datetime
 
 import cloudinary.uploader
 
-from src.tools.image_generation import get_image_provider
+from src.tools.image_generation import get_image_provider, get_provider_registry
 from src.tools.image_session import (
     get_session_images,
     store_generated_image,
@@ -30,7 +32,7 @@ _ensure_cloudinary_config()
 
 
 # ---------------------------------------------------------------------------
-# Slide expansion (LLM) — moved from carousel_generator
+# Slide expansion (LLM) — used by voice_tools
 # ---------------------------------------------------------------------------
 
 def expand_slides_from_description(
@@ -40,9 +42,9 @@ def expand_slides_from_description(
     sequential: bool = True,
 ) -> List[Dict[str, str]]:
     """
-    Expande uma descrição simples (vinda do Voice Live) em N prompts detalhados
-    usando Gemini Flash. Retorna lista no formato esperado por generate_image_tool.
-    Quando sequential=True, gera também um style_anchor compartilhado para coerência visual.
+    Expande uma descrição simples em N prompts detalhados usando Gemini Flash.
+    Retorna lista no formato esperado por generate_image_tool.
+    Mantida para compatibilidade com voice_tools.
     """
     import json as _json
     from google import genai
@@ -59,42 +61,17 @@ def expand_slides_from_description(
     if sequential:
         system_prompt = (
             "Voce e um diretor criativo de carrosseis PREMIUM para Instagram. "
-            "Seu trabalho e transformar um tema em um CARROSSEL profissional que conta uma HISTORIA com arco narrativo claro. "
-            "Os textos serao sobrepostos por tipografia profissional — os prompts de imagem devem gerar FUNDOS LIMPOS sem texto."
-            "\n\nESTRUTURA OBRIGATORIA DO CARROSSEL:"
-            "\n- SLIDE 1 (role='capa'): CAPA IMPACTANTE. Titulo bold e chamativo que gera curiosidade. "
-            "Imagem de fundo visualmente forte. O objetivo e fazer a pessoa parar de rolar e abrir o carrossel. "
-            "Exemplos de gancho: 'X coisas que...', 'O segredo de...', 'Pare de fazer isso...', 'Voce nao vai acreditar...'"
-            "\n- SLIDES 2 a N-1 (role='conteudo'): DESENVOLVIMENTO. Cada slide entrega UM ponto de valor. "
-            "Cada slide deve ter um titulo claro e uma mensagem objetiva no body. "
-            "Progridem logicamente: o slide 2 complementa o 1, o 3 complementa o 2, etc."
-            "\n- SLIDE N (role='fechamento'): FECHAMENTO FORTE. CTA (call to action) que gera engajamento. "
-            "Exemplos de CTA: 'Salva pra consultar depois', 'Comenta qual foi sua favorita', 'Manda pra alguem que precisa ver isso'."
-            "\n\nCAMPOS OBRIGATORIOS POR SLIDE:"
-            "\n- 'prompt': descricao da IMAGEM DE FUNDO apenas. NAO inclua texto/tipografia/letras na imagem. "
-            "Inclua SEMPRE no prompt: 'sem texto, sem tipografia, sem letras, imagem de fundo limpa'. "
-            "Para capa: 'composicao com espaco livre no terco inferior para sobreposicao de texto'. "
-            "Para conteudo: 'composicao com espaco livre no topo e centro para sobreposicao de texto'. "
-            "Para fechamento: 'composicao com espaco livre no centro para sobreposicao de texto'."
-            "\n- 'title': texto do titulo que sera sobreposto via tipografia (max 50 chars)"
-            "\n- 'body': texto complementar/explicativo (max 120 chars, opcional para capa)"
-            "\n- 'cta_text': texto do CTA (APENAS no slide de fechamento, max 40 chars)"
-            "\n- 'text_align': alinhamento do texto no slide ('left' ou 'center'). "
-            "Opcional — se omitido, usa default: capa=center, conteudo=left, fechamento=center. "
-            "Use 'left' quando o conteudo e mais editorial/informativo. Use 'center' para impacto visual."
-            "\n\nREGRAS DE DESIGN:"
-            "\n1. Defina 'style_anchor': identidade visual compartilhada DETALHADA (estilo artistico, "
-            "iluminacao, textura, composicao base, atmosfera, angulo de camera) para COERENCIA VISUAL."
-            "\n2. Defina 'color_palette' com 4 cores hex que funcionem juntas como identidade visual: "
-            "primary (fundo de overlays), accent (cor de destaque/CTA), text_primary (cor do texto principal, "
-            "geralmente branco ou preto dependendo do fundo), text_secondary (cor do texto secundario)."
-            "\n3. Os prompts de imagem devem gerar FUNDOS que funcionem juntos como set visual coeso."
-            "\n4. Cada prompt deve descrever a CENA VISUAL especifica, com mesma paleta de cores, iluminacao e estilo."
-            "\n\nResponda SOMENTE com um JSON object, sem markdown, sem explicacao. "
-            "Formato: {"
-            "\"style_anchor\": \"descricao detalhada da identidade visual\", "
+            "Seu trabalho e transformar um tema em um CARROSSEL profissional que conta uma HISTORIA. "
+            "\n\nESTRUTURA OBRIGATORIA:"
+            "\n- SLIDE 1 (role='capa'): CAPA IMPACTANTE com titulo bold."
+            "\n- SLIDES 2 a N-1 (role='conteudo'): DESENVOLVIMENTO com 1 ponto por slide."
+            "\n- SLIDE N (role='fechamento'): CTA forte."
+            "\n\nCAMPOS: prompt (imagem sem texto), title (max 50 chars), body (max 120 chars), "
+            "cta_text (apenas fechamento), style_anchor (identidade visual)."
+            "\n\nResponda SOMENTE com JSON: {"
+            "\"style_anchor\": \"...\", "
             "\"color_palette\": {\"primary\": \"#hex\", \"accent\": \"#hex\", \"text_primary\": \"#hex\", \"text_secondary\": \"#hex\"}, "
-            f"\"slides\": [{{\"slide_number\": 1, \"role\": \"capa\", \"prompt\": \"...\", \"title\": \"...\", \"body\": \"...\", \"text_align\": \"center\", \"style\": \"{style}\"}}]"
+            f"\"slides\": [{{\"slide_number\": 1, \"role\": \"capa\", \"prompt\": \"...\", \"title\": \"...\", \"body\": \"...\", \"style\": \"{style}\"}}]"
             "}"
         )
         temperature = 0.5
@@ -102,9 +79,8 @@ def expand_slides_from_description(
         system_prompt = (
             "Voce e um gerador de prompts para imagens. "
             "Dado um tema e quantidade, gere prompts detalhados e VARIADOS para cada imagem. "
-            "Cada prompt deve descrever uma cena, composicao e elementos visuais especificos. "
-            "Responda SOMENTE com um JSON array, sem markdown, sem explicacao. "
-            f"Formato: [{{\"slide_number\": 1, \"prompt\": \"...\", \"style\": \"{style}\"}}]"
+            "Responda SOMENTE com JSON array: "
+            f"[{{\"slide_number\": 1, \"prompt\": \"...\", \"style\": \"{style}\"}}]"
         )
         temperature = 0.9
 
@@ -131,13 +107,8 @@ def expand_slides_from_description(
                     s["style_anchor"] = style_anchor
                     if color_palette:
                         s["color_palette"] = color_palette
-                logger.info(
-                    "expand_slides_from_description: %s slides (sequential, anchor=%s chars, palette=%s)",
-                    len(slides), len(style_anchor), bool(color_palette),
-                )
                 return slides[:num_slides]
         elif isinstance(parsed, list) and len(parsed) > 0:
-            logger.info("expand_slides_from_description: %s slides expandidos via LLM", len(parsed))
             return parsed[:num_slides]
     except Exception as e:
         logger.warning("expand_slides_from_description fallback (erro LLM): %s", e)
@@ -149,10 +120,145 @@ def expand_slides_from_description(
 
 
 # ---------------------------------------------------------------------------
-# Unified background processor
+# Content Strategist integration
 # ---------------------------------------------------------------------------
 
-async def _process_image_background(
+async def _refine_with_strategist(
+    request_type: str,
+    description: str,
+    slides: Optional[List[Dict[str, Any]]] = None,
+    brand_profile: Optional[Dict[str, Any]] = None,
+    reference_analysis: Optional[Dict[str, Any]] = None,
+    context: Optional[Dict[str, Any]] = None,
+    count: int = 1,
+) -> Dict[str, Any]:
+    """Chama o Content Strategist para refinar conteúdo."""
+    from src.tools.image_generation.content_strategist import refine_content
+
+    return await refine_content(
+        request_type=request_type,
+        description=description,
+        slides=slides,
+        brand_profile=brand_profile,
+        reference_analysis=reference_analysis,
+        context=context,
+        count=count,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Flow 2: HTML Carousel processing
+# ---------------------------------------------------------------------------
+
+async def _process_html_carousel(
+    carousel_id: str,
+    user_id: str,
+    slides: List[Dict[str, Any]],
+    channel: str = "web",
+    format: str = "1080x1080",
+    reference_image_url: Optional[str] = None,
+    brand_profile: Optional[Dict[str, Any]] = None,
+    task_id: Optional[str] = None,
+):
+    """Gera carrossel via HTML/CSS + Playwright."""
+    from src.endpoints.web import ws_manager
+    from src.queue.task_queue import is_task_cancelled
+    from src.tools.carousel_html import CarouselHTMLEngine
+
+    send_web = channel in ("web", "web_voice", "web_text", "web_whatsapp")
+    send_whatsapp = channel in ("whatsapp_text", "whatsapp", "web_whatsapp")
+
+    try:
+        logger.info("HTML carousel %s: iniciando com %d slides (format=%s)", carousel_id, len(slides), format)
+        engine = CarouselHTMLEngine()
+
+        # Download reference image if URL provided
+        reference_bytes = None
+        if reference_image_url:
+            logger.info("HTML carousel %s: baixando referência %s", carousel_id, reference_image_url[:80])
+            reference_bytes = await _download_image(reference_image_url)
+
+        # Generate carousel
+        logger.info("HTML carousel %s: gerando HTML + renderizando...", carousel_id)
+        png_slides = await engine.generate_carousel(
+            slides=slides,
+            reference_image=reference_bytes,
+            reference_url=reference_image_url if not reference_bytes else None,
+            brand=brand_profile,
+            format=format,
+        )
+
+        if task_id and is_task_cancelled(task_id):
+            logger.info("HTML carousel %s cancelado", carousel_id)
+            emit_event_sync(user_id, "carousel_generated")
+            return
+
+        # Upload each slide to Cloudinary
+        updated_slides = []
+        for i, png_bytes in enumerate(png_slides):
+            url = await _upload_image(png_bytes, f"{carousel_id}_slide_{i}", "carousels")
+            slides[i]["image_url"] = url
+            updated_slides.append(slides[i])
+
+            await ws_manager.send_personal_message(user_id, {
+                "type": "slide_done",
+                "carousel_id": carousel_id,
+                "slide_index": i,
+                "total": len(slides),
+            })
+            logger.info("HTML slide %d/%d uploaded: %s", i + 1, len(slides), url)
+
+        update_carousel_status(carousel_id, "done", updated_slides)
+        logger.info("HTML carousel %s finalizado com sucesso", carousel_id)
+        emit_event_sync(user_id, "carousel_generated")
+
+        # Store last image for edit chaining
+        done_slides = [s for s in updated_slides if s.get("image_url")]
+        if done_slides:
+            store_generated_image(user_id, done_slides[-1]["image_url"])
+
+        from src.events_broadcast import emit_action_log
+        label = f"Carrossel HTML ({len(done_slides)} slides)"
+        await emit_action_log(user_id, "Carrossel gerado", label, channel)
+
+        await _notify_user(user_id, channel, carousel_id, updated_slides)
+
+    except Exception as e:
+        import traceback
+        logger.error("Erro no HTML carousel: %s\n%s", e, traceback.format_exc())
+        update_carousel_status(carousel_id, "failed", slides)
+        emit_event_sync(user_id, "carousel_generated")
+
+        fail_msg = "Erro ao gerar o carrossel. Tente novamente em alguns minutos."
+
+        if send_web:
+            try:
+                await ws_manager.send_personal_message(user_id, {
+                    "type": "carousel_failed",
+                    "carousel_id": carousel_id,
+                })
+                from src.models.chat_messages import update_message_by_prefix
+                await asyncio.to_thread(
+                    update_message_by_prefix, user_id,
+                    "__CAROUSEL_GENERATING__",
+                    f"__CAROUSEL_FAILED__{carousel_id}",
+                )
+            except Exception:
+                pass
+
+        if send_whatsapp:
+            try:
+                from src.integrations.whatsapp import whatsapp_client
+                await whatsapp_client.send_text_message(user_id, fail_msg)
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Flow 1: AI Pure image generation (existing logic, refactored)
+# ---------------------------------------------------------------------------
+
+async def _process_ai_images(
     carousel_id: str,
     user_id: str,
     slides: List[Dict[str, Any]],
@@ -164,11 +270,8 @@ async def _process_image_background(
     is_edit: bool = False,
 ):
     """
-    Unified background processor for image generation and editing.
-
-    When ``is_edit`` is True (single-slide edit with reference), uses simpler
-    edit-specific WS events and flow.  Otherwise uses full carousel logic with
-    sequential/parallel generation.
+    Processa geração de imagens via IA (provider registry).
+    Mantém lógica existente de sequential/parallel, overlay, post-processing.
     """
     from src.endpoints.web import ws_manager
     from src.queue.task_queue import is_task_cancelled
@@ -187,6 +290,7 @@ async def _process_image_background(
     # --- Generation / carousel mode ---
     try:
         from src.config.system_config import get_config
+        from PIL import Image, ImageFilter
 
         provider = get_image_provider()
         max_concurrent = int(get_config("max_concurrent_images", "3"))
@@ -258,21 +362,18 @@ async def _process_image_background(
                 return image_bytes
 
         def _post_process_image(image_bytes: bytes) -> bytes:
-            """Aplica sharpening leve e ajuste de contraste/saturação na imagem gerada."""
+            """Aplica sharpening leve e ajuste de contraste/saturação."""
             try:
                 from PIL import ImageEnhance
                 img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-                # Sharpening leve
                 img = img.filter(ImageFilter.UnsharpMask(radius=1.5, percent=80, threshold=3))
-                # Contraste sutil
                 img = ImageEnhance.Contrast(img).enhance(1.08)
-                # Saturação sutil
                 img = ImageEnhance.Color(img).enhance(1.08)
                 buf = io.BytesIO()
                 img.save(buf, format="PNG")
                 return buf.getvalue()
             except Exception as e:
-                logger.warning("Pós-processamento falhou, usando imagem original: %s", e)
+                logger.warning("Pós-processamento falhou: %s", e)
                 return image_bytes
 
         async def _generate_single(slide: Dict[str, Any], index: int, ref: Optional[bytes] = None) -> tuple[bytes, bytes]:
@@ -283,24 +384,9 @@ async def _process_image_background(
                 raw_bytes = await provider.edit(full_prompt, ref, aspect_ratio=aspect_ratio)
             else:
                 raw_bytes = await provider.generate(full_prompt, aspect_ratio=aspect_ratio)
-            # Pós-processamento: sharpening, contraste, saturação
             raw_bytes = _post_process_image(raw_bytes)
             overlaid_bytes = _apply_overlay(slide, index, raw_bytes)
             return overlaid_bytes, raw_bytes
-
-        async def _upload_slide(image_bytes: bytes, index: int) -> str:
-            loop = asyncio.get_event_loop()
-            def _upload():
-                webp_bytes = convert_to_webp(image_bytes)
-                file_obj = io.BytesIO(webp_bytes)
-                return cloudinary.uploader.upload(
-                    file_obj,
-                    folder="carousels",
-                    public_id=f"{carousel_id}_slide_{index}",
-                    overwrite=True,
-                )
-            upload_result = await loop.run_in_executor(None, _upload)
-            return upload_result.get("secure_url")
 
         async def _generate_and_upload(slide: Dict[str, Any], index: int, ref: Optional[bytes] = None):
             async with sem:
@@ -309,7 +395,7 @@ async def _process_image_background(
                     return None, None, None
 
                 overlaid_bytes, raw_bytes = await _generate_single(slide, index, ref)
-                url = await _upload_slide(overlaid_bytes, index)
+                url = await _upload_image(overlaid_bytes, f"{carousel_id}_slide_{index}", "carousels")
                 slide["image_url"] = url
                 logger.info("Slide %s gerado: %s", index + 1, url)
 
@@ -380,7 +466,6 @@ async def _process_image_background(
         logger.info("Geração %s finalizada com sucesso.", carousel_id)
         emit_event_sync(user_id, "carousel_generated")
 
-        # Store last generated image for edit chaining
         done_slides = [s for s in updated_slides if s.get("image_url")]
         if done_slides:
             store_generated_image(user_id, done_slides[-1]["image_url"])
@@ -398,12 +483,12 @@ async def _process_image_background(
         update_carousel_status(carousel_id, "failed", slides)
         emit_event_sync(user_id, "carousel_generated")
 
-        from src.tools.image_generation.nano_banana import QuotaExhaustedError
+        from src.tools.image_generation.providers.nano_banana import QuotaExhaustedError
         is_quota = isinstance(e, QuotaExhaustedError)
         fail_msg = (
-            "⚠️ O limite de geração de imagens foi atingido. Tente novamente em alguns minutos."
+            "O limite de geração de imagens foi atingido. Tente novamente em alguns minutos."
             if is_quota
-            else "❌ Não consegui gerar o carrossel. Tente novamente em alguns minutos."
+            else "Não consegui gerar as imagens. Tente novamente em alguns minutos."
         )
 
         if send_web:
@@ -428,6 +513,64 @@ async def _process_image_background(
             except Exception:
                 pass
 
+
+# ---------------------------------------------------------------------------
+# Unified background processor (routes to Flow 1 or Flow 2)
+# ---------------------------------------------------------------------------
+
+async def _process_image_background(
+    carousel_id: str,
+    user_id: str,
+    slides: List[Dict[str, Any]],
+    channel: str = "web",
+    aspect_ratio: str = "4:3",
+    reference_image: Optional[bytes] = None,
+    task_id: Optional[str] = None,
+    sequential_slides: bool = True,
+    is_edit: bool = False,
+    # New params for routing
+    generation_mode: str = "ai",
+    format: str = "1080x1080",
+    reference_image_url: Optional[str] = None,
+    brand_profile: Optional[Dict[str, Any]] = None,
+):
+    """
+    Unified background processor — routes to appropriate flow.
+
+    generation_mode:
+        - "ai": Flow 1 (AI pure image generation)
+        - "html": Flow 2 (HTML carousel via Playwright)
+        - "hybrid": HTML carousel with AI-generated backgrounds
+    """
+    if generation_mode == "html":
+        await _process_html_carousel(
+            carousel_id=carousel_id,
+            user_id=user_id,
+            slides=slides,
+            channel=channel,
+            format=format,
+            reference_image_url=reference_image_url,
+            brand_profile=brand_profile,
+            task_id=task_id,
+        )
+    else:
+        # Default: AI pure (existing flow)
+        await _process_ai_images(
+            carousel_id=carousel_id,
+            user_id=user_id,
+            slides=slides,
+            channel=channel,
+            aspect_ratio=aspect_ratio,
+            reference_image=reference_image,
+            task_id=task_id,
+            sequential_slides=sequential_slides,
+            is_edit=is_edit,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Edit flow (unchanged from original)
+# ---------------------------------------------------------------------------
 
 async def _process_edit_flow(
     carousel_id: str,
@@ -469,23 +612,13 @@ async def _process_edit_flow(
 
         result_bytes = await provider.edit(edit_prompt, reference_bytes, aspect_ratio=aspect_ratio)
 
-        loop = asyncio.get_event_loop()
-
-        def _upload():
-            webp_bytes = convert_to_webp(result_bytes)
-            file_obj = io.BytesIO(webp_bytes)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            return cloudinary.uploader.upload(
-                file_obj,
-                folder=f"edited_images/{user_id}",
-                public_id=f"edit_{ts}",
-                overwrite=True,
-            )
-
-        upload_result = await loop.run_in_executor(None, _upload)
-        image_url = upload_result.get("secure_url")
-        store_generated_image(user_id, image_url)
-        logger.info("Imagem editada: %s", image_url)
+        url = await _upload_image(
+            result_bytes,
+            f"edit_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}",
+            f"edited_images/{user_id}",
+        )
+        store_generated_image(user_id, url)
+        logger.info("Imagem editada: %s", url)
 
         from src.events_broadcast import emit_action_log
         await emit_action_log(user_id, "Imagem editada", edit_prompt[:100], channel)
@@ -493,12 +626,12 @@ async def _process_edit_flow(
         if send_web:
             await ws_manager.send_personal_message(user_id, {
                 "type": "image_edit_ready",
-                "image_url": image_url,
+                "image_url": url,
                 "prompt": edit_prompt[:100],
             })
             try:
                 from src.models.chat_messages import update_message_by_prefix
-                formatted = f"Pronto! Aqui está a imagem editada:\n{image_url}"
+                formatted = f"Pronto! Aqui está a imagem editada:\n{url}"
                 updated = await asyncio.to_thread(
                     update_message_by_prefix, user_id,
                     "__IMAGE_EDITING__",
@@ -513,20 +646,20 @@ async def _process_edit_flow(
         if send_whatsapp:
             try:
                 from src.integrations.whatsapp import whatsapp_client
-                await whatsapp_client.send_image(user_id, image_url, caption="Aqui está a imagem editada!")
+                await whatsapp_client.send_image(user_id, url, caption="Aqui está a imagem editada!")
             except Exception as e:
                 logger.error("Erro ao enviar imagem via WhatsApp: %s", e)
 
         # Save to gallery
         try:
-            slide_data = [{"prompt": edit_prompt[:200], "style": "Edição de imagem", "image_url": image_url}]
+            slide_data = [{"prompt": edit_prompt[:200], "style": "Edição de imagem", "image_url": url}]
             update_carousel_status(carousel_id, "done", slide_data)
             emit_event_sync(user_id, "carousel_generated")
         except Exception as e:
             logger.error("Erro ao salvar na galeria: %s", e)
 
         from src.integrations.image_storage import index_user_image
-        await asyncio.to_thread(index_user_image, user_id, image_url, f"Imagem editada: {edit_prompt[:200]}")
+        await asyncio.to_thread(index_user_image, user_id, url, f"Imagem editada: {edit_prompt[:200]}")
 
     except Exception as e:
         import traceback
@@ -544,7 +677,7 @@ async def _process_edit_flow(
                 await asyncio.to_thread(
                     update_message_by_prefix, user_id,
                     "__IMAGE_EDITING__",
-                    "❌ Erro ao editar a imagem. Tente novamente.",
+                    "Erro ao editar a imagem. Tente novamente.",
                 )
             except Exception:
                 pass
@@ -552,14 +685,49 @@ async def _process_edit_flow(
             try:
                 from src.integrations.whatsapp import whatsapp_client
                 await whatsapp_client.send_text_message(
-                    user_id, "❌ Eita, deu um erro ao editar a imagem. Tenta de novo!"
+                    user_id, "Eita, deu um erro ao editar a imagem. Tenta de novo!"
                 )
             except Exception:
                 pass
 
 
 # ---------------------------------------------------------------------------
-# Notification helpers
+# Helper functions
+# ---------------------------------------------------------------------------
+
+async def _upload_image(image_bytes: bytes, public_id: str, folder: str) -> str:
+    """Upload image to Cloudinary, converting to WebP."""
+    loop = asyncio.get_event_loop()
+
+    def _upload():
+        webp_bytes = convert_to_webp(image_bytes)
+        file_obj = io.BytesIO(webp_bytes)
+        return cloudinary.uploader.upload(
+            file_obj,
+            folder=folder,
+            public_id=public_id,
+            overwrite=True,
+        )
+
+    upload_result = await loop.run_in_executor(None, _upload)
+    return upload_result.get("secure_url")
+
+
+async def _download_image(url: str) -> Optional[bytes]:
+    """Download image from URL."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            return resp.content
+    except Exception as e:
+        logger.warning("Erro ao baixar imagem %s: %s", url[:80], e)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Notification helpers (unchanged)
 # ---------------------------------------------------------------------------
 
 async def _notify_user(user_id: str, channel: str, carousel_id: str, slides: List[Dict[str, Any]]):
@@ -630,7 +798,7 @@ async def _notify_whatsapp(user_id: str, slides: List[Dict[str, Any]]):
         if total > 1:
             await _send_with_retry(
                 lambda: whatsapp_client.send_text_message(
-                    user_id, f"✅ Suas imagens ficaram prontas! Enviando {total} slides..."
+                    user_id, f"Suas imagens ficaram prontas! Enviando {total} slides..."
                 )
             )
 
@@ -673,7 +841,7 @@ def _send_destination_feedback(user_id: str, origin_channel: str, effective_chan
     send_to_web = effective_channel in ("web_text", "web_whatsapp") and origin_channel not in ("web", "web_voice", "web_text")
 
     label = "imagem" if num_slides == 1 else f"{num_slides} imagens"
-    msg = f"📩 Recebi seu pedido! Gerando {label}, já te mando aqui."
+    msg = f"Recebi seu pedido! Gerando {label}, já te mando aqui."
 
     if send_to_whatsapp:
         try:
@@ -716,50 +884,27 @@ def create_image_tools(user_id: str, channel: str = "web"):
         sequential_slides: bool = True,
         delivery_channel: str = "",
         preset_name: str = "",
+        generation_mode: str = "auto",
+        reference_image_url: str = "",
+        skip_refinement: bool = False,
     ) -> str:
         """
-        Gera ou edita imagens com IA. Pode ser uma imagem única (1 slide), carrossel (N slides)
-        ou edição de foto existente (com reference_source).
-        As imagens são geradas em background e o usuário é notificado ao terminar.
+        Gera imagens ou carrosseis. Imagens sao geradas em background e o usuario e notificado ao terminar.
 
         Args:
-            title: Título descritivo da geração.
-            slides: Lista de dicionários com as chaves:
-                    - 'slide_number': (opcional) número do slide
-                    - 'role': papel narrativo do slide ('capa', 'conteudo' ou 'fechamento')
-                    - 'prompt': descrição detalhada da imagem / instrução de edição
-                    - 'style': estilo visual (ex: Clean/Mockup, Cinemático, Fotorrealista)
-                    - 'style_anchor': (opcional) bloco de identidade visual compartilhado
-                    - 'title': (opcional) texto sobreposto na imagem via tipografia profissional
-                    - 'body': (opcional) texto complementar sobreposto
-                    - 'cta_text': (opcional, só no fechamento) texto de CTA sobreposto
-                    Para EDIÇÃO de foto, basta 1 slide com 'prompt' descrevendo a modificação.
-            format: Formato/dimensão das imagens. Exemplos:
-                    - "1350x1080" → carrossel Instagram landscape (padrão)
-                    - "1080x1080" → quadrado
-                    - "1080x1350" → portrait / feed vertical
-                    - "1080x1920" → stories / reels
-                    - "16:9" → widescreen
-                    - "1:1" → quadrado
-            reference_source: Qual imagem usar como referência para EDIÇÃO.
-                    - "" (vazio, padrão): Gera do zero, sem referência. Use para imagens/carrosseis NOVOS.
-                    - "original": Usa a foto ORIGINAL enviada pelo usuário.
-                      PREFIRA quando o pedido envolve mudança de estilo radical
-                      (ex: "faz mais realista", "muda o estilo", "transforma em cartoon").
-                    - "last_generated": Usa a ÚLTIMA imagem gerada/editada.
-                      Use para ajustes incrementais (ex: "muda o fundo", "adiciona um chapéu").
-                    - "auto": Escolhe automaticamente entre original e última gerada.
-                    SOMENTE preencha quando o usuário EXPLICITAMENTE pedir para editar/modificar uma imagem.
-            sequential_slides: Se True (padrão), gera o slide 1 primeiro e mantém
-                               coerência visual nos demais. Use False para coleções independentes.
-            delivery_channel: DEIXE VAZIO ("") na maioria dos casos — o sistema ja sabe o canal correto.
-                              Preencha APENAS se o USUARIO disser EXPLICITAMENTE 'manda na web',
-                              'envia no zap', 'manda nos dois'. Se nao mencionou, DEIXE VAZIO.
-                              Valores quando necessario: 'whatsapp', 'web', 'ambos'.
-            preset_name: Nome de um preset/template de estilo salvo pelo usuario.
+            title: Titulo descritivo da geracao.
+            slides: Lista de slides. Cada slide: {'role': 'capa|conteudo|fechamento', 'prompt': '...', 'title': '...', 'body': '...', 'cta_text': '...'}
+            format: Dimensao. "1080x1080", "1080x1350", "1080x1920", "1350x1080" (padrao).
+            reference_source: Para edicao de foto: "" (novo), "original", "last_generated", "auto".
+            sequential_slides: True para coerencia visual entre slides.
+            delivery_channel: Deixe vazio. So preencha se usuario pediu canal especifico.
+            preset_name: Nome de preset salvo pelo usuario.
+            generation_mode: "auto" (padrao), "ai" (imagem IA), "html" (carrossel HTML).
+            reference_image_url: URL de referencia visual para o design do carrossel.
+            skip_refinement: True para pular refinamento de conteudo.
 
         Returns:
-            Mensagem de confirmação imediata.
+            Confirmacao ou resultado do refinamento para aprovacao.
         """
         from src.tools.image_generation.base import resolve_aspect_ratio
         from src.config.feature_gates import check_budget
@@ -768,7 +913,62 @@ def create_image_tools(user_id: str, channel: str = "web"):
         if budget_msg:
             return budget_msg
 
-        # Apply preset or brand profile
+        # --- Content Strategist (refinement step) ---
+        if not skip_refinement:
+            # Determine request type
+            if len(slides) > 1:
+                request_type = "carousel"
+            elif len(slides) == 1 and not reference_source:
+                request_type = "single_image"
+            else:
+                request_type = "single_image"
+
+            # Get brand profile
+            brand = _get_user_brand(user_id)
+
+            import asyncio as _aio
+            try:
+                loop = _aio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as pool:
+                        refined = pool.submit(
+                            _aio.run,
+                            _refine_with_strategist(
+                                request_type=request_type,
+                                description=title,
+                                slides=list(slides),
+                                brand_profile=brand,
+                                count=len(slides),
+                            )
+                        ).result()
+                else:
+                    refined = loop.run_until_complete(
+                        _refine_with_strategist(
+                            request_type=request_type,
+                            description=title,
+                            slides=list(slides),
+                            brand_profile=brand,
+                            count=len(slides),
+                        )
+                    )
+            except Exception as e:
+                logger.warning("Content Strategist falhou, continuando sem refinamento: %s", e)
+                refined = None
+
+            if refined and refined.get("changes_summary"):
+                # Return refinement for agent to show to user
+                import json as _json
+                return _json.dumps({
+                    "status": "refinement_ready",
+                    "refined_slides": refined["slides"],
+                    "changes_summary": refined["changes_summary"],
+                    "recommended_flow": refined.get("recommended_flow", "auto"),
+                    "style_anchor": refined.get("style_anchor", ""),
+                    "color_palette": refined.get("color_palette", {}),
+                }, ensure_ascii=False)
+
+        # --- Apply preset or brand profile ---
         preset_applied = False
         if preset_name:
             try:
@@ -790,25 +990,21 @@ def create_image_tools(user_id: str, channel: str = "web"):
                 logger.warning("Erro ao aplicar preset: %s", e)
 
         if not preset_applied:
-            try:
-                from src.models.branding import get_default_brand_profile
-                brand = get_default_brand_profile(user_id)
-                if brand:
-                    brand_palette = {
-                        "primary": brand["bg_color"] or brand["primary_color"],
-                        "accent": brand["accent_color"],
-                        "text_primary": brand["text_primary_color"],
-                        "text_secondary": brand["text_secondary_color"],
-                    }
-                    brand_style = brand.get("style_description", "")
-                    for slide in slides:
-                        if not slide.get("color_palette"):
-                            slide["color_palette"] = brand_palette
-                        if brand_style and not slide.get("style_anchor"):
-                            slide["style_anchor"] = brand_style
-                    logger.info("Branding '%s' aplicado", brand["name"])
-            except Exception as e:
-                logger.warning("Erro ao aplicar branding: %s", e)
+            brand = _get_user_brand(user_id)
+            if brand:
+                brand_palette = {
+                    "primary": brand.get("bg_color") or brand.get("primary_color"),
+                    "accent": brand.get("accent_color"),
+                    "text_primary": brand.get("text_primary_color"),
+                    "text_secondary": brand.get("text_secondary_color"),
+                }
+                brand_style = brand.get("style_description", "")
+                for slide in slides:
+                    if not slide.get("color_palette"):
+                        slide["color_palette"] = brand_palette
+                    if brand_style and not slide.get("style_anchor"):
+                        slide["style_anchor"] = brand_style
+                logger.info("Branding '%s' aplicado", brand.get("name"))
 
         # Resolve delivery_channel override
         effective_channel = channel
@@ -817,8 +1013,8 @@ def create_image_tools(user_id: str, channel: str = "web"):
             resolved = resolve_channel(delivery_channel)
             if resolved and resolved != channel:
                 logger.warning(
-                    "generate_image_tool | CROSS-CHANNEL OVERRIDE | user=%s | origin=%s | requested=%s | resolved=%s",
-                    user_id, channel, delivery_channel, resolved,
+                    "generate_image_tool | CROSS-CHANNEL OVERRIDE | user=%s | origin=%s | resolved=%s",
+                    user_id, channel, resolved,
                 )
                 from src.memory.analytics import log_event
                 log_event(
@@ -828,6 +1024,16 @@ def create_image_tools(user_id: str, channel: str = "web"):
                 )
             if resolved:
                 effective_channel = resolved
+
+        # --- Determine generation mode ---
+        actual_mode = generation_mode
+        if actual_mode == "auto":
+            if reference_source:
+                actual_mode = "ai"  # Edit mode is always AI
+            elif len(slides) > 1:
+                actual_mode = "html"  # Carousel → HTML
+            else:
+                actual_mode = "ai"  # Single image → AI
 
         aspect_ratio = resolve_aspect_ratio(format)
         format_label = format.strip() or "1350x1080"
@@ -861,7 +1067,6 @@ def create_image_tools(user_id: str, channel: str = "web"):
 
             if not ref_url:
                 return "Não encontrei a imagem de referência solicitada."
-
             is_edit = len(slides) == 1
 
         ref_label = (
@@ -870,34 +1075,43 @@ def create_image_tools(user_id: str, channel: str = "web"):
             else "sem referência"
         )
         logger.info(
-            "generate_image_tool | user=%s | channel=%s | effective=%s | format=%s (%s) | %s | title='%s' | slides=%s",
-            user_id, channel, effective_channel, format_label, aspect_ratio,
+            "generate_image_tool | user=%s | mode=%s | channel=%s | effective=%s | format=%s (%s) | %s | title='%s' | slides=%s",
+            user_id, actual_mode, channel, effective_channel, format_label, aspect_ratio,
             ref_label, title, len(slides),
         )
 
         try:
-            carousel_id = create_carousel(user_id, title, slides)
-            logger.info("Registro criado no banco: %s", carousel_id)
+            # Get brand profile for HTML carousel
+            brand_for_html = None
+            if actual_mode == "html":
+                brand_for_html = _get_user_brand(user_id)
+
+            carousel_id = create_carousel(user_id, title, slides, generation_mode=actual_mode)
+            logger.info("Registro criado no banco: %s (mode=%s)", carousel_id, actual_mode)
 
             from src.queue.task_queue import enqueue_task
             result = enqueue_task(user_id, "image", effective_channel, {
                 "carousel_id": carousel_id,
                 "slides": list(slides),
                 "aspect_ratio": aspect_ratio,
-                "reference_image_url": ref_url,
+                "reference_image_url": ref_url or reference_image_url,
                 "sequential_slides": sequential_slides,
                 "is_edit": is_edit,
+                "generation_mode": actual_mode,
+                "format": format_label,
+                "brand_profile": brand_for_html,
             })
 
-            # Log estimated image generation cost
+            # Log cost
             try:
                 from src.memory.analytics import log_event as _log_cost
                 num_images = len(slides)
+                cost = 0.039 * num_images if actual_mode == "ai" else 0.0
                 _log_cost(
                     user_id=user_id, channel=effective_channel,
-                    event_type="image_generation", tool_name="gemini_image",
+                    event_type="image_generation", tool_name=f"{actual_mode}_image",
                     status="queued",
-                    extra_data={"cost_usd": round(0.039 * num_images, 4), "num_images": num_images},
+                    extra_data={"cost_usd": round(cost, 4), "num_images": num_images, "mode": actual_mode},
                 )
             except Exception:
                 pass
@@ -907,7 +1121,6 @@ def create_image_tools(user_id: str, channel: str = "web"):
 
             if result["status"] == "queued":
                 if is_edit:
-                    # Edit mode — WS events handled by _process_edit_flow
                     _send_destination_feedback(user_id, channel, effective_channel, 1)
                     if effective_channel in ("web", "web_voice", "web_text", "web_whatsapp"):
                         return (
@@ -921,7 +1134,7 @@ def create_image_tools(user_id: str, channel: str = "web"):
                         f"Posição {result['position']}. Estimativa: ~{result['estimated_wait']}."
                     )
 
-                # Generation mode (carousel or single image)
+                # Generation mode
                 if effective_channel in ("web", "web_voice", "web_text", "web_whatsapp"):
                     emit_event_sync(user_id, "carousel_generating", {
                         "carousel_id": carousel_id,
@@ -938,7 +1151,7 @@ def create_image_tools(user_id: str, channel: str = "web"):
                         })
                         save_message(user_id, user_id, "agent", placeholder)
                     except Exception as e:
-                        logger.error("Erro ao persistir placeholder de carrossel: %s", e)
+                        logger.error("Erro ao persistir placeholder: %s", e)
 
                 _send_destination_feedback(user_id, channel, effective_channel, len(slides))
 
@@ -948,8 +1161,10 @@ def create_image_tools(user_id: str, channel: str = "web"):
                         "O usuario ja esta vendo o progresso visualmente na interface. "
                         "Responda APENAS se o usuario tiver feito uma pergunta adicional, caso contrario fique em silencio.]"
                     )
+                mode_label = "HTML" if actual_mode == "html" else "IA"
                 return (
-                    f"'{title}' com {len(slides)} {'imagem' if len(slides) == 1 else 'imagens'} na fila ({format_label}{ref_msg}). "
+                    f"'{title}' com {len(slides)} {'imagem' if len(slides) == 1 else 'imagens'} na fila "
+                    f"(modo {mode_label}, {format_label}{ref_msg}). "
                     f"Posição {result['position']}. Estimativa: ~{result['estimated_wait']}. "
                     f"Avisarei pelo {canal_label} quando estiver pronto!"
                 )
@@ -985,3 +1200,12 @@ def create_image_tools(user_id: str, channel: str = "web"):
         return "\n".join(result)
 
     return generate_image_tool, list_gallery_tool
+
+
+def _get_user_brand(user_id: str) -> Optional[Dict[str, Any]]:
+    """Get user's default brand profile."""
+    try:
+        from src.models.branding import get_default_brand_profile
+        return get_default_brand_profile(user_id)
+    except Exception:
+        return None

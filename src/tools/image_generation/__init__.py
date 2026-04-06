@@ -1,15 +1,14 @@
 import os
-from .base import ImageProvider
-from .nano_banana import NanoBananaProvider
+
+# Re-export base classes from new locations for backward compatibility
+from .providers.base import ImageProvider, resolve_aspect_ratio, FORMAT_TO_ASPECT_RATIO
+from .providers.nano_banana import NanoBananaProvider, QuotaExhaustedError
+from .providers import ProviderRegistry, get_provider_registry
+
 
 def get_image_provider() -> ImageProvider:
-    provider_name = os.getenv("IMAGE_PROVIDER", "nano_banana")
-    
-    if provider_name == "nano_banana":
-        return NanoBananaProvider()
-    
-    # Placeholder para futuros providers (ex: openai, fal, replicate)
-    # elif provider_name == "openai":
-    #     return OpenAIImageProvider()
-    
-    raise ValueError(f"Provider de imagem não suportado: {provider_name}")
+    """
+    Retorna o provider padrão. Para fallback automático, use get_provider_registry().
+    Mantido para compatibilidade com código existente.
+    """
+    return get_provider_registry().get_default()

@@ -267,6 +267,9 @@ class Carousel(Base):
     updated_at = Column(String)
     type = Column(String, default="carousel")
     file_url = Column(String)
+    generation_mode = Column(String, default="ai")  # "ai" | "html" | "hybrid"
+    reference_image_url = Column(String, nullable=True)
+    style_analysis = Column(Text, nullable=True)
 
     def to_dict(self) -> dict:
         import json
@@ -283,6 +286,8 @@ class Carousel(Base):
             "updated_at": self.updated_at,
             "type": self.type or "carousel",
             "file_url": self.file_url or "",
+            "generation_mode": self.generation_mode or "ai",
+            "reference_image_url": self.reference_image_url or "",
         }
 
 

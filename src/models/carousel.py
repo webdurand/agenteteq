@@ -16,6 +16,8 @@ def create_carousel(
     title: str,
     slides: list,
     reference_images: list = [],
+    generation_mode: str = "ai",
+    reference_image_url: str = "",
 ) -> str:
     carousel_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
@@ -29,6 +31,8 @@ def create_carousel(
             slides=json.dumps(slides),
             reference_images=json.dumps(reference_images),
             created_at=now,
+            generation_mode=generation_mode,
+            reference_image_url=reference_image_url or None,
         )
         db.add(carousel)
 
