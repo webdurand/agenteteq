@@ -193,6 +193,44 @@ def create_agent_with_tools(
     except Exception as e:
         logger.error("Erro ao carregar Content Planner tools para %s: %s", phone, e)
 
+    # Injeta Video Creation tools
+    video_instructions = []
+    try:
+        from src.tools.video_tools import create_video_tools
+        video_tools_tuple = create_video_tools(phone, channel=channel, notifier=notifier)
+        search_tools.extend(video_tools_tuple)
+        video_instructions.append(
+            "CRIACAO DE VIDEO: O usuario pode criar videos virais (Reels/TikTok/Shorts) via chat. "
+            "O fluxo e: roteiro → geracao de assets → composicao → entrega.\n\n"
+            "TOOLS DISPONIVEIS:\n"
+            "- list_video_templates: Mostra os formatos disponiveis (tutorial, storytelling, listicle, transformation, qa, behind_the_scenes).\n"
+            "- create_video_script(topic, style, duration, reference_account): Gera roteiro estruturado com hook viral, "
+            "open loops, arco emocional, legendas, movimentos e B-roll. SEMPRE mostre o roteiro ao usuario antes de gerar o video.\n"
+            "- generate_video(script_id, source_type, photo_url?, video_url?): Inicia a geracao do video. "
+            "source_type='avatar' usa foto para criar pessoa falando (precisa de photo_url). "
+            "source_type='real' usa video gravado pelo criador (precisa de video_url).\n"
+            "- list_videos: Lista videos gerados.\n"
+            "- adjust_video(video_id, instructions): Pede ajustes em video ja gerado. "
+            "Modifica o roteiro com IA e re-gera o video.\n"
+            "- review_video(video_id): Analisa o video com IA e da nota + sugestoes de melhoria "
+            "(hook, open loops, arco emocional, pacing, legendas, loop, compartilhabilidade).\n"
+            "- add_video_to_calendar(video_id, scheduled_at?, platform?): Adiciona video ao calendario de conteudo.\n\n"
+            "FLUXO RECOMENDADO:\n"
+            "1. Se o usuario pedir um video, PRIMEIRO pergunte o tema e sugira um template.\n"
+            "2. Gere o roteiro com create_video_script e MOSTRE ao usuario.\n"
+            "3. Pergunte se quer ajustar algo no roteiro ou se pode gerar.\n"
+            "4. Se aprovado, pergunte: 'Quer que eu crie um avatar a partir de uma foto sua, "
+            "ou voce vai enviar um video gravado?'\n"
+            "5. Gere com generate_video.\n"
+            "6. Quando o video ficar pronto, OFERECA: 'Quer que eu analise o video? (review_video) "
+            "Ou quer adicionar ao calendario de conteudo? (add_video_to_calendar)'\n\n"
+            "IMPORTANTE: NAO gere video sem mostrar o roteiro antes. "
+            "O usuario DEVE aprovar o roteiro. "
+            "Se o usuario enviar uma referencia de conta monitorada, use reference_account no script."
+        )
+    except Exception as e:
+        logger.error("Erro ao carregar Video tools para %s: %s", phone, e)
+
     # Instruções do Co-Pilot de Conteúdo (Content Intelligence Layer)
     copilot_instructions = [
         "CO-PILOT DE CONTEUDO (Content Intelligence Layer):\n"
@@ -362,7 +400,7 @@ def create_agent_with_tools(
         "NUNCA diga que nao consegue enviar PDF ou imagens pelo WhatsApp — SEMPRE chame a tool."
     ]
 
-    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + canvas_instructions + calendar_instructions + copilot_instructions + interactive_instructions + task_instructions + upsell_instructions + briefing_instructions + repurposing_instructions
+    all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + canvas_instructions + calendar_instructions + video_instructions + copilot_instructions + interactive_instructions + task_instructions + upsell_instructions + briefing_instructions + repurposing_instructions
 
     return get_assistant(
         session_id=session_id,

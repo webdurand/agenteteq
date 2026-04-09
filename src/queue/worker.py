@@ -125,7 +125,95 @@ async def process_task_queue():
                 complete_task(task["id"], {"status": "success", "type": "image_edit"})
             else:
                 logger.info("Task %s cancelada durante processamento, nao marcando como done", task["id"])
-            
+
+        elif task["task_type"] == "video":
+            from src.video.pipeline import run_pipeline
+            payload = task["payload"]
+
+            # Load script: try DB → inline payload → generate on-the-fly
+            import json as _json
+            script = None
+            script_id = payload.get("script_id")
+            topic_fallback = payload.get("topic", "")
+
+            # 1. Try loading from DB
+            if script_id:
+                try:
+                    from src.db.session import get_db
+                    from src.db.models import VideoScript
+                    with get_db() as session:
+                        db_script = session.get(VideoScript, script_id)
+                        if db_script and db_script.script_json:
+                            script = _json.loads(db_script.script_json)
+                            topic_fallback = topic_fallback or db_script.topic or ""
+                            logger.info("Loaded script %s from DB", script_id[:8])
+                        else:
+                            logger.warning("Video script %s not found in DB", script_id[:8])
+                except Exception as e:
+                    logger.warning("Failed to load script %s from DB: %s", script_id[:8], e)
+
+            # 2. Try inline script from payload (fallback when DB save failed)
+            if not script and payload.get("script_json"):
+                try:
+                    script = _json.loads(payload["script_json"]) if isinstance(payload["script_json"], str) else payload["script_json"]
+                    logger.info("Using inline script from payload")
+                except Exception as e:
+                    logger.warning("Failed to parse inline script_json: %s", e)
+
+            # 3. Generate on-the-fly from topic
+            if not script and topic_fallback:
+                logger.info("Generating script on-the-fly for topic: %s", topic_fallback[:50])
+                from src.video.script_generator import generate_script
+                script = generate_script(
+                    topic=topic_fallback,
+                    style=payload.get("style", "tutorial"),
+                    duration=payload.get("duration", 60),
+                )
+
+            if not script or (isinstance(script, dict) and "error" in script):
+                error_detail = script.get("error", "Unknown") if isinstance(script, dict) else "No script_id, no inline script, and no topic provided"
+                raise RuntimeError(f"Could not load/generate script: {error_detail}")
+
+            # Create VideoProject record (ensure table exists)
+            import uuid as _uuid
+            from datetime import datetime as _dt, timezone as _tz
+            from src.db.session import get_db, get_engine
+            from src.db.models import VideoProject, VideoScript
+            try:
+                VideoProject.__table__.create(get_engine(), checkfirst=True)
+                VideoScript.__table__.create(get_engine(), checkfirst=True)
+            except Exception:
+                pass
+
+            project_id = str(_uuid.uuid4())
+            now = _dt.now(_tz.utc).isoformat()
+            with get_db() as session:
+                project = VideoProject(
+                    id=project_id,
+                    user_id=task["user_id"],
+                    script_id=script_id or "",
+                    source_type=payload.get("source_type", "avatar"),
+                    source_url=payload.get("photo_url") or payload.get("video_url") or "",
+                    status="generating_voice",
+                    current_step="generating_voice",
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(project)
+
+            await run_pipeline(
+                user_id=task["user_id"],
+                project_id=project_id,
+                script=script,
+                source_type=payload.get("source_type", "avatar"),
+                source_url=payload.get("photo_url") or payload.get("video_url") or "",
+                channel=task["channel"],
+                voice=payload.get("voice", ""),
+            )
+
+            if not is_task_cancelled(task["id"]):
+                complete_task(task["id"], {"status": "success", "type": "video", "project_id": project_id})
+
     except Exception as e:
         logger.error("Erro ao processar task %s: %s", task['id'], e, exc_info=True)
         final = fail_task(task["id"], str(e))

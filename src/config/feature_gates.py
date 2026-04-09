@@ -102,6 +102,7 @@ _FEATURE_GATES = {
     "social_monitoring_enabled": {"label": "Monitoramento social"},
     "deep_research_enabled": {"label": "Pesquisa profunda"},
     "canvas_editor_enabled": {"label": "Editor Canvas"},
+    "video_creation_enabled": {"label": "Criação de vídeo"},
 }
 
 
@@ -124,6 +125,7 @@ _COST_EVENT_TYPES = (
     "llm_usage", "whisper_transcription", "apify_call", "rapidapi_call",
     "cloudinary_upload", "web_search_cost", "image_generation",
     "tts_synthesis", "voice_live_session",
+    "video_voice", "video_talking_head", "video_broll", "video_render",
 )
 
 

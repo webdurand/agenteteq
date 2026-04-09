@@ -869,3 +869,99 @@ class CanvasSession(Base):
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+
+
+# ──────────────────────────── Video Creation ────────────────────────────
+
+
+class VideoScript(Base):
+    __tablename__ = "video_scripts"
+    __table_args__ = (
+        Index("idx_video_scripts_user", "user_id"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=False)
+    topic = Column(String)
+    style = Column(String)              # template: tutorial, storytelling, listicle, etc.
+    framework = Column(String)          # PAS, BAB, AIDA, STAR
+    duration_target = Column(Integer)   # seconds
+    script_json = Column(Text)          # JSON: {hook, scenes[], cta, config}
+    reference_account = Column(String)
+    created_at = Column(String, default=lambda: _utcnow().isoformat())
+
+    def to_dict(self) -> dict:
+        import json
+        script = {}
+        try:
+            script = json.loads(self.script_json or "{}")
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "topic": self.topic,
+            "style": self.style,
+            "framework": self.framework,
+            "duration_target": self.duration_target,
+            "script": script,
+            "reference_account": self.reference_account,
+            "created_at": self.created_at,
+        }
+
+
+class VideoProject(Base):
+    __tablename__ = "video_projects"
+    __table_args__ = (
+        Index("idx_video_projects_user", "user_id", "status"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=False)
+    script_id = Column(String)
+    source_type = Column(String)        # "avatar" | "real"
+    source_url = Column(String)         # foto ou video upload URL
+    status = Column(String, default="draft")
+    # draft -> generating_voice -> syncing_captions -> generating_avatar ->
+    # generating_broll -> assembling -> encoding -> uploading -> done | failed
+    current_step = Column(String)
+    voice_url = Column(String)
+    captions_json = Column(Text)        # word-level timestamps JSON
+    assets_json = Column(Text)          # {talking_head_url, broll_urls[], overlay_urls[]}
+    video_url = Column(String)          # URL final (Instagram quality)
+    video_url_whatsapp = Column(String) # versao otimizada WhatsApp (<16MB)
+    thumbnail_url = Column(String)
+    share_token = Column(String)        # token para link publico
+    duration = Column(Integer)          # duracao real em segundos
+    cost_cents = Column(Integer, default=0)
+    content_plan_id = Column(Integer)
+    error_message = Column(String)
+    created_at = Column(String, default=lambda: _utcnow().isoformat())
+    updated_at = Column(String, default=lambda: _utcnow().isoformat())
+
+    def to_dict(self) -> dict:
+        import json
+        assets = {}
+        try:
+            assets = json.loads(self.assets_json or "{}")
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "script_id": self.script_id,
+            "source_type": self.source_type,
+            "source_url": self.source_url,
+            "status": self.status,
+            "current_step": self.current_step,
+            "video_url": self.video_url,
+            "video_url_whatsapp": self.video_url_whatsapp,
+            "thumbnail_url": self.thumbnail_url,
+            "share_token": self.share_token,
+            "duration": self.duration,
+            "cost_cents": self.cost_cents,
+            "error_message": self.error_message,
+            "assets": assets,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }

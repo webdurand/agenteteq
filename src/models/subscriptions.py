@@ -18,7 +18,9 @@ FREE_LIMITS = {
     "social_monitoring_enabled": False,
     "deep_research_enabled": False,
     "canvas_editor_enabled": False,
+    "video_creation_enabled": False,
     "max_tracked_accounts": 0,
+    "max_videos_monthly": 0,
 }
 
 PAID_LIMITS = {
@@ -32,7 +34,9 @@ PAID_LIMITS = {
     "social_monitoring_enabled": True,
     "deep_research_enabled": True,
     "canvas_editor_enabled": False,
+    "video_creation_enabled": True,
     "max_tracked_accounts": 5,
+    "max_videos_monthly": 10,
 }
 
 
