@@ -139,19 +139,17 @@ export const TikTokCaptions: React.FC<TikTokCaptionsProps> = ({ captions }) => {
               style={{
                 display: "inline-block",
                 fontFamily: "Inter, Helvetica Neue, Arial, sans-serif",
-                fontSize: 48,
-                fontWeight: 800,
+                fontSize: 52,
+                fontWeight: 900,
                 lineHeight: 1.3,
+                textTransform: "uppercase" as const,
+                letterSpacing: 1,
                 transform: `scale(${scale})`,
-                color: isActive ? "#FFD700" : isPast ? "#FFFFFF" : "rgba(255,255,255,0.6)",
-                backgroundColor: isActive
-                  ? "rgba(0, 0, 0, 0.85)"
-                  : "rgba(0, 0, 0, 0.6)",
-                padding: "4px 10px",
-                borderRadius: 6,
+                color: isActive ? "#FFD700" : isPast ? "#FFFFFF" : "rgba(255,255,255,0.85)",
+                padding: "2px 4px",
                 textShadow: isActive
-                  ? "0 0 8px rgba(255, 215, 0, 0.5)"
-                  : "1px 2px 4px rgba(0, 0, 0, 0.8)",
+                  ? "0 0 12px rgba(255, 215, 0, 0.6), 2px 2px 6px rgba(0, 0, 0, 0.9), -1px -1px 4px rgba(0, 0, 0, 0.7)"
+                  : "2px 2px 6px rgba(0, 0, 0, 0.9), -1px -1px 4px rgba(0, 0, 0, 0.7), 0 0 10px rgba(0, 0, 0, 0.5)",
               }}
             >
               {word.text}

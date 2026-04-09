@@ -61,28 +61,70 @@ def generate_script(
         person_desc = person_description or "a person"
         ai_motion_instruction = f"""
 
-11. IMAGE-TO-VIDEO (MODO AI MOTION - OBRIGATORIO):
-    - Cada cena DEVE ter um campo "i2v_prompt": descricao detalhada em ingles da PESSOA
-      realizando uma ACAO em um CENARIO especifico.
-    - Formato: "[person description] [action] [scenario] [lighting] [camera angle]"
-    - Exemplo: "Professional man in navy blazer presenting confidently in a modern glass office, gesturing with right hand, warm natural lighting, medium shot"
-    - CONSISTENCIA: TODA cena deve descrever a MESMA roupa/aparencia: "{person_desc}"
-    - VARIACAO: mude CENARIOS e ACOES entre cenas, NUNCA mude a aparencia da pessoa.
-    - Inclua "camera_hint" por cena: zoom_in, pan_right, pan_left, tilt_up, dolly_forward, static
-    - O i2v_prompt deve ser em INGLES (Kling AI funciona melhor em ingles).
+=== REGRAS DE GERACAO VISUAL (KLING AI — OBRIGATORIO) ===
 
-12. PERSON_DESCRIPTION:
+Voce TAMBEM e um especialista em prompts para o Kling AI (modelo de geracao de video por IA).
+Cada cena do roteiro vai gerar um video via Kling Image-to-Video: a foto do creator + o prompt = video realista.
+
+11. I2V_PROMPT — COMO ESCREVER PROMPTS CINEMATOGRAFICOS:
+    - Cada cena DEVE ter um campo "i2v_prompt" em INGLES.
+    - O prompt descreve a PESSOA realizando uma ACAO em um CENARIO.
+    - FORMATO: "[appearance] [action/gesture] [setting/environment] [lighting] [camera angle/shot type]"
+    - EXEMPLOS DE PROMPTS BEM ESCRITOS:
+      * "Professional man in navy blazer speaking passionately to camera, gesturing with right hand, in a modern glass office with city skyline view, warm golden hour lighting, medium close-up shot"
+      * "Young entrepreneur sitting at a sleek desk with laptop, leaning forward with intense focus, minimalist white studio with soft diffused lighting, wide angle shot"
+      * "Confident speaker walking through a modern co-working space, making eye contact with camera, natural window light creating soft shadows, smooth tracking shot"
+    - PROMPTS RUINS (evitar):
+      * "a person talking" (muito generico, sem cenario, sem iluminacao)
+      * "man in office" (sem acao, sem detalhes visuais)
+
+12. REGRAS VISUAIS DO KLING:
+    - CONSISTENCIA: TODA cena deve descrever a MESMA roupa/aparencia: "{person_desc}"
+    - VARIACAO: mude CENARIOS, ACOES e ANGULOS entre cenas. NUNCA mude a aparencia.
+    - GESTOS: inclua gestos naturais (pointing, gesturing, leaning, walking, writing)
+    - ILUMINACAO: varie entre golden hour, soft diffused, natural window, studio, backlit
+    - ANGULOS: medium close-up, wide shot, medium shot, close-up, tracking shot
+    - CENARIOS: escritorio moderno, estudio, coworking, sala minimalista, cafe, ar livre
+    - EMOCAO: o prompt deve refletir a emocao da narracao (confident, passionate, serious, excited)
+    - NAO use: texto no cenario, logos, telas de computador com conteudo legivel
+    - "camera_hint" por cena: zoom_in, pan_right, pan_left, tilt_up, dolly_forward, static
+
+13. PERSON_DESCRIPTION:
     - Inclua no topo do JSON: "person_description": "{person_desc}"
-    - Esta descricao e usada para manter consistencia visual entre todas as cenas.
+    - Aparencia fixa usada em TODOS os i2v_prompts para consistencia visual.
 """
 
-    prompt = f"""Voce e um roteirista especialista em videos virais para Instagram Reels, TikTok e YouTube Shorts.
-Seu trabalho e criar roteiros que MAXIMIZAM retencao e compartilhamentos.
+    prompt = f"""Voce e uma equipe de 5 especialistas fundidos em um so:
+1. ROTEIRISTA DE VIDEOS VIRAIS — domina hooks, open loops, Zeigarnik effect, pacing
+2. ESTRATEGISTA DE MARKETING DIGITAL — domina algoritmo Instagram/TikTok 2026, metricas, growth
+3. EDITOR DE VIDEO PROFISSIONAL — domina cortes, transicoes, pacing visual, regra dos 2-4s
+4. NEUROCIENTISTA DE ATENCAO — domina dopamina, FFA (fusiform face area), orienting response, pattern interrupts
+5. ESPECIALISTA EM IA GENERATIVA — domina prompts para Kling AI, descricoes cinematograficas
+
+Seu trabalho: criar roteiros que MAXIMIZAM retencao, compartilhamentos e conversao.
 
 TAREFA: Crie um roteiro de video viral sobre: "{topic}"
 FORMATO: {template['name']} (framework {framework})
 DURACAO: ~{duration} segundos (~{target_words} palavras de narracao)
+IDIOMA DA NARRACAO: Portugues brasileiro (coloquial, direto, como se estivesse falando com um amigo)
 {brand_instruction}{reference_instruction}
+
+=== PRINCIPIOS DE NEUROCIENCIA APLICADA ===
+
+A. DOPAMINA E RETENCAO:
+   - Cada 3-5 segundos o cerebro precisa de um "reward signal" (dado novo, revelacao, mudanca visual)
+   - Open loops ativam o "completion desire" — o cerebro NAO consegue parar sem resolver
+   - Numeros especificos (6.2h, R$847, 3 passos) ativam mais que generalidades ("muito", "varios")
+
+B. PATTERN INTERRUPTS E ATENCAO:
+   - A atencao cai naturalmente a cada 8-12 segundos — PRECISA de pattern interrupt
+   - Tipos: mudanca de cenario, gesto inesperado, dado surpreendente, mudanca de tom de voz
+   - O hook DEVE ativar o orienting response (algo inesperado que forca o cerebro a prestar atencao)
+
+C. FACE PROCESSING (FFA):
+   - O cerebro processa rostos automaticamente — SEMPRE comece com o rosto do creator
+   - Contato visual direto com a camera = sensacao de conversa pessoal = mais engajamento
+   - Gestos com as maos aumentam retencao em 33% (gestos iconicos > gestos ritmicos)
 
 === REGRAS DE ROTEIRIZACAO (OBRIGATORIAS) ===
 
@@ -95,48 +137,63 @@ DURACAO: ~{duration} segundos (~{target_words} palavras de narracao)
      * proof_first: Comeca pelo resultado ("De R$0 a R$50k em 3 meses...")
      * controversy: Desafia crenca do nicho ("Pare de usar hashtags")
    - ABRA um OPEN LOOP no hook: uma promessa/pergunta que SO fecha no final do video.
+   - O hook deve criar TENSAO: "o que vai acontecer?" ou "sera que isso e verdade?"
 
 2. OPEN LOOPS (Efeito Zeigarnik):
    - O cerebro nao consegue parar de assistir com perguntas abertas.
    - Abra Loop 1 no hook (0:00). Abra Loop 2 entre 0:05-0:10 ANTES de fechar Loop 1.
    - Feche loops em sequencia (nunca todos de uma vez). Feche Loop 2 primeiro, Loop 1 por ultimo.
+   - O ultimo loop fecha no callback — isso e o que cria o desejo de reassistir.
 
 3. CURIOSITY GAPS:
    - Use frases que criam lacuna de informacao: "mas tem um detalhe que ninguem fala...", "o que eu descobri vai te surpreender..."
-   - A promessa DEVE ser cumprida no video. Nao exagere (over-teasing = drop-off).
+   - A promessa DEVE ser cumprida no video. Over-teasing = drop-off de 40% na retencao.
+   - Cada curiosity gap deve ter um payoff em ate 15 segundos.
 
 4. ARCO EMOCIONAL ({framework}):
    {"- PAS: Problema (dor) -> Agitacao (consequencias) -> Solucao (alivio)" if framework == "PAS" else ""}{"- BAB: Before (estado ruim) -> After (resultado incrivel) -> Bridge (como chegar la)" if framework == "BAB" else ""}{"- AIDA: Atencao (hook) -> Interesse (dados/fatos) -> Desejo (beneficios) -> Acao (CTA)" if framework == "AIDA" else ""}{"- STAR: Situacao -> Tarefa -> Acao -> Resultado" if framework == "STAR" else ""}
+   - O arco emocional deve ter CONTRASTE: alto-baixo-alto. Monotonia = scroll.
 
-5. PACING:
+5. PACING E RITMO:
    - 170-200 palavras por minuto para Reels.
-   - Mais LENTO (120 WPM) em pontos-chave. Mais RAPIDO (200 WPM) em transicoes.
+   - Mais LENTO (120 WPM) em pontos-chave — cria ENFASE e peso.
+   - Mais RAPIDO (200 WPM) em transicoes — cria URGENCIA e energia.
    - Micro-pausas de 200-400ms apos pontos importantes (marque com [pausa]).
+   - REGRA DE OURO: cada frase deve ter NO MAXIMO 15 palavras. Frases curtas = impacto.
 
-6. CORTES E MOVIMENTOS:
-   - Corte de cena / mudanca visual a cada 2-4 segundos (regra Hormozi/MrBeast).
-   - Pattern interrupt visual a cada 15-25 segundos (troca de cenario, animacao especial).
-   - Tipos de movimento: zoom_in_face, zoom_out, ken_burns, zoom_pulse.
+6. CORTES E MOVIMENTOS DE CAMERA:
+   - Corte de cena / mudanca visual a cada 2-4 segundos (regra MrBeast/Hormozi).
+   - Pattern interrupt visual a cada 15-25 segundos (troca de cenario, zoom dramatico).
+   - Movimentos disponiveis: zoom_in_face, zoom_out, ken_burns, zoom_pulse, whip_pan, drift_right, drift_left, dolly_zoom, static.
+   - Use zoom_in_face nos momentos de ENFASE e revelacao.
+   - Use ken_burns nos momentos de CONTEXTO e storytelling.
+   - Use whip_pan nas TRANSICOES entre ideias.
 
-7. OVERLAYS E B-ROLL:
-   - Cada cena DEVE ter overlay_text (texto na tela) para quem assiste sem som.
-   - Cenas de valor DEVEM ter broll_prompt (descricao de video contextual para gerar por IA).
+7. OVERLAYS E TEXTO NA TELA:
+   - Cada cena DEVE ter overlay_text (texto na tela) — 80% assiste sem som.
+   - O overlay_text deve ser o PONTO-CHAVE da cena (nao a narracao inteira).
+   - MAX 30 caracteres. Use CAPS para impacto. Numeros quando possivel.
+   - Overlay deve COMPLEMENTAR a narracao, nao repetir palavra por palavra.
 
-8. LOOP OPTIMIZATION:
-   - A ULTIMA frase deve reconectar com a PRIMEIRA (callback).
-   - O viewer deve ter impulso de reassistir.
-   - Use uma "callback phrase": repita uma palavra especifica do hook na frase final.
-   - NAO termine com CTA que "quebre" o loop (nada de "me segue" no final).
+8. LOOP OPTIMIZATION (rewatch):
+   - A ULTIMA frase deve reconectar com a PRIMEIRA semanticamente.
+   - O viewer deve ter o impulso de reassistir ("espera, o que ele disse no comeco?").
+   - Use uma "callback phrase": repita uma palavra-chave do hook na frase final.
+   - NAO termine com CTA que "quebre" o loop. O loop > CTA.
 
-9. LEGENDAS (SAFE ZONES):
-   - 80% assiste sem som. Legendas sao OBRIGATORIAS.
-   - Texto principal posicionado entre Y=200-1400px (longe do topo e fundo do Instagram).
-   - Maximo 30 caracteres por linha de overlay_text.
+9. LINGUAGEM E TOM (PORTUGUES BR):
+   - Escreva como se estivesse falando com um amigo inteligente.
+   - Use "voce" (nao "tu" nem "vocês"). Singular, direto, pessoal.
+   - Evite jargoes sem explicacao. Se usar, explique em seguida.
+   - Use contraste linguistico: "nao e X, e Y", "parece Z, mas na verdade..."
+   - Numeros especificos > generalidades: "6.2 horas" > "muitas horas"
 
-10. HOOKS POLARIZANTES (para compartilhamentos):
+10. COMPARTILHAMENTOS (algoritmo 2026):
     - Shares sao o sinal #1 do algoritmo Instagram 2026.
-    - Desafie crencas do nicho (nao pessoas). "Voce nao precisa de X", "X esta morto".
-    - Conteudo opinativo gera 3-5x mais shares que conteudo neutro.
+    - Conteudo que DESAFIA crencas do nicho gera 3-5x mais shares.
+    - Regra 60/40: 60% concorda + 40% discorda = MAXIMO de comentarios/shares.
+    - Emocoes que viralizam (em ordem): AWE > amusement > anger > anxiety > surprise.
+    - Dados surpreendentes geram AWE — o gatilho #1 de viralização (+30% shares).
 {ai_motion_instruction}
 === FORMATO DE SAIDA (JSON ESTRITO) ===
 
@@ -146,31 +203,34 @@ Retorne APENAS o JSON abaixo, sem texto antes ou depois:
   "title": "titulo curto do video (para referencia interna)",{'"person_description": "descricao fixa da aparencia da pessoa para consistencia visual",' if source_type == 'ai_motion' else ''}
   "hook": {{
     "type": "bold_statement|question|pattern_interrupt|proof_first|controversy",
-    "narration": "texto exato da narracao do hook (max 15 palavras)",
-    "on_screen_text": "TEXTO NA TELA (max 30 chars, caps para impacto)",
+    "narration": "texto exato da narracao do hook (max 15 palavras, portugues BR)",
+    "on_screen_text": "TEXTO NA TELA (max 30 chars, CAPS)",
+    "overlay_animation": "scale_pop",
     "movement": "zoom_in_face",
     "duration_s": 3,
-    "open_loop": "descricao do open loop que abre aqui"
+    "open_loop": "descricao do open loop que abre aqui"{(',' + chr(10) + '    "i2v_prompt": "prompt CINEMATOGRAFICO em ingles: [person] [action] [setting] [lighting] [shot type]"') if source_type == 'ai_motion' else ''}
   }},
   "scenes": [
     {{
       "name": "nome_da_cena",
-      "narration": "texto exato da narracao desta cena",
-      "on_screen_text": "TEXTO NA TELA",
-      "movement": "zoom_in_face|zoom_out|ken_burns|zoom_pulse",
-      "broll_prompt": "descricao para gerar video B-roll contextual (ou null se talking head)",{'"i2v_prompt": "prompt em ingles descrevendo a pessoa + acao + cenario (OBRIGATORIO se ai_motion)",' if source_type == 'ai_motion' else ''}
+      "narration": "texto exato da narracao (portugues BR, coloquial, max 15 palavras por frase)",
+      "on_screen_text": "TEXTO NA TELA (max 30 chars)",
+      "overlay_animation": "slide_up|scale_pop|fade_blur|slide_left",
+      "movement": "zoom_in_face|zoom_out|ken_burns|zoom_pulse|whip_pan|drift_right|dolly_zoom",
+      "broll_prompt": "descricao em ingles para gerar B-roll contextual (ou null)",{'"i2v_prompt": "prompt CINEMATOGRAFICO em ingles descrevendo [person] + [action] + [setting] + [lighting] + [shot type]",' if source_type == 'ai_motion' else ''}
       {"" if source_type != "ai_motion" else '"camera_hint": "zoom_in|pan_right|pan_left|tilt_up|dolly_forward|static",'}
       "overlay_image_prompt": "descricao para gerar imagem de contexto (ou null)",
       "duration_s": 8,
-      "sfx": "whoosh|pop|null",
+      "sfx": "whoosh|bass_hit|pop|ding|riser|impact|glitch|null",
       "loop_note": "se esta cena fecha/abre um loop, descreva qual"
     }}
   ],
   "callback": {{
-    "narration": "frase final que reconecta com o hook",
+    "narration": "frase final que reconecta SEMANTICAMENTE com o hook",
     "on_screen_text": "TEXTO FINAL",
+    "overlay_animation": "scale_pop",
     "movement": "zoom_out",
-    "duration_s": 5
+    "duration_s": 5{(',' + chr(10) + '    "i2v_prompt": "prompt cinematografico em ingles para cena final"') if source_type == 'ai_motion' else ''}
   }},
   "config": {{
     "framework": "{framework}",
@@ -184,17 +244,21 @@ Retorne APENAS o JSON abaixo, sem texto antes ou depois:
   }}
 }}
 
-IMPORTANTE:
+REGRAS FINAIS (CRITICAS):
 - A soma de duration_s de TODAS as cenas + hook + callback deve ser ~{duration}s.
 - Total de palavras em narration deve ser ~{target_words}.
 - Cada on_screen_text deve ter MAX 30 caracteres.
+- Cada frase de narracao deve ter MAX 15 palavras.
+- A narracao deve soar NATURAL em portugues BR (como se fosse falada, nao escrita).
+- overlay_animation deve variar: use scale_pop no hook, slide_up nas cenas, fade_blur em revelacoes, slide_left em transicoes.
+- SFX: hook SEMPRE tem bass_hit. Transicoes = whoosh. Revelacoes = bass_hit ou impact. CTA = ding.{' ' + chr(10) + '- CADA i2v_prompt deve ser UNICO: cenarios, iluminacao e acoes DIFERENTES entre cenas.' if source_type == 'ai_motion' else ''}
 - Responda APENAS com o JSON, sem markdown, sem comentarios."""
 
     try:
         from agno.agent import Agent
         agent = Agent(
             model=_get_light_model(),
-            description="Voce e um roteirista de videos virais. Responda APENAS com JSON valido.",
+            description="Voce e uma equipe de 5 especialistas: roteirista viral, estrategista de marketing digital, editor de video, neurocientista de atencao, e especialista em IA generativa. Responda APENAS com JSON valido, sem markdown.",
         )
         result = agent.run(prompt)
         raw = result.content if hasattr(result, "content") else str(result)

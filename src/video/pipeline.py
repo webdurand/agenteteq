@@ -201,32 +201,35 @@ async def run_pipeline(
         scene_clip_urls = {}
 
         if source_type == "ai_motion":
-            # --- AI MOTION: Generate per-scene clips of the user via Kling I2V ---
-            _update_status("generating_scenes")
-            _update_chat_step("generating_scenes")
-            _notify_progress(user_id, channel, "Gerando cenas realistas com IA...")
-
-            # Load avatar (by ID from payload, or active)
+            # --- AI MOTION: Voiceover + I2V scene clips (person in different scenarios) ---
+            # No lip-sync — voiceover plays over cinematographic I2V scenes.
+            # This is the proven viral format: voiceover + dynamic visuals + animated captions.
             avatar_id = script.get("_avatar_id", "")
             avatar = _load_user_avatar(user_id, avatar_id=avatar_id)
             ref_frames = json.loads(avatar.reference_frames or "[]")
             if not ref_frames:
                 raise RuntimeError("Avatar sem frames de referencia. Configure um avatar primeiro.")
 
+            _update_status("generating_scenes")
+            _update_chat_step("generating_scenes")
+            _notify_progress(user_id, channel, "Gerando cenas cinematograficas com IA...")
+
             ref_base64 = await _download_image_as_base64(ref_frames[0])
 
-            # Collect all scenes (hook + scenes + callback) with i2v_prompt
             all_scenes = _collect_all_scenes(script)
-
-            # If script has no i2v_prompt, auto-generate from narration
             if not all_scenes:
                 logger.info("Script has no i2v_prompt — auto-generating from narration")
                 _notify_progress(user_id, channel, "Gerando prompts de cena automaticamente...")
                 all_scenes = _auto_generate_i2v_scenes(script)
 
-            # Generate clips in parallel via VideoProvider
             from src.video.providers import get_video_provider
             provider = get_video_provider()
+
+            total_scenes = len(all_scenes)
+            def _scene_progress(done: int):
+                _notify_progress(user_id, channel,
+                    f"Gerando cena {done}/{total_scenes}...")
+
             scene_clip_urls = await provider.generate_multiple_clips(
                 scenes=all_scenes,
                 reference_image_base64=ref_base64,
@@ -235,7 +238,6 @@ async def run_pipeline(
                 channel=channel,
             )
 
-            # Track cost for successful scenes
             for scene_name, url in scene_clip_urls.items():
                 if url:
                     cost_total += provider.estimate_cost_cents(5)
@@ -460,61 +462,150 @@ def _notify_progress(user_id: str, channel: str, message: str):
 
 def _auto_generate_i2v_scenes(script: dict) -> list[dict]:
     """
-    Auto-generate i2v_prompt for each scene from narration text.
-    Used when script was generated without source_type='ai_motion'.
-    Converts narration into Kling I2V prompts describing person + action + scenario.
+    Auto-generate cinematographic i2v_prompt for each scene using AI.
+    Uses the script's narration, title, and scene context to create
+    detailed Kling I2V prompts (person + action + scenario + lighting + camera).
     """
-    person_desc = script.get("person_description", "a professional person")
-    scenes = []
+    person_desc = script.get("person_description", "")
+    title = script.get("title", "")
 
-    # Scenario variety for visual interest
-    scenarios = [
-        "speaking directly to camera in a modern studio with soft lighting, medium close-up shot",
-        "presenting confidently in a bright modern office, gesturing with hands, medium shot",
-        "talking passionately in a creative workspace, warm natural lighting, medium shot",
-        "explaining with conviction in a minimalist room, soft backlight, close-up shot",
-        "speaking energetically in front of a large screen, professional setting, medium wide shot",
-        "sitting at a desk in a modern home office, natural window light, medium shot",
-        "standing in an open co-working space, dynamic background, medium shot",
-        "walking slowly in a modern hallway, talking to camera, tracking shot",
-    ]
-
-    # Hook
+    # Collect all scenes with their narration
+    raw_scenes = []
     hook = script.get("hook", {})
     if hook.get("narration"):
-        scenes.append({
+        raw_scenes.append({
             "name": "hook",
-            "prompt": f"{person_desc}, {scenarios[0]}",
+            "narration": hook["narration"],
+            "on_screen_text": hook.get("on_screen_text", ""),
             "broll_prompt": hook.get("broll_prompt", ""),
-            "duration": max(5, hook.get("duration_s", 5)),  # Kling min 5s
-            "camera_control": None,  # kling-v2-master doesn't support camera_control
+            "duration_s": hook.get("duration_s", 5),
         })
 
-    # Main scenes
     for i, scene in enumerate(script.get("scenes", [])):
         if scene.get("narration"):
-            scenario = scenarios[(i + 1) % len(scenarios)]
-            scenes.append({
+            raw_scenes.append({
                 "name": scene.get("name", f"scene_{i}"),
-                "prompt": f"{person_desc}, {scenario}",
+                "narration": scene["narration"],
+                "on_screen_text": scene.get("on_screen_text", ""),
                 "broll_prompt": scene.get("broll_prompt", ""),
-                "duration": max(5, scene.get("duration_s", 5)),  # Kling min 5s
-                "camera_control": None,
+                "duration_s": scene.get("duration_s", 5),
             })
 
-    # Callback
     callback = script.get("callback", {})
     if callback.get("narration"):
-        scenes.append({
+        raw_scenes.append({
             "name": "callback",
-            "prompt": f"{person_desc}, {scenarios[0]}",
+            "narration": callback["narration"],
+            "on_screen_text": callback.get("on_screen_text", ""),
             "broll_prompt": callback.get("broll_prompt", ""),
-            "duration": max(5, callback.get("duration_s", 5)),  # Kling min 5s
-            "camera_control": None,  # kling-v2-master doesn't support camera_control
+            "duration_s": callback.get("duration_s", 5),
         })
 
-    logger.info("Auto-generated %d i2v scenes from script narration", len(scenes))
+    if not raw_scenes:
+        return []
+
+    # Use AI to generate cinematographic prompts from narration context
+    try:
+        prompts = _generate_cinematographic_prompts(raw_scenes, person_desc, title)
+    except Exception as e:
+        logger.warning("AI prompt generation failed, using enhanced fallback: %s", e)
+        prompts = _fallback_prompts(raw_scenes, person_desc)
+
+    scenes = []
+    for i, raw in enumerate(raw_scenes):
+        scenes.append({
+            "name": raw["name"],
+            "prompt": prompts.get(raw["name"], prompts.get(f"scene_{i}", "")),
+            "broll_prompt": raw.get("broll_prompt", ""),
+            "duration": max(5, raw["duration_s"]),
+            "camera_control": None,
+        })
+
+    logger.info("Auto-generated %d cinematographic i2v scenes", len(scenes))
     return scenes
+
+
+def _generate_cinematographic_prompts(
+    scenes: list[dict], person_desc: str, title: str,
+) -> dict[str, str]:
+    """Use Gemini to generate cinematographic Kling I2V prompts from script scenes."""
+    import json as _json
+
+    scenes_text = ""
+    for s in scenes:
+        scenes_text += f"- Scene '{s['name']}': narration=\"{s['narration']}\", text=\"{s['on_screen_text']}\"\n"
+
+    prompt = f"""You are a cinematography expert creating prompts for Kling AI Image-to-Video.
+Each prompt will animate a PHOTO of a person into a short video clip (5-10s).
+
+VIDEO TOPIC: {title}
+PERSON APPEARANCE: {person_desc or 'young professional man'}
+
+SCENES TO CREATE PROMPTS FOR:
+{scenes_text}
+
+RULES FOR EACH PROMPT:
+1. Format: "[person description] [specific action/gesture] [detailed setting/environment] [lighting style] [camera angle/movement]"
+2. EVERY scene must have a DIFFERENT setting — office, outdoor, cafe, rooftop, studio, street, park, library, etc.
+3. Actions must be DYNAMIC — walking, gesturing, leaning, writing, pointing, turning, etc. NO static standing.
+4. Match the EMOTION of the narration — confident for bold claims, thoughtful for explanations, excited for reveals.
+5. Lighting must VARY — golden hour, soft diffused, dramatic backlight, natural window, neon ambient, etc.
+6. Camera angles must VARY — medium close-up, wide shot, tracking shot, low angle, over-shoulder, etc.
+7. Each prompt must be 1-2 sentences in ENGLISH.
+8. Do NOT include text, logos, UI elements, or screens with readable content.
+9. Make it CINEMATIC — think movie quality, not corporate video.
+
+EXAMPLES OF GREAT PROMPTS:
+- "Young man in dark blazer walking confidently through a sunlit modern city street, gesturing while explaining, golden hour warm light casting long shadows, smooth tracking shot from side angle"
+- "Professional creator leaning forward at a sleek minimalist desk, pointing at camera with conviction, soft diffused studio lighting with subtle blue accent, medium close-up"
+- "Entrepreneur standing on a modern rooftop terrace overlooking cityscape at dusk, arms crossed confidently, dramatic backlit silhouette with warm ambient glow, wide cinematic shot"
+
+Return ONLY a JSON object mapping scene name to prompt. No markdown, no explanation:
+{{"hook": "prompt...", "scene_name": "prompt...", "callback": "prompt..."}}"""
+
+    from agno.agent import Agent
+    from agno.models.google import Gemini
+    agent = Agent(
+        model=Gemini(id="gemini-2.5-flash"),
+        description="Cinematography expert. Return ONLY valid JSON.",
+    )
+    result = agent.run(prompt)
+    raw = result.content if hasattr(result, "content") else str(result)
+
+    # Clean markdown fences
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+    if raw.endswith("```"):
+        raw = raw[:-3]
+    raw = raw.strip()
+    if raw.startswith("json"):
+        raw = raw[4:].strip()
+
+    prompts = _json.loads(raw)
+    logger.info("AI generated %d cinematographic prompts", len(prompts))
+    return prompts
+
+
+def _fallback_prompts(scenes: list[dict], person_desc: str) -> dict[str, str]:
+    """Fallback: generate context-aware prompts without AI call."""
+    person = person_desc or "young professional man"
+    settings = [
+        ("walking through a modern city street at golden hour, gesturing confidently", "warm sunlight, tracking shot"),
+        ("leaning forward at a sleek desk, pointing at camera with conviction", "soft studio lighting, medium close-up"),
+        ("standing by a large window in a modern office, arms crossed", "natural window light, wide shot"),
+        ("sitting in a trendy cafe, explaining passionately with hand gestures", "warm ambient light, medium shot"),
+        ("walking down a bright modern corridor, talking to camera", "soft diffused light, smooth tracking shot"),
+        ("standing on a rooftop terrace at dusk, looking into camera", "dramatic backlight, wide cinematic shot"),
+        ("seated in a creative workspace with plants, leaning back thoughtfully", "natural light with shadows, medium shot"),
+        ("striding through a co-working space, making eye contact with camera", "bright modern lighting, dynamic tracking shot"),
+    ]
+
+    prompts = {}
+    for i, scene in enumerate(scenes):
+        setting, camera = settings[i % len(settings)]
+        prompts[scene["name"]] = f"{person}, {setting}, {camera}"
+    return prompts
 
 
 def _load_user_avatar(user_id: str, avatar_id: str = ""):
@@ -562,7 +653,7 @@ def _collect_all_scenes(script: dict) -> list[dict]:
             "prompt": hook["i2v_prompt"],
             "broll_prompt": hook.get("broll_prompt", ""),
             "duration": hook.get("duration_s", 3),
-            "camera_control": _camera_hint_to_control(hook.get("camera_hint", "")),
+            "camera_control": None,  # kling-v3 doesn't support camera_control
         })
 
     # Scenes
@@ -573,7 +664,7 @@ def _collect_all_scenes(script: dict) -> list[dict]:
                 "prompt": scene["i2v_prompt"],
                 "broll_prompt": scene.get("broll_prompt", ""),
                 "duration": scene.get("duration_s", 5),
-                "camera_control": _camera_hint_to_control(scene.get("camera_hint", "")),
+                "camera_control": None,  # kling-v3 doesn't support camera_control
             })
 
     # Callback
@@ -584,7 +675,7 @@ def _collect_all_scenes(script: dict) -> list[dict]:
             "prompt": callback["i2v_prompt"],
             "broll_prompt": callback.get("broll_prompt", ""),
             "duration": callback.get("duration_s", 5),
-            "camera_control": _camera_hint_to_control(callback.get("camera_hint", "")),
+            "camera_control": None,  # kling-v3 doesn't support camera_control
         })
 
     return scenes

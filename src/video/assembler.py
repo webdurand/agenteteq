@@ -117,6 +117,7 @@ def _build_input_props(
             "name": scene_name,
             "narration": scene.get("narration", ""),
             "on_screen_text": scene.get("on_screen_text", ""),
+            "overlay_animation": scene.get("overlay_animation", "slide_up"),
             "movement": scene.get("movement", "ken_burns"),
             "duration_s": scene.get("duration_s", 5),
             "scene_clip_url": scene_clip_urls.get(scene_name, ""),
@@ -132,6 +133,7 @@ def _build_input_props(
         "hook": {
             "narration": hook.get("narration", ""),
             "on_screen_text": hook.get("on_screen_text", ""),
+            "overlay_animation": hook.get("overlay_animation", "scale_pop"),
             "movement": hook.get("movement", "zoom_in_face"),
             "duration_s": hook.get("duration_s", 3),
             "scene_clip_url": scene_clip_urls.get("hook", ""),
@@ -140,6 +142,7 @@ def _build_input_props(
         "callback": {
             "narration": callback.get("narration", ""),
             "on_screen_text": callback.get("on_screen_text", ""),
+            "overlay_animation": callback.get("overlay_animation", "scale_pop"),
             "movement": callback.get("movement", "zoom_out"),
             "duration_s": callback.get("duration_s", 5),
             "scene_clip_url": scene_clip_urls.get("callback", ""),

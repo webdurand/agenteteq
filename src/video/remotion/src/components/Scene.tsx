@@ -6,6 +6,7 @@ export interface SceneData {
   name: string;
   narration: string;
   on_screen_text: string;
+  overlay_animation?: "slide_up" | "scale_pop" | "fade_blur" | "slide_left";
   movement: MovementType;
   duration_s: number;
   scene_clip_url?: string;  // AI Motion: Kling I2V clip of the user in scenario
@@ -75,6 +76,7 @@ export const Scene: React.FC<SceneProps> = ({
           durationInFrames={durationInFrames}
           position="top"
           imageUrl={scene.overlay_image_url}
+          animation={scene.overlay_animation || "slide_up"}
         />
       )}
     </Sequence>

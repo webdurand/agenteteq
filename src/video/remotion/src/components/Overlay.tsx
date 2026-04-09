@@ -12,6 +12,7 @@ interface OverlayProps {
   durationInFrames: number;
   position?: "top" | "center" | "bottom";
   imageUrl?: string;
+  animation?: "slide_up" | "scale_pop" | "fade_blur" | "slide_left";
 }
 
 export const Overlay: React.FC<OverlayProps> = ({
@@ -20,6 +21,7 @@ export const Overlay: React.FC<OverlayProps> = ({
   durationInFrames,
   position = "top",
   imageUrl,
+  animation = "slide_up",
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -31,12 +33,12 @@ export const Overlay: React.FC<OverlayProps> = ({
   const entrance = spring({
     frame: localFrame,
     fps,
-    config: { damping: 12, mass: 0.6 },
-    durationInFrames: 15,
+    config: { damping: 14, mass: 0.5 },
+    durationInFrames: 12,
   });
 
-  // Exit fade (last 10 frames)
-  const exitStart = durationInFrames - 10;
+  // Exit fade (last 8 frames)
+  const exitStart = durationInFrames - 8;
   const opacity =
     localFrame >= exitStart
       ? interpolate(localFrame, [exitStart, durationInFrames], [1, 0], {
@@ -46,7 +48,28 @@ export const Overlay: React.FC<OverlayProps> = ({
 
   const yOffset = position === "top" ? SAFE_TOP + 50 : position === "bottom" ? SAFE_BOTTOM - 200 : 900;
 
-  const translateY = (1 - entrance) * 30;
+  // Animation variants
+  let transform = "";
+  let filter = "";
+  switch (animation) {
+    case "scale_pop":
+      const popScale = interpolate(entrance, [0, 1], [0.6, 1]);
+      transform = `scale(${popScale})`;
+      break;
+    case "fade_blur":
+      const blur = interpolate(entrance, [0, 1], [8, 0]);
+      filter = `blur(${blur}px)`;
+      transform = `translateY(${(1 - entrance) * 10}px)`;
+      break;
+    case "slide_left":
+      const slideX = (1 - entrance) * 60;
+      transform = `translateX(${slideX}px)`;
+      break;
+    case "slide_up":
+    default:
+      transform = `translateY(${(1 - entrance) * 30}px)`;
+      break;
+  }
 
   return (
     <div
@@ -56,7 +79,8 @@ export const Overlay: React.FC<OverlayProps> = ({
         left: SAFE_LEFT,
         right: 1080 - SAFE_RIGHT,
         opacity: opacity * entrance,
-        transform: `translateY(${translateY}px)`,
+        transform,
+        filter: filter || undefined,
         zIndex: 50,
         display: "flex",
         flexDirection: "column",
@@ -79,16 +103,18 @@ export const Overlay: React.FC<OverlayProps> = ({
       {text && (
         <div
           style={{
-            backgroundColor: "rgba(0, 0, 0, 0.75)",
             color: "#FFFFFF",
             fontFamily: "Inter, Helvetica Neue, Arial, sans-serif",
-            fontSize: 36,
-            fontWeight: 700,
-            padding: "12px 20px",
+            fontSize: 38,
+            fontWeight: 800,
+            padding: "8px 16px",
             borderRadius: 8,
             textAlign: "center",
             maxWidth: "100%",
-            textShadow: "1px 1px 3px rgba(0,0,0,0.5)",
+            textTransform: "uppercase" as const,
+            letterSpacing: 1.5,
+            textShadow:
+              "2px 2px 8px rgba(0,0,0,0.9), -1px -1px 4px rgba(0,0,0,0.7), 0 0 20px rgba(0,0,0,0.5)",
           }}
         >
           {text}

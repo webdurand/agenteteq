@@ -371,11 +371,12 @@ async def api_activate_avatar(avatar_id: str, user=Depends(get_current_user)):
 @router.post("/avatar/{avatar_id}/voice")
 async def api_add_voice_to_avatar(
     avatar_id: str,
-    file: UploadFile = File(...),
+    files: list[UploadFile] = File(...),
     voice_name: Optional[str] = Query("Minha voz"),
     user=Depends(get_current_user),
 ):
-    """Upload audio sample to clone voice and attach to an existing avatar."""
+    """Upload 1-25 audio samples to clone voice and attach to an existing avatar.
+    More samples = better quality. Each should be 30s-5min of clean speech."""
     import json
     user_id = user["phone_number"]
 
@@ -384,16 +385,27 @@ async def api_add_voice_to_avatar(
         if not avatar or avatar.user_id != user_id:
             raise HTTPException(status_code=404, detail="Avatar não encontrado.")
 
-    # Validate audio file
-    contents = await file.read()
-    max_size = 50 * 1024 * 1024  # 50MB
-    if len(contents) > max_size:
-        raise HTTPException(status_code=400, detail="Áudio muito grande. Máximo: 50MB.")
+    if not files:
+        raise HTTPException(status_code=400, detail="Envie pelo menos 1 arquivo de áudio.")
+    if len(files) > 25:
+        raise HTTPException(status_code=400, detail="Máximo de 25 amostras de áudio.")
 
-    # Upload audio sample to Cloudinary
+    # Read and validate all audio samples
+    audio_samples = []
+    max_size = 50 * 1024 * 1024  # 50MB per file
+    for f in files:
+        contents = await f.read()
+        if len(contents) > max_size:
+            raise HTTPException(status_code=400, detail=f"Áudio '{f.filename}' muito grande. Máximo: 50MB.")
+        if len(contents) < 1000:
+            raise HTTPException(status_code=400, detail=f"Áudio '{f.filename}' muito pequeno. Mínimo: 30s de fala.")
+        audio_samples.append(contents)
+
+    # Upload first sample to Cloudinary (for reference)
+    voice_sample_url = ""
     try:
         audio_result = cloudinary.uploader.upload(
-            contents,
+            audio_samples[0],
             folder=f"teq/avatars/{user_id}",
             public_id=f"voice_sample_{uuid.uuid4().hex[:8]}",
             resource_type="video",
@@ -404,12 +416,11 @@ async def api_add_voice_to_avatar(
         logger.error("Voice sample upload failed: %s", e)
         raise HTTPException(status_code=500, detail="Erro ao fazer upload do áudio.")
 
-    # Clone voice via ElevenLabs
+    # Clone voice via ElevenLabs (all samples)
     try:
         from src.video.voice_cloner import clone_voice
-        import asyncio
         result = await clone_voice(
-            audio_bytes=contents,
+            audio_samples=audio_samples,
             voice_name=voice_name or "Minha voz",
             user_id=user_id,
         )

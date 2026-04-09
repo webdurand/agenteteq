@@ -44,6 +44,25 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
 
         duration = max(30, min(80, duration))
 
+        # Auto-detect: if user has avatar, use ai_motion for cinematographic i2v_prompts
+        if source_type == "avatar":
+            try:
+                from src.db.models import UserAvatar
+                from src.db.session import get_db
+                with get_db() as session:
+                    has_avatar = (
+                        session.query(UserAvatar)
+                        .filter(UserAvatar.user_id == user_id, UserAvatar.is_active == True)
+                        .first()
+                    )
+                    if has_avatar:
+                        source_type = "ai_motion"
+                        if not person_description and has_avatar.label:
+                            person_description = has_avatar.label
+                        logger.info("Auto-upgraded script source_type to ai_motion (user has avatar)")
+            except Exception:
+                pass
+
         _notify(f"Criando roteiro de video ({style}) sobre: {topic}...")
 
         # Get reference context if account provided
@@ -191,8 +210,20 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
         if monthly_count >= max_monthly:
             return f"Limite de {max_monthly} videos por mes atingido. Aguarde o proximo mes ou faca upgrade."
 
-        # AI Motion specific checks
+        # Auto-detect: if user has avatar, upgrade to ai_motion
         avatar_id = ""
+        if source_type == "avatar" and not photo_url:
+            from src.db.models import UserAvatar
+            with get_db() as session:
+                has_avatar = (
+                    session.query(UserAvatar)
+                    .filter(UserAvatar.user_id == user_id, UserAvatar.is_active == True)
+                    .first()
+                )
+                if has_avatar:
+                    source_type = "ai_motion"
+                    logger.info("Auto-upgraded source_type to ai_motion (user has active avatar)")
+
         if source_type == "ai_motion":
             if not is_feature_enabled(user_id, "ai_motion_enabled"):
                 return (
