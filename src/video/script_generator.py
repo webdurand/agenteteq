@@ -61,35 +61,47 @@ def generate_script(
         person_desc = person_description or "a person"
         ai_motion_instruction = f"""
 
-=== REGRAS DE GERACAO VISUAL (KLING AI — OBRIGATORIO) ===
+=== REGRAS DE GERACAO VISUAL (KLING AI O1 REFERENCE — OBRIGATORIO) ===
 
-Voce TAMBEM e um especialista em prompts para o Kling AI (modelo de geracao de video por IA).
-Cada cena do roteiro vai gerar um video via Kling Image-to-Video: a foto do creator + o prompt = video realista.
+Voce TAMBEM e um especialista em prompts para o Kling AI O1 Reference-to-Video.
+O sistema usa Subject Binding: 3-4 fotos do creator de angulos diferentes = modelo 3D.
+Cada cena gera um video cinematografico onde o creator APARECE no cenario com movimento natural.
 
 11. I2V_PROMPT — COMO ESCREVER PROMPTS CINEMATOGRAFICOS:
     - Cada cena DEVE ter um campo "i2v_prompt" em INGLES.
-    - O prompt descreve a PESSOA realizando uma ACAO em um CENARIO.
-    - FORMATO: "[appearance] [action/gesture] [setting/environment] [lighting] [camera angle/shot type]"
+    - O prompt DEVE comecar com "@Element1" (referencia ao creator).
+    - FORMATO: "@Element1 [action/gesture] [setting/environment] [lighting] [camera movement description]"
     - EXEMPLOS DE PROMPTS BEM ESCRITOS:
-      * "Professional man in navy blazer speaking passionately to camera, gesturing with right hand, in a modern glass office with city skyline view, warm golden hour lighting, medium close-up shot"
-      * "Young entrepreneur sitting at a sleek desk with laptop, leaning forward with intense focus, minimalist white studio with soft diffused lighting, wide angle shot"
-      * "Confident speaker walking through a modern co-working space, making eye contact with camera, natural window light creating soft shadows, smooth tracking shot"
+      * "@Element1 speaking passionately to camera, gesturing with right hand, in a modern glass office with city skyline view, warm golden hour lighting, smooth slow zoom in"
+      * "@Element1 walking confidently through a sunlit city street, looking at camera briefly then ahead, golden hour warm light casting long shadows, cinematic tracking shot from side"
+      * "@Element1 sitting at a sleek desk with laptop, leaning forward with intense focus then looking up at camera, minimalist studio with soft diffused lighting, medium shot slowly pushing in"
     - PROMPTS RUINS (evitar):
-      * "a person talking" (muito generico, sem cenario, sem iluminacao)
+      * "a person talking" (muito generico, sem @Element1, sem cenario)
       * "man in office" (sem acao, sem detalhes visuais)
 
 12. REGRAS VISUAIS DO KLING:
+    - TODOS os i2v_prompts devem comecar com "@Element1" (referencia ao creator)
     - CONSISTENCIA: TODA cena deve descrever a MESMA roupa/aparencia: "{person_desc}"
     - VARIACAO: mude CENARIOS, ACOES e ANGULOS entre cenas. NUNCA mude a aparencia.
     - GESTOS: inclua gestos naturais (pointing, gesturing, leaning, walking, writing)
     - ILUMINACAO: varie entre golden hour, soft diffused, natural window, studio, backlit
-    - ANGULOS: medium close-up, wide shot, medium shot, close-up, tracking shot
-    - CENARIOS: escritorio moderno, estudio, coworking, sala minimalista, cafe, ar livre
+    - MOVIMENTOS DE CAMERA NO PROMPT: descreva o movimento no texto (NAO como parametro)
+      * "smooth slow zoom in" / "cinematic tracking shot from side" / "slow dolly forward"
+      * "camera slowly panning right" / "gentle push in to close-up"
+    - CENARIOS: escritorio moderno, estudio, coworking, sala minimalista, cafe, rooftop, rua, parque
     - EMOCAO: o prompt deve refletir a emocao da narracao (confident, passionate, serious, excited)
     - NAO use: texto no cenario, logos, telas de computador com conteudo legivel
-    - "camera_hint" por cena: zoom_in, pan_right, pan_left, tilt_up, dolly_forward, static
 
-13. PERSON_DESCRIPTION:
+13. CAMERA_DIRECT (lip-sync decision):
+    - Cada cena DEVE ter um campo "camera_direct": true ou false
+    - true = personagem OLHA DIRETO pra camera e FALA (lip-sync sera aplicado)
+    - false = personagem em ACAO (caminhando, gesticulando) com voiceover por cima
+    - REGRA: hook e callback geralmente sao camera_direct=true
+    - REGRA: cenas de acao/demonstracao sao camera_direct=false
+    - Tipicamente 2-3 cenas sao camera_direct=true num video de 7-8 cenas
+    - Quando camera_direct=true, o i2v_prompt deve incluir "looking directly at camera" ou "speaking to camera"
+
+14. PERSON_DESCRIPTION:
     - Inclua no topo do JSON: "person_description": "{person_desc}"
     - Aparencia fixa usada em TODOS os i2v_prompts para consistencia visual.
 """
@@ -208,7 +220,7 @@ Retorne APENAS o JSON abaixo, sem texto antes ou depois:
     "overlay_animation": "scale_pop",
     "movement": "zoom_in_face",
     "duration_s": 3,
-    "open_loop": "descricao do open loop que abre aqui"{(',' + chr(10) + '    "i2v_prompt": "prompt CINEMATOGRAFICO em ingles: [person] [action] [setting] [lighting] [shot type]"') if source_type == 'ai_motion' else ''}
+    "open_loop": "descricao do open loop que abre aqui"{(',' + chr(10) + '    "i2v_prompt": "@Element1 [action] [setting] [lighting] [camera movement]",' + chr(10) + '    "camera_direct": true') if source_type == 'ai_motion' else ''}
   }},
   "scenes": [
     {{
@@ -217,8 +229,8 @@ Retorne APENAS o JSON abaixo, sem texto antes ou depois:
       "on_screen_text": "TEXTO NA TELA (max 30 chars)",
       "overlay_animation": "slide_up|scale_pop|fade_blur|slide_left",
       "movement": "zoom_in_face|zoom_out|ken_burns|zoom_pulse|whip_pan|drift_right|dolly_zoom",
-      "broll_prompt": "descricao em ingles para gerar B-roll contextual (ou null)",{'"i2v_prompt": "prompt CINEMATOGRAFICO em ingles descrevendo [person] + [action] + [setting] + [lighting] + [shot type]",' if source_type == 'ai_motion' else ''}
-      {"" if source_type != "ai_motion" else '"camera_hint": "zoom_in|pan_right|pan_left|tilt_up|dolly_forward|static",'}
+      "broll_prompt": "descricao em ingles para gerar B-roll contextual (ou null)",{'"i2v_prompt": "@Element1 [action] [setting] [lighting] [camera movement description in English]",' if source_type == 'ai_motion' else ''}
+      {"" if source_type != "ai_motion" else '"camera_direct": "true se personagem olha pra camera e fala | false se cena de acao/voiceover",'}
       "overlay_image_prompt": "descricao para gerar imagem de contexto (ou null)",
       "duration_s": 8,
       "sfx": "whoosh|bass_hit|pop|ding|riser|impact|glitch|null",
@@ -230,7 +242,7 @@ Retorne APENAS o JSON abaixo, sem texto antes ou depois:
     "on_screen_text": "TEXTO FINAL",
     "overlay_animation": "scale_pop",
     "movement": "zoom_out",
-    "duration_s": 5{(',' + chr(10) + '    "i2v_prompt": "prompt cinematografico em ingles para cena final"') if source_type == 'ai_motion' else ''}
+    "duration_s": 5{(',' + chr(10) + '    "i2v_prompt": "@Element1 [action] [setting] [lighting] [camera movement]",' + chr(10) + '    "camera_direct": true') if source_type == 'ai_motion' else ''}
   }},
   "config": {{
     "framework": "{framework}",

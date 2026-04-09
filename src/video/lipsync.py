@@ -168,3 +168,65 @@ def estimate_lipsync_cost_cents(duration_s: int, mode: str = "") -> int:
         mode = os.getenv("KLING_AVATAR_MODE", "pro")
     rate_per_second = 0.115 if mode == "pro" else 0.056
     return int(duration_s * rate_per_second * 100)
+
+
+# ── LipSync Post-Production (video + audio → lip-synced video) ──
+
+FAL_LIPSYNC_MODEL = "fal-ai/kling-video/lipsync/audio-to-video"
+
+
+async def apply_lipsync_to_video(
+    video_url: str,
+    audio_url: str,
+) -> str:
+    """
+    Apply lip-sync to an existing video using Kling LipSync API via fal.ai.
+    Takes a silent/voiceover video + audio → returns video with synchronized mouth movements.
+
+    Much cheaper than Avatar API: $0.014 per 5s increment.
+
+    Args:
+        video_url: URL of the video to lip-sync (.mp4, 2-10s, max 100MB)
+        audio_url: URL of the audio to sync (.mp3/.wav, 2-60s, max 5MB)
+
+    Returns:
+        URL of the lip-synced video (MP4).
+    """
+    headers = _get_fal_headers()
+
+    payload = {
+        "video_url": video_url,
+        "audio_url": audio_url,
+    }
+
+    logger.info("Submitting lipsync-to-video job: video=%s..., audio=%s...",
+                video_url[:60], audio_url[:60])
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            f"{FAL_QUEUE_URL}/{FAL_LIPSYNC_MODEL}",
+            headers=headers,
+            json=payload,
+        )
+        if resp.status_code >= 400:
+            logger.error("fal.ai lipsync submit error %d: %s", resp.status_code, resp.text[:500])
+        resp.raise_for_status()
+        data = resp.json()
+
+        request_id = data.get("request_id")
+        if not request_id:
+            raise RuntimeError(f"fal.ai lipsync did not return request_id: {data}")
+
+        status_url = data.get("status_url", "")
+        response_url = data.get("response_url", "")
+
+    logger.info("LipSync-to-video job submitted: request_id=%s", request_id)
+
+    video_url = await _poll_fal_status(status_url, response_url, request_id)
+    return video_url
+
+
+def estimate_video_lipsync_cost_cents(duration_s: int) -> int:
+    """Estimate cost in cents for video lip-sync. $0.014 per 5s increment."""
+    increments = (duration_s + 4) // 5  # round up
+    return max(1, int(increments * 1.4))  # 1.4 cents per 5s

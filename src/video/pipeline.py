@@ -201,38 +201,58 @@ async def run_pipeline(
         scene_clip_urls = {}
 
         if source_type == "ai_motion":
-            # --- AI MOTION: Voiceover + I2V scene clips (person in different scenarios) ---
-            # No lip-sync — voiceover plays over cinematographic I2V scenes.
-            # This is the proven viral format: voiceover + dynamic visuals + animated captions.
+            # --- AI MOTION: Kling O1 Reference-to-Video + LipSync (camera_direct only) ---
+            # Pipeline: Reference clips → optional LipSync → Remotion assembly
             avatar_id = script.get("_avatar_id", "")
             avatar = _load_user_avatar(user_id, avatar_id=avatar_id)
             ref_frames = json.loads(avatar.reference_frames or "[]")
             if not ref_frames:
                 raise RuntimeError("Avatar sem frames de referencia. Configure um avatar primeiro.")
 
+            # Build elements array for Subject Binding
+            elements = [{
+                "frontal_image_url": ref_frames[0],
+                "reference_image_urls": ref_frames[1:4] if len(ref_frames) > 1 else [],
+            }]
+
+            # Step 3a: Split audio by scene (needed for lip-sync)
             _update_status("generating_scenes")
             _update_chat_step("generating_scenes")
-            _notify_progress(user_id, channel, "Gerando cenas cinematograficas com IA...")
+            _notify_progress(user_id, channel, "Preparando audio por cena...")
 
-            ref_base64 = await _download_image_as_base64(ref_frames[0])
+            from src.video.audio_splitter import split_audio_by_scenes
+            scene_audio_urls = await split_audio_by_scenes(
+                audio_url=audio_url,
+                script=script,
+                captions=captions,
+                project_id=project_id,
+            )
+            assets["scene_audio_urls"] = scene_audio_urls
+            _save_assets(assets)
 
+            # Step 3b: Collect scenes and generate cinematographic prompts
             all_scenes = _collect_all_scenes(script)
             if not all_scenes:
                 logger.info("Script has no i2v_prompt — auto-generating from narration")
-                _notify_progress(user_id, channel, "Gerando prompts de cena automaticamente...")
+                _notify_progress(user_id, channel, "Gerando prompts cinematograficos...")
                 all_scenes = _auto_generate_i2v_scenes(script)
 
-            from src.video.providers import get_video_provider
-            provider = get_video_provider()
+            # Ensure prompts use @Element1 reference
+            for scene in all_scenes:
+                if "@Element1" not in scene.get("prompt", ""):
+                    scene["prompt"] = f"@Element1 {scene['prompt']}"
 
             total_scenes = len(all_scenes)
-            def _scene_progress(done: int):
-                _notify_progress(user_id, channel,
-                    f"Gerando cena {done}/{total_scenes}...")
+            _notify_progress(user_id, channel,
+                f"Gerando {total_scenes} cenas cinematograficas (Kling O1 Reference)...")
 
-            scene_clip_urls = await provider.generate_multiple_clips(
+            # Step 3c: Generate reference clips via Kling O1
+            from src.video.providers.kling_reference import (
+                generate_multiple_reference_clips, estimate_reference_cost_cents,
+            )
+            scene_clip_urls = await generate_multiple_reference_clips(
                 scenes=all_scenes,
-                reference_image_base64=ref_base64,
+                elements=elements,
                 aspect_ratio="9:16",
                 user_id=user_id,
                 channel=channel,
@@ -240,9 +260,39 @@ async def run_pipeline(
 
             for scene_name, url in scene_clip_urls.items():
                 if url:
-                    cost_total += provider.estimate_cost_cents(5)
+                    cost_total += estimate_reference_cost_cents(5)
 
             assets["scene_clip_urls"] = scene_clip_urls
+            _save_assets(assets)
+            _check_cancelled()
+
+            # Step 3d: Apply lip-sync to camera_direct scenes only
+            camera_direct_scenes = [
+                s for s in all_scenes
+                if s.get("camera_direct") and scene_clip_urls.get(s["name"])
+                and scene_audio_urls.get(s["name"])
+            ]
+
+            if camera_direct_scenes:
+                _notify_progress(user_id, channel,
+                    f"Aplicando lip-sync em {len(camera_direct_scenes)} cena(s)...")
+
+                from src.video.lipsync import apply_lipsync_to_video, estimate_video_lipsync_cost_cents
+                for scene in camera_direct_scenes:
+                    name = scene["name"]
+                    try:
+                        lipsync_url = await apply_lipsync_to_video(
+                            video_url=scene_clip_urls[name],
+                            audio_url=scene_audio_urls[name],
+                        )
+                        scene_clip_urls[name] = lipsync_url  # Replace with lip-synced version
+                        cost_total += estimate_video_lipsync_cost_cents(scene.get("duration", 5))
+                        logger.info("LipSync applied to scene '%s'", name)
+                    except Exception as e:
+                        logger.warning("LipSync failed for scene '%s': %s (keeping original)", name, e)
+
+                assets["scene_clip_urls"] = scene_clip_urls
+            _save_assets(assets)
 
         elif source_type == "avatar" and source_url:
             # --- AVATAR: D-ID talking head + generic B-roll ---
@@ -642,7 +692,7 @@ async def _download_image_as_base64(url: str) -> str:
 
 
 def _collect_all_scenes(script: dict) -> list[dict]:
-    """Extract hook + scenes + callback as a unified list with i2v_prompt and camera hints."""
+    """Extract hook + scenes + callback as a unified list with i2v_prompt and camera_direct."""
     scenes = []
 
     # Hook
@@ -653,7 +703,7 @@ def _collect_all_scenes(script: dict) -> list[dict]:
             "prompt": hook["i2v_prompt"],
             "broll_prompt": hook.get("broll_prompt", ""),
             "duration": hook.get("duration_s", 3),
-            "camera_control": None,  # kling-v3 doesn't support camera_control
+            "camera_direct": hook.get("camera_direct", True),  # hook usually faces camera
         })
 
     # Scenes
@@ -664,7 +714,7 @@ def _collect_all_scenes(script: dict) -> list[dict]:
                 "prompt": scene["i2v_prompt"],
                 "broll_prompt": scene.get("broll_prompt", ""),
                 "duration": scene.get("duration_s", 5),
-                "camera_control": None,  # kling-v3 doesn't support camera_control
+                "camera_direct": scene.get("camera_direct", False),
             })
 
     # Callback
@@ -675,7 +725,7 @@ def _collect_all_scenes(script: dict) -> list[dict]:
             "prompt": callback["i2v_prompt"],
             "broll_prompt": callback.get("broll_prompt", ""),
             "duration": callback.get("duration_s", 5),
-            "camera_control": None,  # kling-v3 doesn't support camera_control
+            "camera_direct": callback.get("camera_direct", True),  # callback usually faces camera
         })
 
     return scenes
