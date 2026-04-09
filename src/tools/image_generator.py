@@ -268,6 +268,7 @@ async def _process_ai_images(
     task_id: Optional[str] = None,
     sequential_slides: bool = True,
     is_edit: bool = False,
+    embed_text: bool = True,
 ):
     """
     Processa geração de imagens via IA (provider registry).
@@ -296,7 +297,7 @@ async def _process_ai_images(
         max_concurrent = int(get_config("max_concurrent_images", "3"))
         sem = asyncio.Semaphore(max_concurrent)
 
-        def _build_full_prompt(slide: Dict[str, Any], is_continuation: bool = False, has_reference: bool = False) -> str:
+        def _build_full_prompt(slide: Dict[str, Any], is_continuation: bool = False, has_reference: bool = False, embed_text_in_image: bool = False) -> str:
             prompt = slide.get("prompt", "")
             style = slide.get("style", "")
             style_anchor = slide.get("style_anchor", "")
@@ -316,13 +317,30 @@ async def _process_ai_images(
                 )
 
             if slide.get("title") or slide.get("cta_text"):
-                if role == "capa":
-                    parts.append("Composition: leave the bottom 40% of the image clean or with soft gradient — text will be overlaid there.")
-                elif role == "conteudo":
-                    parts.append("Composition: leave the top and center area somewhat clean — text will be overlaid there.")
-                elif role == "fechamento":
-                    parts.append("Composition: leave the center of the image open and clean — call-to-action text will be overlaid.")
-                parts.append("IMPORTANT: Do not render any text, typography, letters, or words in the image. Generate a clean background only.")
+                if embed_text_in_image:
+                    # AI puro: texto embutido pela IA na imagem
+                    text_parts = []
+                    if slide.get("title"):
+                        text_parts.append(f'Title: "{slide["title"]}"')
+                    if slide.get("body"):
+                        text_parts.append(f'Body: "{slide["body"]}"')
+                    if slide.get("cta_text"):
+                        text_parts.append(f'CTA: "{slide["cta_text"]}"')
+                    parts.append(
+                        "Render the following text DIRECTLY in the image with professional, clean, "
+                        "highly readable typography. The text must be visually integrated into the design "
+                        "with proper hierarchy, contrast, and spacing. Use modern sans-serif fonts. "
+                        + " | ".join(text_parts)
+                    )
+                else:
+                    # Overlay mode: imagem limpa, texto adicionado depois
+                    if role == "capa":
+                        parts.append("Composition: leave the bottom 40% of the image clean or with soft gradient — text will be overlaid there.")
+                    elif role == "conteudo":
+                        parts.append("Composition: leave the top and center area somewhat clean — text will be overlaid there.")
+                    elif role == "fechamento":
+                        parts.append("Composition: leave the center of the image open and clean — call-to-action text will be overlaid.")
+                    parts.append("IMPORTANT: Do not render any text, typography, letters, or words in the image. Generate a clean background only.")
 
             if is_continuation:
                 parts.append(
@@ -379,12 +397,14 @@ async def _process_ai_images(
         async def _generate_single(slide: Dict[str, Any], index: int, ref: Optional[bytes] = None) -> tuple[bytes, bytes]:
             is_continuation = index > 0
             has_ref = ref is not None
-            full_prompt = _build_full_prompt(slide, is_continuation=is_continuation, has_reference=has_ref)
+            full_prompt = _build_full_prompt(slide, is_continuation=is_continuation, has_reference=has_ref, embed_text_in_image=embed_text)
             if has_ref:
                 raw_bytes = await provider.edit(full_prompt, ref, aspect_ratio=aspect_ratio)
             else:
                 raw_bytes = await provider.generate(full_prompt, aspect_ratio=aspect_ratio)
             raw_bytes = _post_process_image(raw_bytes)
+            if embed_text:
+                return raw_bytes, raw_bytes  # Texto já embutido pela IA, sem overlay
             overlaid_bytes = _apply_overlay(slide, index, raw_bytes)
             return overlaid_bytes, raw_bytes
 
@@ -565,6 +585,7 @@ async def _process_image_background(
             task_id=task_id,
             sequential_slides=sequential_slides,
             is_edit=is_edit,
+            embed_text=(generation_mode == "ai"),
         )
 
 
@@ -940,6 +961,7 @@ def create_image_tools(user_id: str, channel: str = "web"):
                                 slides=list(slides),
                                 brand_profile=brand,
                                 count=len(slides),
+                                context={"generation_mode": generation_mode},
                             )
                         ).result()
                 else:
@@ -950,6 +972,7 @@ def create_image_tools(user_id: str, channel: str = "web"):
                             slides=list(slides),
                             brand_profile=brand,
                             count=len(slides),
+                            context={"generation_mode": generation_mode},
                         )
                     )
             except Exception as e:
@@ -1106,7 +1129,7 @@ def create_image_tools(user_id: str, channel: str = "web"):
             try:
                 from src.memory.analytics import log_event as _log_cost
                 num_images = len(slides)
-                cost = 0.039 * num_images if actual_mode == "ai" else 0.0
+                cost = 0.134 * num_images if actual_mode == "ai" else 0.0
                 _log_cost(
                     user_id=user_id, channel=effective_channel,
                     event_type="image_generation", tool_name=f"{actual_mode}_image",

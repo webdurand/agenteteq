@@ -39,7 +39,11 @@ PARA IMAGEM IA (single ou batch):
 - Se referência visual fornecida: extrair e incorporar estilo similar
 - Se batch (N imagens): gerar variações inteligentes
   (ângulos diferentes, iluminações alternativas, composições variadas)
-- NUNCA inclua texto/tipografia/letras no prompt visual. As imagens devem ser fundos limpos.
+- TEXTO NAS IMAGENS IA:
+  • Se generation_mode='ai' no contexto: o texto será renderizado PELA IA diretamente na imagem.
+    Inclua os textos (title, body, cta_text) no prompt visual e instrua tipografia profissional,
+    hierarquia visual clara, fontes modernas e legíveis, integradas ao design.
+  • Caso contrário: NUNCA inclua texto/tipografia/letras no prompt visual. As imagens devem ser fundos limpos.
 
 REGRAS DE OUTPUT:
 - Responda SOMENTE com JSON válido, sem markdown, sem explicação.
