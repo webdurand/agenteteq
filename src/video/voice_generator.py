@@ -67,11 +67,14 @@ async def _generate_elevenlabs(
     api_key: str,
 ) -> tuple[bytes, str, float]:
     """Generate audio via ElevenLabs API."""
-    voice_id = VOICE_PRESETS.get(voice.lower(), voice) if voice else DEFAULT_VOICE_ID
-
-    # If voice looks like a name but isn't in presets, use default
-    if voice and not voice_id.startswith(("2", "p", "T", "E", "M", "y")):
+    if not voice:
         voice_id = DEFAULT_VOICE_ID
+    elif voice.lower() in VOICE_PRESETS:
+        # Known preset name (e.g. "rachel", "adam")
+        voice_id = VOICE_PRESETS[voice.lower()]
+    else:
+        # Assume it's a direct ElevenLabs voice ID (e.g. cloned voice)
+        voice_id = voice
 
     url = f"{ELEVENLABS_API_URL}/text-to-speech/{voice_id}"
 

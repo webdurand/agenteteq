@@ -294,6 +294,29 @@ def is_task_cancelled(task_id: str) -> bool:
         return task.status in ("cancelled", "failed")
 
 
+def cancel_task_by_video(user_id: str, task_id: str) -> Optional[str]:
+    """
+    Cancel a background video task by task_id.
+    Sets task status to 'failed' and updates any associated VideoProject.
+    Returns task_id if cancelled, None otherwise.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    cancelled_id = None
+
+    with get_db() as session:
+        task = session.get(BackgroundTask, task_id)
+        if task and task.user_id == user_id and task.task_type == "video" and task.status in ("pending", "processing"):
+            task.status = "failed"
+            task.result = json.dumps({"error": "cancelled by user"})
+            task.updated_at = now_iso
+            cancelled_id = task.id
+
+    if cancelled_id:
+        logger.info("Task %s (video) cancelada pelo usuario", cancelled_id)
+
+    return cancelled_id
+
+
 def cancel_task_by_carousel(user_id: str, carousel_id: str) -> Optional[str]:
     """
     Cancel a background task associated with a carousel.

@@ -874,6 +874,47 @@ class CanvasSession(Base):
 # ──────────────────────────── Video Creation ────────────────────────────
 
 
+class UserAvatar(Base):
+    """User's avatar for AI Motion video generation.
+    Stores reference photos or video frames used by Kling I2V to generate
+    realistic clips of the user in different scenarios."""
+    __tablename__ = "user_avatars"
+    __table_args__ = (
+        Index("idx_user_avatars_user_active", "user_id", "is_active"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=False)
+    media_type = Column(String)          # "photo" | "video"
+    media_urls = Column(Text)            # JSON array: original upload URLs (1-4 photos or 1 video)
+    reference_frames = Column(Text)      # JSON array: image URLs used for I2V generation
+    #   photo → same as media_urls
+    #   video → auto-extracted key frames
+    is_active = Column(Boolean, default=True)
+    label = Column(String)               # optional label, e.g. "professional look"
+    voice_id = Column(String)            # ElevenLabs cloned voice ID
+    voice_sample_url = Column(String)    # URL of the audio used to clone the voice
+    voice_name = Column(String)          # Display name of the cloned voice
+    created_at = Column(String, default=lambda: _utcnow().isoformat())
+
+    def to_dict(self) -> dict:
+        import json
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "media_type": self.media_type,
+            "media_urls": json.loads(self.media_urls or "[]"),
+            "reference_frames": json.loads(self.reference_frames or "[]"),
+            "is_active": self.is_active,
+            "label": self.label,
+            "voice_id": self.voice_id,
+            "voice_sample_url": self.voice_sample_url,
+            "voice_name": self.voice_name,
+            "has_voice": bool(self.voice_id),
+            "created_at": self.created_at,
+        }
+
+
 class VideoScript(Base):
     __tablename__ = "video_scripts"
     __table_args__ = (
@@ -919,7 +960,7 @@ class VideoProject(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String, nullable=False)
     script_id = Column(String)
-    source_type = Column(String)        # "avatar" | "real"
+    source_type = Column(String)        # "avatar" | "real" | "ai_motion"
     source_url = Column(String)         # foto ou video upload URL
     status = Column(String, default="draft")
     # draft -> generating_voice -> syncing_captions -> generating_avatar ->

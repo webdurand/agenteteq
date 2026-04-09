@@ -103,6 +103,7 @@ _FEATURE_GATES = {
     "deep_research_enabled": {"label": "Pesquisa profunda"},
     "canvas_editor_enabled": {"label": "Editor Canvas"},
     "video_creation_enabled": {"label": "Criação de vídeo"},
+    "ai_motion_enabled": {"label": "AI Motion (vídeo realista com cenários)"},
 }
 
 

@@ -138,6 +138,7 @@ async def generate_multiple_brolls(
 
 async def _poll_task_status(
     task_id: str,
+    endpoint_type: str = "text2video",
     max_attempts: int = 120,
     interval_s: int = 10,
 ) -> str:
@@ -156,7 +157,7 @@ async def _poll_task_status(
                 headers["Authorization"] = f"Bearer {_get_kling_token()}"
 
             resp = await client.get(
-                f"{KLING_API_URL}/v1/videos/text2video/{task_id}",
+                f"{KLING_API_URL}/v1/videos/{endpoint_type}/{task_id}",
                 headers=headers,
             )
             resp.raise_for_status()

@@ -41,6 +41,10 @@ async def generate_talking_head(
         "Content-Type": "application/json",
     }
 
+    # D-ID requires JPEG/PNG — convert Cloudinary webp URLs to jpg on the fly
+    if "cloudinary.com" in photo_url and photo_url.endswith(".webp"):
+        photo_url = photo_url.rsplit(".webp", 1)[0] + ".jpg"
+
     # Create talk
     payload = {
         "source_url": photo_url,
@@ -59,6 +63,8 @@ async def generate_talking_head(
             headers=headers,
             json=payload,
         )
+        if resp.status_code >= 400:
+            logger.error("D-ID API error %d: %s", resp.status_code, resp.text[:500])
         resp.raise_for_status()
         data = resp.json()
         talk_id = data["id"]

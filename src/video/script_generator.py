@@ -20,6 +20,8 @@ def generate_script(
     duration: int = 60,
     reference_context: str = "",
     brand_voice: str = "",
+    source_type: str = "avatar",
+    person_description: str = "",
 ) -> dict:
     """
     Gera roteiro JSON estruturado para video viral.
@@ -53,6 +55,26 @@ def generate_script(
             f"\n\nREFERENCIA DE CONTEUDO:\n{reference_context}\n"
             "Use esses padroes como inspiracao para o roteiro (nao copie, adapte)."
         )
+
+    ai_motion_instruction = ""
+    if source_type == "ai_motion":
+        person_desc = person_description or "a person"
+        ai_motion_instruction = f"""
+
+11. IMAGE-TO-VIDEO (MODO AI MOTION - OBRIGATORIO):
+    - Cada cena DEVE ter um campo "i2v_prompt": descricao detalhada em ingles da PESSOA
+      realizando uma ACAO em um CENARIO especifico.
+    - Formato: "[person description] [action] [scenario] [lighting] [camera angle]"
+    - Exemplo: "Professional man in navy blazer presenting confidently in a modern glass office, gesturing with right hand, warm natural lighting, medium shot"
+    - CONSISTENCIA: TODA cena deve descrever a MESMA roupa/aparencia: "{person_desc}"
+    - VARIACAO: mude CENARIOS e ACOES entre cenas, NUNCA mude a aparencia da pessoa.
+    - Inclua "camera_hint" por cena: zoom_in, pan_right, pan_left, tilt_up, dolly_forward, static
+    - O i2v_prompt deve ser em INGLES (Kling AI funciona melhor em ingles).
+
+12. PERSON_DESCRIPTION:
+    - Inclua no topo do JSON: "person_description": "{person_desc}"
+    - Esta descricao e usada para manter consistencia visual entre todas as cenas.
+"""
 
     prompt = f"""Voce e um roteirista especialista em videos virais para Instagram Reels, TikTok e YouTube Shorts.
 Seu trabalho e criar roteiros que MAXIMIZAM retencao e compartilhamentos.
@@ -115,13 +137,13 @@ DURACAO: ~{duration} segundos (~{target_words} palavras de narracao)
     - Shares sao o sinal #1 do algoritmo Instagram 2026.
     - Desafie crencas do nicho (nao pessoas). "Voce nao precisa de X", "X esta morto".
     - Conteudo opinativo gera 3-5x mais shares que conteudo neutro.
-
+{ai_motion_instruction}
 === FORMATO DE SAIDA (JSON ESTRITO) ===
 
 Retorne APENAS o JSON abaixo, sem texto antes ou depois:
 
 {{
-  "title": "titulo curto do video (para referencia interna)",
+  "title": "titulo curto do video (para referencia interna)",{'"person_description": "descricao fixa da aparencia da pessoa para consistencia visual",' if source_type == 'ai_motion' else ''}
   "hook": {{
     "type": "bold_statement|question|pattern_interrupt|proof_first|controversy",
     "narration": "texto exato da narracao do hook (max 15 palavras)",
@@ -136,7 +158,8 @@ Retorne APENAS o JSON abaixo, sem texto antes ou depois:
       "narration": "texto exato da narracao desta cena",
       "on_screen_text": "TEXTO NA TELA",
       "movement": "zoom_in_face|zoom_out|ken_burns|zoom_pulse",
-      "broll_prompt": "descricao para gerar video B-roll contextual (ou null se talking head)",
+      "broll_prompt": "descricao para gerar video B-roll contextual (ou null se talking head)",{'"i2v_prompt": "prompt em ingles descrevendo a pessoa + acao + cenario (OBRIGATORIO se ai_motion)",' if source_type == 'ai_motion' else ''}
+      {"" if source_type != "ai_motion" else '"camera_hint": "zoom_in|pan_right|pan_left|tilt_up|dolly_forward|static",'}
       "overlay_image_prompt": "descricao para gerar imagem de contexto (ou null)",
       "duration_s": 8,
       "sfx": "whoosh|pop|null",

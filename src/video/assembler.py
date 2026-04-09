@@ -24,6 +24,7 @@ async def assemble_video(
     captions: list[dict],
     talking_head_url: str = "",
     broll_urls: dict[str, str] | None = None,
+    scene_clip_urls: dict[str, str] | None = None,
     overlay_urls: dict[str, str] | None = None,
     music_url: str = "",
     output_path: str = "",
@@ -49,6 +50,7 @@ async def assemble_video(
         Path to the rendered MP4 file.
     """
     broll_urls = broll_urls or {}
+    scene_clip_urls = scene_clip_urls or {}
     overlay_urls = overlay_urls or {}
 
     if not output_path:
@@ -61,6 +63,7 @@ async def assemble_video(
         captions=captions,
         talking_head_url=talking_head_url,
         broll_urls=broll_urls,
+        scene_clip_urls=scene_clip_urls,
         overlay_urls=overlay_urls,
         music_url=music_url,
     )
@@ -96,6 +99,7 @@ def _build_input_props(
     captions: list[dict],
     talking_head_url: str,
     broll_urls: dict[str, str],
+    scene_clip_urls: dict[str, str],
     overlay_urls: dict[str, str],
     music_url: str,
 ) -> dict:
@@ -115,6 +119,7 @@ def _build_input_props(
             "on_screen_text": scene.get("on_screen_text", ""),
             "movement": scene.get("movement", "ken_burns"),
             "duration_s": scene.get("duration_s", 5),
+            "scene_clip_url": scene_clip_urls.get(scene_name, ""),
             "broll_url": broll_urls.get(scene_name, ""),
             "overlay_image_url": overlay_urls.get(scene_name, ""),
             "sfx": scene.get("sfx"),
@@ -129,6 +134,7 @@ def _build_input_props(
             "on_screen_text": hook.get("on_screen_text", ""),
             "movement": hook.get("movement", "zoom_in_face"),
             "duration_s": hook.get("duration_s", 3),
+            "scene_clip_url": scene_clip_urls.get("hook", ""),
             "broll_url": broll_urls.get("hook", ""),
         },
         "callback": {
@@ -136,6 +142,7 @@ def _build_input_props(
             "on_screen_text": callback.get("on_screen_text", ""),
             "movement": callback.get("movement", "zoom_out"),
             "duration_s": callback.get("duration_s", 5),
+            "scene_clip_url": scene_clip_urls.get("callback", ""),
         },
         "config": {
             "music_url": music_url,

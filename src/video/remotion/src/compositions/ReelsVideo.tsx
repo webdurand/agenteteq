@@ -17,6 +17,7 @@ export interface ReelsVideoProps {
     on_screen_text: string;
     movement: string;
     duration_s: number;
+    scene_clip_url?: string;
     broll_url?: string;
   };
   /** Callback/ending section */
@@ -25,6 +26,7 @@ export interface ReelsVideoProps {
     on_screen_text: string;
     movement: string;
     duration_s: number;
+    scene_clip_url?: string;
   };
   /** Global config */
   config: {
@@ -57,6 +59,7 @@ export const ReelsVideo: React.FC<ReelsVideoProps> = ({
     on_screen_text: hook.on_screen_text,
     movement: (hook.movement as SceneData["movement"]) || "zoom_in_face",
     duration_s: hook.duration_s || 3,
+    scene_clip_url: hook.scene_clip_url,
     broll_url: hook.broll_url,
   });
 
@@ -72,6 +75,7 @@ export const ReelsVideo: React.FC<ReelsVideoProps> = ({
     on_screen_text: callback.on_screen_text,
     movement: (callback.movement as SceneData["movement"]) || "zoom_out",
     duration_s: callback.duration_s || 5,
+    scene_clip_url: callback.scene_clip_url,
   });
 
   // Calculate frame positions

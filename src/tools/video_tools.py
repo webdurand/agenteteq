@@ -23,6 +23,8 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
         style: str = "tutorial",
         duration: int = 60,
         reference_account: str = "",
+        source_type: str = "avatar",
+        person_description: str = "",
     ) -> str:
         """
         Cria um roteiro estruturado para video viral (Reels/TikTok/Shorts).
@@ -85,6 +87,8 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
             duration=duration,
             reference_context=reference_context,
             brand_voice=brand_voice,
+            source_type=source_type,
+            person_description=person_description,
         )
 
         if "error" in script:
@@ -140,6 +144,7 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
         photo_url: str = "",
         video_url: str = "",
         voice: str = "",
+        person_description: str = "",
     ) -> str:
         """
         Gera um video completo a partir de um roteiro ou topico.
@@ -148,10 +153,14 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
         Args:
             script_id: ID do roteiro (gerado por create_video_script). Se vazio, gera roteiro automaticamente.
             topic: Tema do video (usado se script_id nao fornecido).
-            source_type: "avatar" (gera pessoa falando a partir de foto) ou "real" (usa video enviado pelo criador).
+            source_type: Modo de geracao:
+                - "avatar": gera pessoa falando a partir de foto (D-ID talking head)
+                - "real": usa video enviado pelo criador
+                - "ai_motion": gera cenas realistas do usuario em cenarios diferentes (Kling I2V)
             photo_url: URL da foto para modo avatar.
             video_url: URL do video para modo real.
             voice: Voz para narracao (opcional).
+            person_description: Descricao da aparencia da pessoa para ai_motion (opcional).
 
         Returns:
             Status da geracao (enfileirada, posicao, estimativa).
@@ -182,8 +191,61 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
         if monthly_count >= max_monthly:
             return f"Limite de {max_monthly} videos por mes atingido. Aguarde o proximo mes ou faca upgrade."
 
-        if not script_id and not topic:
-            return "Informe o script_id de um roteiro existente ou um topic para gerar automaticamente."
+        # AI Motion specific checks
+        avatar_id = ""
+        if source_type == "ai_motion":
+            if not is_feature_enabled(user_id, "ai_motion_enabled"):
+                return (
+                    "O modo AI Motion (cenarios realistas) nao esta disponivel no seu plano. "
+                    "Faca upgrade para desbloquear!"
+                )
+            # Get active avatar — validate it exists and has valid frames
+            from src.db.models import UserAvatar
+            with get_db() as session:
+                avatar = (
+                    session.query(UserAvatar)
+                    .filter(UserAvatar.user_id == user_id, UserAvatar.is_active == True)
+                    .order_by(UserAvatar.created_at.desc())
+                    .first()
+                )
+                if not avatar:
+                    return (
+                        "Voce precisa configurar seu avatar primeiro! "
+                        "Envie 1-4 fotos suas ou 1 video curto usando setup_avatar."
+                    )
+                frames = json.loads(avatar.reference_frames or "[]")
+                if not frames:
+                    return (
+                        "Seu avatar nao tem frames de referencia validos. "
+                        "Reconfigure com setup_avatar usando fotos reais."
+                    )
+                avatar_id = avatar.id
+                _notify(f"Usando avatar: {avatar.media_type} com {len(frames)} frame(s) de referencia.")
+
+        if not script_id:
+            return (
+                "ERRO: Voce precisa de um roteiro aprovado antes de gerar o video.\n\n"
+                "Fluxo correto:\n"
+                "1. Use create_video_script(topic='...') para gerar o roteiro\n"
+                "2. Mostre o roteiro ao usuario e pergunte se quer ajustar\n"
+                "3. So depois de aprovado, use generate_video(script_id='...')\n\n"
+                "Nunca gere video sem roteiro aprovado pelo usuario."
+            )
+
+        # Block duplicate: check if user already has a video being processed
+        from src.db.models import BackgroundTask
+        with get_db() as session:
+            active_video_tasks = session.query(func.count(BackgroundTask.id)).filter(
+                BackgroundTask.user_id == user_id,
+                BackgroundTask.task_type == "video",
+                BackgroundTask.status.in_(["pending", "processing"]),
+            ).scalar() or 0
+
+        if active_video_tasks > 0:
+            return (
+                "Ja tem um video sendo processado! Aguarde ele terminar ou cancele pela aba Fila.\n"
+                "Nao e possivel gerar dois videos ao mesmo tempo."
+            )
 
         # Fetch script data for the worker (inline fallback) and progress title
         effective_topic = topic
@@ -196,7 +258,13 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
                 from src.db.models import VideoScript
                 with get_db() as session:
                     s = session.get(VideoScript, script_id)
+                    # Fallback: partial ID match (first 8 chars)
+                    if not s:
+                        s = session.query(VideoScript).filter(
+                            VideoScript.id.startswith(script_id)
+                        ).first()
                     if s:
+                        script_id = s.id  # Use full ID from here on
                         effective_topic = s.topic or topic
                         if s.script_json:
                             script_json_inline = s.script_json
@@ -220,6 +288,8 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
             "photo_url": photo_url,
             "video_url": video_url,
             "voice": voice,
+            "person_description": person_description,
+            "avatar_id": avatar_id,
         }
 
         result = enqueue_task(user_id, "video", channel, payload)
@@ -236,6 +306,7 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
                 placeholder = "__VIDEO_GENERATING__" + json.dumps({
                     "current_step": "generating_voice",
                     "title": script_title,
+                    "task_id": result.get("task_id", ""),
                 })
                 save_message(user_id, user_id, "agent", placeholder)
             except Exception:
@@ -592,6 +663,261 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
             "Use list_content_plan para ver seu calendario completo."
         )
 
+    def setup_avatar(
+        media_urls: str = "",
+        media_type: str = "photo",
+        voice_audio_url: str = "",
+        voice_name: str = "",
+        label: str = "",
+    ) -> str:
+        """
+        Configura o avatar do usuario para videos AI Motion.
+        O avatar fica salvo no perfil e e reutilizado em todos os videos ai_motion.
+        Pode incluir fotos + voz clonada em uma unica chamada.
+
+        Args:
+            media_urls: URLs das fotos (1-4, separadas por virgula) ou URL de 1 video.
+            media_type: "photo" ou "video".
+            voice_audio_url: URL de audio para clonar a voz do usuario (opcional, Cloudinary).
+            voice_name: Nome para a voz clonada (opcional).
+            label: Nome/label do avatar (opcional, ex: "Eu profissional").
+
+        Returns:
+            Confirmacao com detalhes do avatar criado.
+        """
+        if not media_urls:
+            return (
+                "Envie as URLs das suas fotos ou video para configurar o avatar.\n"
+                "Exemplo: setup_avatar(media_urls='url1,url2', media_type='photo')\n"
+                "Para melhor resultado, envie 2-4 fotos em angulos diferentes (frente, perfil, 45 graus)."
+            )
+
+        urls = [u.strip() for u in media_urls.split(",") if u.strip()]
+        if not urls:
+            return "Nenhuma URL valida fornecida."
+
+        if media_type == "video" and len(urls) > 1:
+            return "Para video, envie apenas 1 URL."
+
+        if media_type == "photo" and len(urls) > 4:
+            return "Maximo de 4 fotos."
+
+        # Validate ALL URLs are accessible before saving
+        import httpx as _httpx
+        _notify("Validando URLs...")
+        for url in urls:
+            # Only accept Cloudinary URLs or known valid hosts
+            if "cloudinary.com" not in url and "res.cloudinary.com" not in url:
+                return (
+                    f"URL rejeitada: {url[:80]}...\n"
+                    "Apenas URLs do Cloudinary sao aceitas. "
+                    "O usuario deve fazer upload das fotos/video pelo chat ou pelo frontend, "
+                    "e o sistema faz upload automatico pro Cloudinary. "
+                    "NAO invente URLs — use apenas URLs reais de uploads feitos pelo usuario."
+                )
+            try:
+                resp = _httpx.head(url, timeout=10, follow_redirects=True)
+                if resp.status_code >= 400:
+                    return (
+                        f"URL inacessivel (HTTP {resp.status_code}): {url[:80]}...\n"
+                        "Verifique se a URL e valida e acessivel."
+                    )
+            except Exception as e:
+                return f"Nao consegui acessar a URL: {url[:80]}... Erro: {e}"
+
+        _notify("Configurando avatar...")
+
+        from src.db.session import get_db
+        from src.db.models import UserAvatar
+        import json as _json
+
+        if media_type == "video":
+            # Extract frames from video
+            _notify("Extraindo frames do video...")
+            import asyncio
+            from src.video.frame_extractor import extract_key_frames
+
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as pool:
+                        reference_frames = pool.submit(
+                            asyncio.run,
+                            extract_key_frames(urls[0], user_id, 4)
+                        ).result()
+                else:
+                    reference_frames = asyncio.run(
+                        extract_key_frames(urls[0], user_id, 4)
+                    )
+            except Exception as e:
+                return f"Erro ao extrair frames do video: {e}"
+        else:
+            reference_frames = urls[:]
+
+        # Deactivate previous and create new
+        with get_db() as session:
+            session.query(UserAvatar).filter(
+                UserAvatar.user_id == user_id,
+                UserAvatar.is_active == True,
+            ).update({"is_active": False})
+
+            avatar = UserAvatar(
+                user_id=user_id,
+                media_type=media_type,
+                media_urls=_json.dumps(urls),
+                reference_frames=_json.dumps(reference_frames),
+                is_active=True,
+                label=label or None,
+            )
+            session.add(avatar)
+            session.flush()
+            avatar_id = avatar.id
+            avatar_dict = avatar.to_dict()
+
+        # Clone voice if audio provided
+        voice_status = "Sem voz clonada (padrao sera usada)"
+        if voice_audio_url:
+            if "cloudinary.com" not in voice_audio_url:
+                voice_status = "URL de audio rejeitada (apenas Cloudinary). Use o frontend para upload."
+            else:
+                try:
+                    _notify("Clonando voz...")
+                    import httpx as _hx
+                    resp = _hx.get(voice_audio_url, timeout=30)
+                    resp.raise_for_status()
+                    audio_bytes = resp.content
+
+                    from src.video.voice_cloner import clone_voice
+                    import asyncio as _aio
+                    try:
+                        loop = _aio.get_event_loop()
+                        if loop.is_running():
+                            import concurrent.futures
+                            with concurrent.futures.ThreadPoolExecutor() as pool:
+                                clone_result = pool.submit(
+                                    _aio.run,
+                                    clone_voice(audio_bytes, voice_name or "Minha voz", user_id)
+                                ).result()
+                        else:
+                            clone_result = _aio.run(
+                                clone_voice(audio_bytes, voice_name or "Minha voz", user_id)
+                            )
+                    except RuntimeError:
+                        clone_result = _aio.run(
+                            clone_voice(audio_bytes, voice_name or "Minha voz", user_id)
+                        )
+
+                    # Save voice to avatar
+                    with get_db() as session:
+                        av = session.get(UserAvatar, avatar_id)
+                        if av:
+                            av.voice_id = clone_result["voice_id"]
+                            av.voice_name = clone_result["voice_name"]
+                            av.voice_sample_url = voice_audio_url
+                    voice_status = f"Voz clonada: {clone_result['voice_name']}"
+                except Exception as e:
+                    voice_status = f"Erro ao clonar voz: {e}. Avatar criado sem voz."
+
+        num_frames = len(reference_frames)
+        return (
+            f"Avatar configurado com sucesso!\n"
+            f"Nome: {label or 'Avatar'}\n"
+            f"Tipo: {media_type}\n"
+            f"Frames de referencia: {num_frames}\n"
+            f"Voz: {voice_status}\n"
+            f"ID: {avatar_dict['id'][:8]}\n\n"
+            "Agora voce pode gerar videos com source_type='ai_motion'."
+        )
+
+    def edit_script(
+        script_id: str = "",
+        instructions: str = "",
+    ) -> str:
+        """
+        Edita um roteiro existente com instrucoes em linguagem natural.
+        O roteiro e modificado pela IA mantendo a estrutura, e o preview atualizado e exibido.
+
+        Args:
+            script_id: ID do roteiro (primeiros 8 chars bastam).
+            instructions: O que modificar. Ex: "muda o hook pra curiosidade", "troca a cena 3 por storytelling".
+
+        Returns:
+            Preview do roteiro modificado.
+        """
+        if not script_id or not instructions:
+            return "Informe o script_id e as instructions de edicao."
+
+        from src.db.session import get_db
+        from src.db.models import VideoScript
+
+        # Load script
+        with get_db() as session:
+            db_script = session.get(VideoScript, script_id)
+            if not db_script:
+                db_script = session.query(VideoScript).filter(
+                    VideoScript.id.startswith(script_id),
+                    VideoScript.user_id == user_id,
+                ).first()
+            if not db_script or db_script.user_id != user_id:
+                return f"Roteiro '{script_id}' nao encontrado."
+
+            original_script = json.loads(db_script.script_json)
+            real_script_id = db_script.id
+
+        _notify("Editando roteiro...")
+
+        from src.video.script_generator import _get_light_model
+
+        prompt = (
+            "Voce e um roteirista de videos virais. Modifique o roteiro JSON abaixo conforme as instrucoes.\n\n"
+            f"INSTRUCOES: {instructions}\n\n"
+            f"ROTEIRO:\n{json.dumps(original_script, ensure_ascii=False, indent=2)}\n\n"
+            "REGRAS:\n"
+            "- Retorne APENAS o JSON modificado, sem markdown.\n"
+            "- Mantenha a mesma estrutura (hook, scenes, callback, config).\n"
+            "- So modifique o que foi pedido.\n"
+            "- Mantenha person_description e i2v_prompt consistentes se existirem.\n"
+        )
+
+        try:
+            from agno.agent import Agent
+            agent = Agent(
+                model=_get_light_model(),
+                description="Editor de roteiro. Responda APENAS com JSON valido.",
+            )
+            result = agent.run(prompt)
+            raw = result.content if hasattr(result, "content") else str(result)
+            raw = raw.strip()
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+            if raw.endswith("```"):
+                raw = raw[:-3]
+            raw = raw.strip()
+            if raw.startswith("json"):
+                raw = raw[4:].strip()
+
+            modified_script = json.loads(raw)
+        except Exception as e:
+            return f"Nao consegui editar o roteiro: {e}. Tente descrever de outra forma."
+
+        # Save updated script
+        now = datetime.now(timezone.utc).isoformat()
+        with get_db() as session:
+            db_script = session.get(VideoScript, real_script_id)
+            if db_script:
+                db_script.script_json = json.dumps(modified_script, ensure_ascii=False)
+
+        from src.video.script_generator import format_script_preview
+        preview = format_script_preview(modified_script)
+
+        return (
+            f"**Roteiro editado!** (ID: {real_script_id[:8]})\n\n"
+            f"{preview}\n\n"
+            "---\n"
+            "Quer mais ajustes? Ou pode gerar o video com generate_video."
+        )
+
     return (
         create_video_script,
         generate_video,
@@ -600,4 +926,6 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
         adjust_video,
         review_video,
         add_video_to_calendar,
+        setup_avatar,
+        edit_script,
     )

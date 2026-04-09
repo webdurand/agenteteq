@@ -5,6 +5,10 @@ export type MovementType =
   | "zoom_out"
   | "ken_burns"
   | "zoom_pulse"
+  | "whip_pan"
+  | "drift_right"
+  | "drift_left"
+  | "dolly_zoom"
   | "static";
 
 interface ZoomPanProps {
@@ -79,6 +83,44 @@ export const ZoomPan: React.FC<ZoomPanProps> = ({
         [1, 1.15, 1, 1.15, 1],
         { extrapolateRight: "clamp" }
       );
+      break;
+    }
+    case "whip_pan": {
+      // Fast horizontal entry with overshoot (6 frames) + slight scale
+      const whipSpring = spring({
+        frame: localFrame,
+        fps,
+        config: { damping: 12, stiffness: 200, mass: 0.6 },
+        durationInFrames: Math.min(8, durationInFrames),
+      });
+      translateX = interpolate(whipSpring, [0, 1], [-540, 0]);
+      scale = 1 + (1 - whipSpring) * 0.05;
+      break;
+    }
+    case "drift_right": {
+      // Slow constant horizontal drift to the right
+      translateX = interpolate(localFrame, [0, durationInFrames], [0, 30], {
+        extrapolateRight: "clamp",
+      });
+      scale = 1.05;
+      break;
+    }
+    case "drift_left": {
+      // Slow constant horizontal drift to the left
+      translateX = interpolate(localFrame, [0, durationInFrames], [0, -30], {
+        extrapolateRight: "clamp",
+      });
+      scale = 1.05;
+      break;
+    }
+    case "dolly_zoom": {
+      // Vertigo effect: zoom in while pulling back (scale up + translateY shift)
+      scale = interpolate(localFrame, [0, durationInFrames], [1, 1.15], {
+        extrapolateRight: "clamp",
+      });
+      translateY = interpolate(localFrame, [0, durationInFrames], [0, -20], {
+        extrapolateRight: "clamp",
+      });
       break;
     }
     case "static":

@@ -14,12 +14,13 @@ import cloudinary.uploader
 
 logger = logging.getLogger(__name__)
 
-# Pipeline steps in order
+# Pipeline steps in order (not all run for every source_type)
 STEPS = [
     "generating_voice",
     "syncing_captions",
-    "generating_avatar",
-    "generating_broll",
+    "generating_avatar",     # avatar mode only
+    "generating_scenes",     # ai_motion mode only
+    "generating_broll",      # avatar/real mode only
     "assembling",
     "encoding",
     "uploading",
@@ -34,6 +35,7 @@ async def run_pipeline(
     source_url: str,
     channel: str = "web",
     voice: str = "",
+    task_id: str = "",
 ):
     """
     Run the full video generation pipeline.
@@ -93,12 +95,41 @@ async def run_pipeline(
             new_text = "__VIDEO_GENERATING__" + json.dumps({
                 "current_step": step,
                 "title": _script_title,
+                "task_id": task_id,
             })
             update_message_by_prefix(user_id, "__VIDEO_GENERATING__", new_text)
         except Exception:
             pass
 
+    def _check_cancelled():
+        """Raise if task was cancelled by user."""
+        if task_id:
+            from src.queue.task_queue import is_task_cancelled
+            if is_task_cancelled(task_id):
+                raise RuntimeError("cancelled by user")
+
     _notify_progress(user_id, channel, "Iniciando geracao do video...")
+
+    # ── Validações e auto-correção de source_type ──
+    if source_type == "avatar" and not source_url:
+        # Auto-upgrade: se não tem photo_url mas tem avatar configurado, usar ai_motion
+        try:
+            _load_user_avatar(user_id, avatar_id=script.get("_avatar_id", ""))
+            logger.info("Auto-upgrading source_type from 'avatar' to 'ai_motion' (no photo_url but avatar exists)")
+            source_type = "ai_motion"
+        except RuntimeError:
+            raise RuntimeError(
+                "Modo avatar requer uma foto (photo_url). "
+                "Envie uma foto ou configure um avatar com setup_avatar."
+            )
+    if source_type == "ai_motion":
+        try:
+            _load_user_avatar(user_id, avatar_id=script.get("_avatar_id", ""))
+        except RuntimeError:
+            raise RuntimeError(
+                "Modo ai_motion requer avatar configurado. "
+                "Use setup_avatar para enviar suas fotos primeiro."
+            )
 
     assets = {}
     cost_total = 0
@@ -111,10 +142,21 @@ async def run_pipeline(
 
         narration_text = _extract_full_narration(script)
 
+        # Use avatar's cloned voice if available and no explicit voice was requested
+        effective_voice = voice
+        if not effective_voice and source_type in ("ai_motion", "avatar"):
+            try:
+                _avatar = _load_user_avatar(user_id, avatar_id=script.get("_avatar_id", ""))
+                if _avatar and _avatar.voice_id:
+                    effective_voice = _avatar.voice_id
+                    logger.info("Using avatar cloned voice: %s", _avatar.voice_id)
+            except RuntimeError:
+                pass  # No avatar = use default voice
+
         from src.video.voice_generator import generate_voice
         audio_bytes, audio_mime, audio_duration = await generate_voice(
             text=narration_text,
-            voice=voice,
+            voice=effective_voice,
             user_id=user_id,
             channel=channel,
         )
@@ -130,6 +172,8 @@ async def run_pipeline(
         audio_url = audio_result["secure_url"]
         assets["voice_url"] = audio_url
         _save_assets(assets)
+
+        _check_cancelled()
 
         # Step 2: Caption sync
         _update_status("syncing_captions")
@@ -149,9 +193,57 @@ async def run_pipeline(
         assets["captions"] = captions
         _save_assets(assets)
 
-        # Step 3: Generate talking head (avatar mode) or use uploaded video
+        _check_cancelled()
+
+        # Step 3+4: Generate visual assets (depends on source_type)
         talking_head_url = ""
-        if source_type == "avatar" and source_url:
+        broll_urls = {}
+        scene_clip_urls = {}
+
+        if source_type == "ai_motion":
+            # --- AI MOTION: Generate per-scene clips of the user via Kling I2V ---
+            _update_status("generating_scenes")
+            _update_chat_step("generating_scenes")
+            _notify_progress(user_id, channel, "Gerando cenas realistas com IA...")
+
+            # Load avatar (by ID from payload, or active)
+            avatar_id = script.get("_avatar_id", "")
+            avatar = _load_user_avatar(user_id, avatar_id=avatar_id)
+            ref_frames = json.loads(avatar.reference_frames or "[]")
+            if not ref_frames:
+                raise RuntimeError("Avatar sem frames de referencia. Configure um avatar primeiro.")
+
+            ref_base64 = await _download_image_as_base64(ref_frames[0])
+
+            # Collect all scenes (hook + scenes + callback) with i2v_prompt
+            all_scenes = _collect_all_scenes(script)
+
+            # If script has no i2v_prompt, auto-generate from narration
+            if not all_scenes:
+                logger.info("Script has no i2v_prompt — auto-generating from narration")
+                _notify_progress(user_id, channel, "Gerando prompts de cena automaticamente...")
+                all_scenes = _auto_generate_i2v_scenes(script)
+
+            # Generate clips in parallel via VideoProvider
+            from src.video.providers import get_video_provider
+            provider = get_video_provider()
+            scene_clip_urls = await provider.generate_multiple_clips(
+                scenes=all_scenes,
+                reference_image_base64=ref_base64,
+                aspect_ratio="9:16",
+                user_id=user_id,
+                channel=channel,
+            )
+
+            # Track cost for successful scenes
+            for scene_name, url in scene_clip_urls.items():
+                if url:
+                    cost_total += provider.estimate_cost_cents(5)
+
+            assets["scene_clip_urls"] = scene_clip_urls
+
+        elif source_type == "avatar" and source_url:
+            # --- AVATAR: D-ID talking head + generic B-roll ---
             _update_status("generating_avatar")
             _update_chat_step("generating_avatar")
             _notify_progress(user_id, channel, "Gerando avatar com lip-sync...")
@@ -165,42 +257,47 @@ async def run_pipeline(
             )
             assets["talking_head_url"] = talking_head_url
             cost_total += 80  # $0.80 in cents
+
+            _save_assets(assets)
+            _check_cancelled()
+
+            # Generate B-roll
+            _update_status("generating_broll")
+            _update_chat_step("generating_broll")
+            _notify_progress(user_id, channel, "Gerando cenas de B-roll...")
+
+            broll_urls = await _generate_broll_for_script(script, user_id, channel)
+            cost_total += sum(14 for _ in broll_urls.values() if _)
+            assets["broll_urls"] = broll_urls
+
         elif source_type == "real" and source_url:
+            # --- REAL: User-uploaded video + generic B-roll ---
             talking_head_url = source_url
             assets["talking_head_url"] = source_url
 
+            _update_status("generating_broll")
+            _update_chat_step("generating_broll")
+            _notify_progress(user_id, channel, "Gerando cenas de B-roll...")
+
+            broll_urls = await _generate_broll_for_script(script, user_id, channel)
+            cost_total += sum(14 for _ in broll_urls.values() if _)
+            assets["broll_urls"] = broll_urls
+
         _save_assets(assets)
 
-        # Step 4: Generate B-roll clips
-        _update_status("generating_broll")
-        _update_chat_step("generating_broll")
-        _notify_progress(user_id, channel, "Gerando cenas de B-roll...")
+        # ── Validação C1: pelo menos 1 asset visual deve existir ──
+        has_visual = (
+            bool(talking_head_url)
+            or any(v for v in scene_clip_urls.values() if v)
+            or any(v for v in broll_urls.values() if v)
+        )
+        if not has_visual and source_type != "real":
+            raise RuntimeError(
+                "Nenhum asset visual foi gerado — o video ficaria sem imagem. "
+                "Verifique: foto do avatar (modo avatar) ou avatar configurado (modo ai_motion)."
+            )
 
-        broll_urls = {}
-        broll_prompts = {}
-        for scene in script.get("scenes", []):
-            prompt = scene.get("broll_prompt")
-            if prompt:
-                broll_prompts[scene["name"]] = prompt
-
-        if broll_prompts:
-            from src.video.scene_generator import generate_broll
-            for scene_name, prompt in broll_prompts.items():
-                try:
-                    url = await generate_broll(
-                        prompt=prompt,
-                        duration=5,
-                        aspect_ratio="9:16",
-                        user_id=user_id,
-                        channel=channel,
-                    )
-                    broll_urls[scene_name] = url
-                    cost_total += 14  # $0.14 in cents per 5s
-                except Exception as e:
-                    logger.warning("B-roll failed for %s: %s (continuing without)", scene_name, e)
-
-        assets["broll_urls"] = broll_urls
-        _save_assets(assets)
+        _check_cancelled()
 
         # Step 5: Assemble video with Remotion
         _update_status("assembling")
@@ -214,6 +311,7 @@ async def run_pipeline(
             captions=captions,
             talking_head_url=talking_head_url,
             broll_urls=broll_urls,
+            scene_clip_urls=scene_clip_urls,
             user_id=user_id,
             channel=channel,
         )
@@ -268,7 +366,7 @@ async def run_pipeline(
 
         # Update chat message: GENERATING → READY
         try:
-            from src.models.chat_messages import update_message_by_prefix
+            from src.models.chat_messages import update_message_by_prefix, save_message
             ready_payload = json.dumps({
                 "video_url": video_url,
                 "thumbnail_url": thumbnail_url,
@@ -276,12 +374,19 @@ async def run_pipeline(
                 "duration": duration_s,
                 "whatsapp_url": whatsapp_url,
             })
+            logger.info("Updating chat message to VIDEO_READY for user %s (video: %s)", user_id, video_url)
             updated = update_message_by_prefix(user_id, "__VIDEO_GENERATING__", f"__VIDEO_READY__{ready_payload}")
             if not updated:
-                from src.models.chat_messages import save_message
+                logger.warning("No __VIDEO_GENERATING__ message found to update — creating new VIDEO_READY message")
                 save_message(user_id, user_id, "agent", f"__VIDEO_READY__{ready_payload}")
         except Exception as e:
-            logger.warning("Failed to update chat message to VIDEO_READY: %s", e)
+            logger.error("Failed to update chat message to VIDEO_READY: %s", e)
+            # Last resort: try to save a new message
+            try:
+                from src.models.chat_messages import save_message as _save
+                _save(user_id, user_id, "agent", f"__VIDEO_READY__{ready_payload}")
+            except Exception:
+                logger.error("CRITICAL: Could not deliver video to chat for user %s", user_id)
 
         _notify_progress(user_id, channel, f"Video pronto! {video_url}")
 
@@ -351,6 +456,175 @@ def _notify_progress(user_id: str, channel: str, message: str):
                 _aio.run(coro)
         except Exception:
             pass
+
+
+def _auto_generate_i2v_scenes(script: dict) -> list[dict]:
+    """
+    Auto-generate i2v_prompt for each scene from narration text.
+    Used when script was generated without source_type='ai_motion'.
+    Converts narration into Kling I2V prompts describing person + action + scenario.
+    """
+    person_desc = script.get("person_description", "a professional person")
+    scenes = []
+
+    # Scenario variety for visual interest
+    scenarios = [
+        "speaking directly to camera in a modern studio with soft lighting, medium close-up shot",
+        "presenting confidently in a bright modern office, gesturing with hands, medium shot",
+        "talking passionately in a creative workspace, warm natural lighting, medium shot",
+        "explaining with conviction in a minimalist room, soft backlight, close-up shot",
+        "speaking energetically in front of a large screen, professional setting, medium wide shot",
+        "sitting at a desk in a modern home office, natural window light, medium shot",
+        "standing in an open co-working space, dynamic background, medium shot",
+        "walking slowly in a modern hallway, talking to camera, tracking shot",
+    ]
+
+    # Hook
+    hook = script.get("hook", {})
+    if hook.get("narration"):
+        scenes.append({
+            "name": "hook",
+            "prompt": f"{person_desc}, {scenarios[0]}",
+            "broll_prompt": hook.get("broll_prompt", ""),
+            "duration": max(5, hook.get("duration_s", 5)),  # Kling min 5s
+            "camera_control": None,  # kling-v2-master doesn't support camera_control
+        })
+
+    # Main scenes
+    for i, scene in enumerate(script.get("scenes", [])):
+        if scene.get("narration"):
+            scenario = scenarios[(i + 1) % len(scenarios)]
+            scenes.append({
+                "name": scene.get("name", f"scene_{i}"),
+                "prompt": f"{person_desc}, {scenario}",
+                "broll_prompt": scene.get("broll_prompt", ""),
+                "duration": max(5, scene.get("duration_s", 5)),  # Kling min 5s
+                "camera_control": None,
+            })
+
+    # Callback
+    callback = script.get("callback", {})
+    if callback.get("narration"):
+        scenes.append({
+            "name": "callback",
+            "prompt": f"{person_desc}, {scenarios[0]}",
+            "broll_prompt": callback.get("broll_prompt", ""),
+            "duration": max(5, callback.get("duration_s", 5)),  # Kling min 5s
+            "camera_control": None,  # kling-v2-master doesn't support camera_control
+        })
+
+    logger.info("Auto-generated %d i2v scenes from script narration", len(scenes))
+    return scenes
+
+
+def _load_user_avatar(user_id: str, avatar_id: str = ""):
+    """Load avatar by ID, or fall back to the user's active avatar."""
+    from src.db.session import get_db
+    from src.db.models import UserAvatar
+    with get_db() as session:
+        if avatar_id:
+            avatar = session.get(UserAvatar, avatar_id)
+            if avatar and avatar.user_id == user_id:
+                session.expunge(avatar)
+                return avatar
+        # Fallback: most recent active avatar
+        avatar = (
+            session.query(UserAvatar)
+            .filter(UserAvatar.user_id == user_id, UserAvatar.is_active == True)
+            .order_by(UserAvatar.created_at.desc())
+            .first()
+        )
+        if not avatar:
+            raise RuntimeError("Nenhum avatar configurado. Use setup_avatar primeiro.")
+        session.expunge(avatar)
+        return avatar
+
+
+async def _download_image_as_base64(url: str) -> str:
+    """Download image from URL and return as base64 string."""
+    import base64
+    import httpx
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        return base64.b64encode(resp.content).decode("utf-8")
+
+
+def _collect_all_scenes(script: dict) -> list[dict]:
+    """Extract hook + scenes + callback as a unified list with i2v_prompt and camera hints."""
+    scenes = []
+
+    # Hook
+    hook = script.get("hook", {})
+    if hook.get("i2v_prompt"):
+        scenes.append({
+            "name": "hook",
+            "prompt": hook["i2v_prompt"],
+            "broll_prompt": hook.get("broll_prompt", ""),
+            "duration": hook.get("duration_s", 3),
+            "camera_control": _camera_hint_to_control(hook.get("camera_hint", "")),
+        })
+
+    # Scenes
+    for scene in script.get("scenes", []):
+        if scene.get("i2v_prompt"):
+            scenes.append({
+                "name": scene.get("name", ""),
+                "prompt": scene["i2v_prompt"],
+                "broll_prompt": scene.get("broll_prompt", ""),
+                "duration": scene.get("duration_s", 5),
+                "camera_control": _camera_hint_to_control(scene.get("camera_hint", "")),
+            })
+
+    # Callback
+    callback = script.get("callback", {})
+    if callback.get("i2v_prompt"):
+        scenes.append({
+            "name": "callback",
+            "prompt": callback["i2v_prompt"],
+            "broll_prompt": callback.get("broll_prompt", ""),
+            "duration": callback.get("duration_s", 5),
+            "camera_control": _camera_hint_to_control(callback.get("camera_hint", "")),
+        })
+
+    return scenes
+
+
+def _camera_hint_to_control(hint: str) -> dict | None:
+    """Convert script camera_hint to Kling camera_control payload."""
+    if not hint or hint == "static":
+        return None
+    CAMERA_MAP = {
+        "zoom_in": {"type": "simple", "config": {"horizontal": 0, "vertical": 0, "pan": 0, "tilt": 0, "roll": 0, "zoom": 5}},
+        "pan_right": {"type": "simple", "config": {"horizontal": 5, "vertical": 0, "pan": 0, "tilt": 0, "roll": 0, "zoom": 0}},
+        "pan_left": {"type": "simple", "config": {"horizontal": -5, "vertical": 0, "pan": 0, "tilt": 0, "roll": 0, "zoom": 0}},
+        "tilt_up": {"type": "simple", "config": {"horizontal": 0, "vertical": 0, "pan": 0, "tilt": 5, "roll": 0, "zoom": 0}},
+        "dolly_forward": {"type": "forward_up"},
+    }
+    return CAMERA_MAP.get(hint)
+
+
+async def _generate_broll_for_script(
+    script: dict, user_id: str, channel: str,
+) -> dict[str, str]:
+    """Generate B-roll clips for all scenes that have broll_prompt."""
+    broll_urls = {}
+    from src.video.scene_generator import generate_broll
+    for scene in script.get("scenes", []):
+        prompt = scene.get("broll_prompt")
+        if prompt:
+            try:
+                url = await generate_broll(
+                    prompt=prompt,
+                    duration=5,
+                    aspect_ratio="9:16",
+                    user_id=user_id,
+                    channel=channel,
+                )
+                broll_urls[scene["name"]] = url
+            except Exception as e:
+                logger.warning("B-roll failed for %s: %s (continuing without)", scene.get("name"), e)
+    return broll_urls
 
 
 async def _deliver_video(user_id: str, channel: str, video_url: str, whatsapp_url: str):

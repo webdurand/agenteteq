@@ -120,6 +120,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
             logger.error("[WEB WS] Erro ao decodificar imagem base64: %s", e)
 
     agent_images = []
+    uploaded_image_urls = []  # Cloudinary URLs available to the agent
     save_to_chat = (mode == "text")
 
     if image_bytes_list:
@@ -128,25 +129,25 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
         await asyncio.to_thread(store_session_images, phone_number, image_bytes_list)
         for i_bytes in image_bytes_list:
             agent_images.append(Image(content=i_bytes))
-            
-        async def handle_images_and_save_message():
-            from src.integrations.image_storage import upload_user_image, describe_and_store_images
-            loop = asyncio.get_event_loop()
-            upload_tasks = [loop.run_in_executor(None, upload_user_image, phone_number, img_bytes) for img_bytes in image_bytes_list]
-            urls = await asyncio.gather(*upload_tasks, return_exceptions=True)
-            
-            valid_urls = [u for u in urls if not isinstance(u, Exception) and u]
-            
+
+        # Upload to Cloudinary BEFORE calling agent so URLs are available
+        from src.integrations.image_storage import upload_user_image, describe_and_store_images
+        loop_img = asyncio.get_event_loop()
+        upload_tasks = [loop_img.run_in_executor(None, upload_user_image, phone_number, img_bytes) for img_bytes in image_bytes_list]
+        upload_results = await asyncio.gather(*upload_tasks, return_exceptions=True)
+        uploaded_image_urls = [u for u in upload_results if not isinstance(u, Exception) and u]
+
+        # Save to chat and index in background (non-blocking)
+        async def _save_and_index():
             if save_to_chat:
                 display_text = user_text if user_text else ""
-                if valid_urls:
-                    display_text += "\n" + "\n".join(valid_urls)
+                if uploaded_image_urls:
+                    display_text += "\n" + "\n".join(uploaded_image_urls)
                 display_text = display_text.strip() or "[Imagens]"
                 await asyncio.to_thread(save_message, phone_number, phone_number, "user", display_text)
-            
-            await describe_and_store_images(phone_number, image_bytes_list, pre_uploaded_urls=urls)
+            await describe_and_store_images(phone_number, image_bytes_list, pre_uploaded_urls=upload_results)
 
-        asyncio.create_task(handle_images_and_save_message())
+        asyncio.create_task(_save_and_index())
     elif save_to_chat:
         display_text = user_text if user_text else "[Imagens]"
         asyncio.create_task(asyncio.to_thread(save_message, phone_number, phone_number, "user", display_text))
@@ -198,6 +199,16 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     prompt = user_text.strip()
     if not prompt and agent_images:
         prompt = "O usuário enviou imagens."
+
+    # Inject Cloudinary URLs into prompt so the agent has real URLs for tools
+    if uploaded_image_urls:
+        urls_text = ", ".join(uploaded_image_urls)
+        prompt += (
+            f"\n\n[IMAGENS ENVIADAS PELO USUARIO - {len(uploaded_image_urls)} arquivo(s) - "
+            f"URLs reais no Cloudinary: {urls_text}. "
+            "Use ESTAS URLs quando precisar referenciar as imagens em tools como setup_avatar. "
+            "NUNCA invente URLs - use SOMENTE estas.]"
+        )
         
     memory_mode = os.getenv("MEMORY_MODE", "agentic").lower()
     if memory_mode == "always-on" and prompt:

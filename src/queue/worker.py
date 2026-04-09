@@ -143,6 +143,11 @@ async def process_task_queue():
                     from src.db.models import VideoScript
                     with get_db() as session:
                         db_script = session.get(VideoScript, script_id)
+                        # Fallback: partial ID match (agent sends first 8 chars)
+                        if not db_script:
+                            db_script = session.query(VideoScript).filter(
+                                VideoScript.id.startswith(script_id)
+                            ).first()
                         if db_script and db_script.script_json:
                             script = _json.loads(db_script.script_json)
                             topic_fallback = topic_fallback or db_script.topic or ""
@@ -201,6 +206,10 @@ async def process_task_queue():
                 )
                 session.add(project)
 
+            # Inject avatar_id into script for pipeline to use
+            if payload.get("avatar_id"):
+                script["_avatar_id"] = payload["avatar_id"]
+
             await run_pipeline(
                 user_id=task["user_id"],
                 project_id=project_id,
@@ -209,6 +218,7 @@ async def process_task_queue():
                 source_url=payload.get("photo_url") or payload.get("video_url") or "",
                 channel=task["channel"],
                 voice=payload.get("voice", ""),
+                task_id=task["id"],
             )
 
             if not is_task_cancelled(task["id"]):

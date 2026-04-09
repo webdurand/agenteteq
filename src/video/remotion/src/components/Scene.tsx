@@ -8,6 +8,7 @@ export interface SceneData {
   on_screen_text: string;
   movement: MovementType;
   duration_s: number;
+  scene_clip_url?: string;  // AI Motion: Kling I2V clip of the user in scenario
   broll_url?: string;
   overlay_image_url?: string;
   sfx?: string;
@@ -28,9 +29,16 @@ export const Scene: React.FC<SceneProps> = ({
   talkingHeadUrl,
   fps,
 }) => {
-  // Determine background: B-roll video > talking head > solid color
+  // Determine background priority: Scene clip (I2V) > B-roll (T2V) > Talking head (D-ID) > Gradient
+  const hasSceneClip = !!scene.scene_clip_url;
   const hasBroll = !!scene.broll_url;
   const hasTalkingHead = !!talkingHeadUrl;
+
+  const coverStyle = {
+    width: "100%" as const,
+    height: "100%" as const,
+    objectFit: "cover" as const,
+  };
 
   return (
     <Sequence from={startFrame} durationInFrames={durationInFrames} name={scene.name}>
@@ -41,24 +49,12 @@ export const Scene: React.FC<SceneProps> = ({
       >
         {/* Background layer */}
         <div style={{ width: 1080, height: 1920, position: "relative" }}>
-          {hasBroll ? (
-            <OffthreadVideo
-              src={scene.broll_url!}
-              style={{
-                width: "100%",
-                height: "100%",
-                objectFit: "cover",
-              }}
-            />
+          {hasSceneClip ? (
+            <OffthreadVideo src={scene.scene_clip_url!} style={coverStyle} />
+          ) : hasBroll ? (
+            <OffthreadVideo src={scene.broll_url!} style={coverStyle} />
           ) : hasTalkingHead ? (
-            <OffthreadVideo
-              src={talkingHeadUrl!}
-              style={{
-                width: "100%",
-                height: "100%",
-                objectFit: "cover",
-              }}
-            />
+            <OffthreadVideo src={talkingHeadUrl!} style={coverStyle} />
           ) : (
             <div
               style={{

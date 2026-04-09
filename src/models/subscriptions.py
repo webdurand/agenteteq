@@ -19,8 +19,10 @@ FREE_LIMITS = {
     "deep_research_enabled": False,
     "canvas_editor_enabled": False,
     "video_creation_enabled": False,
+    "ai_motion_enabled": False,
     "max_tracked_accounts": 0,
     "max_videos_monthly": 0,
+    "max_ai_motion_monthly": 0,
 }
 
 PAID_LIMITS = {
@@ -35,8 +37,10 @@ PAID_LIMITS = {
     "deep_research_enabled": True,
     "canvas_editor_enabled": False,
     "video_creation_enabled": True,
+    "ai_motion_enabled": True,
     "max_tracked_accounts": 5,
     "max_videos_monthly": 10,
+    "max_ai_motion_monthly": 10,
 }
 
 
