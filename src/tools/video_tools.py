@@ -44,7 +44,7 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
 
         duration = max(30, min(80, duration))
 
-        # Auto-detect: if user has avatar, use heygen (preferred) or ai_motion
+        # Auto-detect: HeyGen standard (preferred — fast & cheap), seedance only if explicit
         if source_type == "avatar":
             try:
                 from src.db.models import UserAvatar
@@ -58,10 +58,10 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
                     if has_avatar:
                         if has_avatar.heygen_avatar_id and has_avatar.heygen_voice_id:
                             source_type = "heygen"
-                            logger.info("Auto-upgraded script source_type to heygen (HeyGen avatar configured)")
+                            logger.info("Auto-upgraded source_type to heygen (HeyGen avatar configured)")
                         else:
                             source_type = "ai_motion"
-                            logger.info("Auto-upgraded script source_type to ai_motion (user has avatar)")
+                            logger.info("Auto-upgraded source_type to ai_motion (user has avatar)")
                         if not person_description and has_avatar.label:
                             person_description = has_avatar.label
             except Exception:
@@ -178,7 +178,6 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
             topic: Tema do video (usado se script_id nao fornecido).
             source_type: Modo de geracao:
                 - "heygen": gera video com avatar HeyGen (voz clonada + cenarios + transicoes)
-                - "heygen_seedance": gera video CINEMATOGRAFICO com Seedance 2.0 (requer Digital Twin)
                 - "avatar": gera pessoa falando a partir de foto (D-ID talking head)
                 - "real": usa video enviado pelo criador
                 - "ai_motion": gera cenas realistas do usuario em cenarios diferentes (Kling I2V)
@@ -216,7 +215,7 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
         if monthly_count >= max_monthly:
             return f"Limite de {max_monthly} videos por mes atingido. Aguarde o proximo mes ou faca upgrade."
 
-        # Auto-detect: if user has avatar, upgrade to heygen (preferred) or ai_motion
+        # Auto-detect: HeyGen standard (preferred), seedance only if explicit
         avatar_id = ""
         if source_type == "avatar" and not photo_url:
             from src.db.models import UserAvatar
@@ -234,7 +233,7 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
                         source_type = "ai_motion"
                         logger.info("Auto-upgraded source_type to ai_motion (user has active avatar)")
 
-        if source_type in ("heygen", "heygen_seedance"):
+        if source_type == "heygen":
             # Validate HeyGen avatar
             from src.db.models import UserAvatar
             with get_db() as session:
@@ -254,14 +253,8 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
                         "Voz HeyGen nao configurada. "
                         "Configure sua voz no setup do avatar."
                     )
-                if source_type == "heygen_seedance" and avatar.heygen_training_status != "completed":
-                    return (
-                        "Digital Twin ainda nao esta pronto. "
-                        "Use setup_digital_twin para configurar seu avatar cinematografico primeiro."
-                    )
                 avatar_id = avatar.id
-                mode_label = "Seedance 2.0 (cinematografico)" if source_type == "heygen_seedance" else "HeyGen"
-                _notify(f"Usando avatar {mode_label}: {avatar.label or 'Meu Avatar'}")
+                _notify(f"Usando avatar HeyGen: {avatar.label or 'Meu Avatar'}")
 
         elif source_type == "ai_motion":
             if not is_feature_enabled(user_id, "ai_motion_enabled"):
@@ -349,6 +342,11 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
 
         # Enqueue task — include script_json inline as fallback if DB lookup may fail
         from src.queue.task_queue import enqueue_task
+
+        # Force heygen standard — seedance is disabled
+        if source_type == "heygen_seedance":
+            source_type = "heygen"
+            logger.info("Forced source_type from heygen_seedance to heygen (seedance disabled)")
 
         payload = {
             "script_id": script_id,
@@ -1577,8 +1575,8 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
                         f"Digital Twin PRONTO!\n"
                         f"ID: {current_twin_id[:12]}...\n"
                         f"Status: {heygen_status}\n\n"
-                        "Voce ja pode gerar videos cinematograficos! "
-                        "Use generate_video com source_type='heygen_seedance'."
+                        "Digital Twin pronto! "
+                        "Use generate_video para gerar videos."
                     )
                 elif heygen_status in ("failed", "error"):
                     return (
@@ -1601,56 +1599,53 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
             if not twin_id:
                 return "Informe o twin_id. Ex: manage_digital_twin(action='set', twin_id='abc123')"
 
-            # Verify on HeyGen
-            _notify(f"Verificando Digital Twin {twin_id[:12]}... no HeyGen...")
+            # Verify on HeyGen — check if avatar_id exists in the avatars list
+            _notify(f"Verificando avatar {twin_id[:12]}... no HeyGen...")
             import asyncio as _aio_set
-            from src.video.providers.heygen import check_digital_twin_status
+            from src.video.providers.heygen import list_avatars
 
             try:
                 async def _verify():
-                    return await check_digital_twin_status(twin_id)
+                    all_avatars = await list_avatars()
+                    for a in all_avatars:
+                        if a.get("avatar_id") == twin_id:
+                            return a
+                    return None
 
                 try:
                     loop = _aio_set.get_event_loop()
                     if loop.is_running():
                         import concurrent.futures
                         with concurrent.futures.ThreadPoolExecutor() as pool:
-                            verify_data = pool.submit(_aio_set.run, _verify()).result()
+                            found = pool.submit(_aio_set.run, _verify()).result()
                     else:
-                        verify_data = _aio_set.run(_verify())
+                        found = _aio_set.run(_verify())
                 except RuntimeError:
-                    verify_data = _aio_set.run(_verify())
+                    found = _aio_set.run(_verify())
 
-                heygen_status = verify_data.get("status", "unknown")
+                if not found:
+                    return f"Avatar ID '{twin_id}' nao encontrado no HeyGen. Verifique o ID."
+
+                avatar_name_heygen = found.get("avatar_name", "?")
 
                 with get_db() as session:
                     av = session.get(UserAvatar, avatar_id_local)
                     if av:
                         av.heygen_avatar_id = twin_id
                         av.heygen_avatar_type = "digital_twin"
-                        av.heygen_training_status = "completed" if heygen_status in ("completed", "complete", "done") else heygen_status
+                        av.heygen_training_status = "completed"
 
                 return (
-                    f"Digital Twin vinculado ao avatar!\n"
+                    f"Avatar vinculado com sucesso!\n"
+                    f"Nome no HeyGen: {avatar_name_heygen}\n"
                     f"ID: {twin_id}\n"
-                    f"Status no HeyGen: {heygen_status}\n"
-                    f"Avatar: {label}"
+                    f"Avatar local: {label}\n\n"
+                    "Pronto pra gerar videos!"
                 )
 
             except Exception as e:
-                # Save anyway, user might know the ID is valid
-                with get_db() as session:
-                    av = session.get(UserAvatar, avatar_id_local)
-                    if av:
-                        av.heygen_avatar_id = twin_id
-                        av.heygen_avatar_type = "digital_twin"
-                        av.heygen_training_status = "pending"
-
-                return (
-                    f"Digital Twin vinculado (nao consegui verificar no HeyGen: {e}).\n"
-                    f"ID: {twin_id}\n"
-                    "Use manage_digital_twin(action='status') para checar depois."
-                )
+                logger.error("Failed to verify avatar on HeyGen: %s", e)
+                return f"Erro ao verificar no HeyGen: {e}"
 
         if action == "remove":
             with get_db() as session:

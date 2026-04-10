@@ -102,15 +102,35 @@ O HeyGen gera transicoes automaticas entre cenas.
       * "Broadcaster" — tom de apresentador profissional. Use em listagens e fatos.
     - VARIACAO: alterne emocoes entre cenas para criar dinamismo.
     - A emocao deve COMBINAR com o conteudo da narracao.
+    - PREFERIR "Friendly" como base — soa mais natural e humano.
+    - Usar "Excited" com moderacao (max 1-2 cenas) — uso excessivo soa falso.
 
-13. HEYGEN_SPEED — VELOCIDADE DA FALA:
+14. HEYGEN_SPEED — VELOCIDADE DA FALA:
     - Cada cena pode ter "heygen_speed" (0.5 a 1.5, default 1.0).
-    - Hook: 1.1-1.2 (levemente mais rapido, energia alta).
+    - REGRA: mantenha entre 0.95 e 1.1. Valores extremos soam roboticos.
+    - Hook: 1.05 (levemente mais rapido, sutil).
     - Explicacoes: 1.0 (natural).
-    - Revelacoes/dados: 0.9 (mais lento, peso).
-    - Callback/CTA: 0.95 (calmo, direto).
+    - Revelacoes/dados: 0.95 (levemente mais lento, peso).
+    - Callback/CTA: 1.0 (natural, nao forcar lentidao).
 
-14. PERSON_DESCRIPTION:
+15. VOZ NATURAL (CRITICO — o TTS precisa soar HUMANO):
+    - A narracao sera lida por um TTS com voz clonada. Se o texto nao for natural, a voz soa ROBOTICA.
+    - REGRAS PARA NATURALIDADE:
+      * Escreva como se estivesse FALANDO, nao escrevendo. Leia em voz alta antes.
+      * Use contracoes e informalidade: "ta", "ne", "pra", "voce" (nao "esta", "nao e", "para", "voces").
+      * Frases CURTAS com pausas naturais via pontuacao (ponto final = respiracao).
+      * Use reticencias (...) ANTES de revelacoes: "E o resultado... foi incrivel."
+      * Use travessao (—) pra pausas dramaticas: "Eu testei tudo — e nada funcionava."
+      * NUNCA junte muitas ideias numa frase so. Cada ideia = uma frase.
+      * Varie o comprimento: frase curta, frase media, frase curta. Cria ritmo.
+      * EVITE frases que comecam com "E" repetidamente.
+    - GESTOS E MAOS:
+      * O avatar faz gestos automaticos baseados no ritmo do texto.
+      * Frases curtas e pausadas = gestos CONTIDOS e naturais.
+      * Frases longas e rapidas = gestos EXAGERADOS (mao pode passar no rosto — EVITAR).
+      * PORTANTO: mantenha frases curtas e bem pontuadas pra gestos naturais.
+
+16. PERSON_DESCRIPTION:
     - Inclua no topo do JSON: "person_description": "{person_desc}"
 """
 
@@ -336,15 +356,15 @@ Retorne APENAS o JSON abaixo, sem texto antes ou depois:
 }}
 
 REGRAS FINAIS (CRITICAS):
-- A soma de duration_s de TODAS as cenas + hook + callback deve ser ~{duration}s.
-- Total de palavras em narration deve ser ~{target_words}.
+- A duracao e FLEXIVEL. O video deve ter o tempo que o conteudo PRECISAR — nao force {duration}s exatos. Se o conteudo pede 40s, faca 40s. Se pede 55s, faca 55s. A meta e ~{duration}s mas a naturalidade do conteudo e mais importante que bater o tempo exato.
+- Total de palavras em narration deve ser ~{target_words} (ajuste proporcionalmente a duracao real).
 - Cada on_screen_text deve ter MAX 30 caracteres.
 - Cada frase de narracao deve ter MAX 15 palavras. Separe por ponto final.
 - A narracao deve soar NATURAL em portugues BR (como se fosse falada, nao escrita).
 - PONTUACAO: use pontos finais entre frases, virgulas pra ritmo, reticencias pra suspense, travessoes pra pausas dramaticas.
 - SIMETRIA: as narracoes das cenas devem ter tamanho SIMILAR entre si (variacao max 30%).
 - overlay_animation deve variar: use scale_pop no hook, slide_up nas cenas, fade_blur em revelacoes, slide_left em transicoes.
-- SFX: hook SEMPRE tem bass_hit. Transicoes = whoosh. Revelacoes = bass_hit ou impact. CTA = ding.{' ' + chr(10) + '- CADA i2v_prompt deve ser UNICO: cenarios, iluminacao e acoes DIFERENTES entre cenas.' if source_type == 'ai_motion' else ''}{' ' + chr(10) + '- HEYGEN: cada cena DEVE ter heygen_background, heygen_emotion e heygen_speed.' + chr(10) + '- HEYGEN: NUNCA repita a mesma cor de background em 2 cenas seguidas.' + chr(10) + '- HEYGEN: alterne emocoes (Excited/Friendly/Serious/Soothing) para criar dinamismo.' + chr(10) + '- HEYGEN: hook = Excited + velocidade 1.1. Callback = Soothing + velocidade 0.95.' if source_type == 'heygen' else ''}
+- SFX: hook SEMPRE tem bass_hit. Transicoes = whoosh. Revelacoes = bass_hit ou impact. CTA = ding.{' ' + chr(10) + '- CADA i2v_prompt deve ser UNICO: cenarios, iluminacao e acoes DIFERENTES entre cenas.' if source_type == 'ai_motion' else ''}{' ' + chr(10) + '- HEYGEN: cada cena DEVE ter heygen_background, heygen_scene_description, heygen_emotion e heygen_speed.' + chr(10) + '- HEYGEN: NUNCA repita a mesma cor de background em 2 cenas seguidas.' + chr(10) + '- HEYGEN: prefira "Friendly" como emocao base. Use "Excited" no maximo em 1-2 cenas.' + chr(10) + '- HEYGEN: velocidade entre 0.95 e 1.05 (valores extremos soam roboticos).' + chr(10) + '- HEYGEN: frases CURTAS e bem pontuadas = gestos naturais. Frases longas = gestos exagerados (mao no rosto).' if source_type == 'heygen' else ''}
 - Responda APENAS com o JSON, sem markdown, sem comentarios."""
 
     try:

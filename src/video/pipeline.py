@@ -112,15 +112,10 @@ async def run_pipeline(
 
     # ── Validações e auto-correção de source_type ──
     if source_type == "heygen_seedance":
-        try:
-            avatar = _load_user_avatar(user_id, avatar_id=script.get("_avatar_id", ""))
-            if not avatar.heygen_avatar_id:
-                raise RuntimeError(
-                    "Digital Twin nao configurado. "
-                    "Use setup_digital_twin para criar seu avatar cinematografico."
-                )
-        except RuntimeError:
-            raise
+        raise RuntimeError(
+            "Seedance 2.0 esta desabilitado temporariamente (custo alto). "
+            "Use source_type='heygen' (standard) por enquanto."
+        )
     elif source_type == "heygen":
         try:
             avatar = _load_user_avatar(user_id, avatar_id=script.get("_avatar_id", ""))
@@ -132,14 +127,14 @@ async def run_pipeline(
         except RuntimeError:
             raise
     elif source_type == "avatar" and not source_url:
-        # Auto-upgrade: se não tem photo_url mas tem avatar configurado, usar heygen ou ai_motion
+        # Auto-upgrade: HeyGen standard (preferred), seedance only if explicit
         try:
             avatar = _load_user_avatar(user_id, avatar_id=script.get("_avatar_id", ""))
             if avatar.heygen_avatar_id and avatar.heygen_voice_id:
-                logger.info("Auto-upgrading source_type from 'avatar' to 'heygen' (HeyGen avatar configured)")
+                logger.info("Auto-upgrading source_type to heygen (HeyGen avatar configured)")
                 source_type = "heygen"
             else:
-                logger.info("Auto-upgrading source_type from 'avatar' to 'ai_motion' (no photo_url but avatar exists)")
+                logger.info("Auto-upgrading source_type to ai_motion (no photo_url but avatar exists)")
                 source_type = "ai_motion"
         except RuntimeError:
             raise RuntimeError(
@@ -162,8 +157,8 @@ async def run_pipeline(
     captions = []
 
     try:
-        # Steps 1-2: Voice + Captions (skip for HeyGen — it handles voice internally)
-        if source_type != "heygen":
+        # Steps 1-2: Voice + Captions (skip for HeyGen modes — it handles voice internally)
+        if source_type not in ("heygen", "heygen_seedance"):
             # Step 1: Generate voice
             _update_status("generating_voice")
             _update_chat_step("generating_voice")
@@ -546,11 +541,10 @@ async def run_pipeline(
             return  # Seedance flow complete
 
         elif source_type == "heygen":
-            # --- HEYGEN: Full video generation via HeyGen API ---
-            # HeyGen handles: avatar + voice + backgrounds + transitions in one call.
-            # No Remotion, no Whisper, no audio splitting needed.
-            _update_status("generating_scenes")
-            _update_chat_step("generating_scenes")
+            # --- HEYGEN: Avatar video with ElevenLabs voice ---
+            # Flow: ElevenLabs generates audio per scene → HeyGen does avatar + lip-sync
+            _update_status("generating_voice")
+            _update_chat_step("generating_voice")
             _notify_progress(user_id, channel, "Preparando video com HeyGen...")
 
             avatar_id = script.get("_avatar_id", "")
@@ -560,11 +554,6 @@ async def run_pipeline(
                 raise RuntimeError(
                     "Avatar HeyGen nao configurado. "
                     "Use setup_avatar para criar seu avatar no HeyGen primeiro."
-                )
-            if not avatar.heygen_voice_id:
-                raise RuntimeError(
-                    "Voz HeyGen nao configurada. "
-                    "Configure sua voz no setup do avatar."
                 )
 
             # Build scenes from script
@@ -576,8 +565,6 @@ async def run_pipeline(
                 heygen_scenes.append({
                     "narration": hook["narration"],
                     "background": hook.get("heygen_background", {"type": "color", "value": "#0D1117"}),
-                    "emotion": hook.get("heygen_emotion", "Excited"),
-                    "speed": hook.get("heygen_speed", 1.1),
                 })
 
             # Scenes
@@ -586,8 +573,6 @@ async def run_pipeline(
                     heygen_scenes.append({
                         "narration": scene["narration"],
                         "background": scene.get("heygen_background", {"type": "color", "value": "#1a1a2e"}),
-                        "emotion": scene.get("heygen_emotion", "Friendly"),
-                        "speed": scene.get("heygen_speed", 1.0),
                     })
 
             # Callback
@@ -596,13 +581,47 @@ async def run_pipeline(
                 heygen_scenes.append({
                     "narration": callback["narration"],
                     "background": callback.get("heygen_background", {"type": "color", "value": "#0D1117"}),
-                    "emotion": callback.get("heygen_emotion", "Soothing"),
-                    "speed": callback.get("heygen_speed", 0.95),
                 })
 
             if not heygen_scenes:
                 raise RuntimeError("Roteiro sem narracao — impossivel gerar video.")
 
+            # Step 1: Generate audio per scene with ElevenLabs (user's cloned voice)
+            elevenlabs_voice = avatar.voice_id or ""
+            if elevenlabs_voice:
+                _notify_progress(user_id, channel,
+                    f"Gerando voz com ElevenLabs ({len(heygen_scenes)} cenas)...")
+
+                from src.video.voice_generator import generate_voice
+
+                for i, scene in enumerate(heygen_scenes):
+                    try:
+                        audio_bytes, audio_mime, audio_dur = await generate_voice(
+                            text=scene["narration"],
+                            voice=elevenlabs_voice,
+                            user_id=user_id,
+                            channel=channel,
+                        )
+                        # Upload audio to Cloudinary
+                        audio_result = cloudinary.uploader.upload(
+                            audio_bytes,
+                            folder="teq/video_assets",
+                            public_id=f"scene_audio_{project_id}_{i}",
+                            resource_type="video",
+                            overwrite=True,
+                        )
+                        scene["audio_url"] = audio_result["secure_url"]
+                        cost_total += 3  # ~$0.03 per scene
+                        logger.info("ElevenLabs audio for scene %d: %s (%.1fs)",
+                                    i, scene["audio_url"][:60], audio_dur)
+                    except Exception as e:
+                        logger.warning("ElevenLabs failed for scene %d: %s (falling back to HeyGen TTS)", i, e)
+
+                _check_cancelled()
+
+            # Step 2: Send to HeyGen with audio URLs
+            _update_status("generating_scenes")
+            _update_chat_step("generating_scenes")
             _notify_progress(user_id, channel,
                 f"Gerando video com {len(heygen_scenes)} cenas no HeyGen...")
 
@@ -656,6 +675,7 @@ async def run_pipeline(
                 public_id=f"video_{project_id}",
                 resource_type="video",
                 overwrite=True,
+                quality="auto:best",
             )
             video_url = video_result["secure_url"]
 

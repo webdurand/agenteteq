@@ -479,24 +479,26 @@ async def text_to_speech(
 
 def _build_video_input(
     talking_photo_id: str,
-    voice_id: str,
-    narration: str,
+    voice_id: str = "",
+    narration: str = "",
     background: dict | None = None,
     emotion: str = "Friendly",
     speed: float = 1.0,
     use_avatar_iv: bool = True,
+    audio_url: str = "",
 ) -> dict:
     """
     Build a single scene (video_input) for the HeyGen video generation API.
 
     Args:
         talking_photo_id: Photo avatar look ID.
-        voice_id: HeyGen voice ID (cloned or preset).
-        narration: Text the avatar will speak.
+        voice_id: HeyGen voice ID (used when audio_url is empty).
+        narration: Text the avatar will speak (used when audio_url is empty).
         background: {"type": "color|image|video", "value": "#hex or URL"}.
-        emotion: "Excited", "Friendly", "Serious", "Soothing", "Broadcaster".
-        speed: Voice speed 0.5-1.5.
-        use_avatar_iv: Use Avatar IV model (gestures, expressions, body movement).
+        emotion: Voice emotion (only for text mode).
+        speed: Voice speed (only for text mode).
+        use_avatar_iv: Use Avatar IV model.
+        audio_url: Pre-generated audio URL (e.g. ElevenLabs). If provided, uses audio mode instead of text.
     """
     bg = background or {"type": "color", "value": "#000000"}
 
@@ -508,15 +510,25 @@ def _build_video_input(
     if use_avatar_iv:
         character["use_avatar_iv_model"] = True
 
-    scene = {
-        "character": character,
-        "voice": {
+    # Voice: use pre-generated audio if available, otherwise text-to-speech
+    if audio_url:
+        voice_config = {
+            "type": "audio",
+            "audio_url": audio_url,
+        }
+    else:
+        voice_config = {
             "type": "text",
             "voice_id": voice_id,
             "input_text": narration,
             "speed": speed,
             "emotion": emotion,
-        },
+            "locale": "pt-BR",
+        }
+
+    scene = {
+        "character": character,
+        "voice": voice_config,
         "background": {},
     }
 
@@ -586,10 +598,11 @@ async def generate_video(
         video_input = _build_video_input(
             talking_photo_id=talking_photo_id,
             voice_id=voice_id,
-            narration=scene["narration"],
+            narration=scene.get("narration", ""),
             background=scene.get("background"),
             emotion=scene.get("emotion", "Friendly"),
             speed=scene.get("speed", 1.0),
+            audio_url=scene.get("audio_url", ""),
         )
         video_inputs.append(video_input)
 

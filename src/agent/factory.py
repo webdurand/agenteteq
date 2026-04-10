@@ -212,7 +212,6 @@ def create_agent_with_tools(
             "Ex: 'muda o hook', 'troca a cena 3'. O usuario pode pedir quantos ajustes quiser antes de gerar.\n"
             "- generate_video(script_id, source_type, photo_url?, video_url?, person_description?): Inicia a geracao. "
             "source_type='heygen' gera video com avatar HeyGen (voz clonada + cenarios + transicoes — PADRAO). "
-            "source_type='heygen_seedance' gera video CINEMATOGRAFICO com Seedance 2.0 (requer Digital Twin — MELHOR QUALIDADE). "
             "source_type='avatar' usa foto para criar pessoa falando (D-ID, precisa de photo_url). "
             "source_type='real' usa video gravado pelo criador (precisa de video_url). "
             "source_type='ai_motion' gera cenas REALISTICAS do usuario em cenarios diferentes (Kling I2V).\n"
@@ -259,6 +258,9 @@ def create_agent_with_tools(
             "7. POS-GERACAO: Ofereca review_video e add_video_to_calendar.\n\n"
 
             "REGRAS CRITICAS:\n"
+            "- NUNCA chame generate_video MAIS DE UMA VEZ por aprovacao. "
+            "Se o usuario disser 'pode fazer' ou 'ta otimo', chame generate_video UMA UNICA VEZ. "
+            "NUNCA chame 2x na mesma resposta. Se ja chamou, NAO chame de novo.\n"
             "- NUNCA gere roteiro sem pesquisar o tema antes. A pesquisa e o que faz o conteudo ser VALIOSO.\n"
             "- NUNCA gere video sem mostrar o roteiro e receber aprovacao.\n"
             "- Para ai_motion: SEMPRE verifique se o usuario tem avatar. Se nao, peca para configurar.\n"
