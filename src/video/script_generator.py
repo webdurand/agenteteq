@@ -115,15 +115,19 @@ O HeyGen gera transicoes automaticas entre cenas.
 
 15. VOZ NATURAL (CRITICO — o TTS precisa soar HUMANO):
     - A narracao sera lida por um TTS com voz clonada. Se o texto nao for natural, a voz soa ROBOTICA.
-    - REGRAS PARA NATURALIDADE:
-      * Escreva como se estivesse FALANDO, nao escrevendo. Leia em voz alta antes.
-      * Use contracoes e informalidade: "ta", "ne", "pra", "voce" (nao "esta", "nao e", "para", "voces").
-      * Frases CURTAS com pausas naturais via pontuacao (ponto final = respiracao).
+    - REGRAS PARA NATURALIDADE (CRITICO):
+      * Escreva como se estivesse FALANDO COM UM AMIGO. Leia em voz alta antes.
+      * Use contracoes e informalidade: "ta", "ne", "pra", "voce", "ce" (nao "esta", "nao e", "para").
+      * Frases CURTAS. Cada frase = uma respiracao. Maximo 12 palavras.
       * Use reticencias (...) ANTES de revelacoes: "E o resultado... foi incrivel."
       * Use travessao (—) pra pausas dramaticas: "Eu testei tudo — e nada funcionava."
       * NUNCA junte muitas ideias numa frase so. Cada ideia = uma frase.
       * Varie o comprimento: frase curta, frase media, frase curta. Cria ritmo.
       * EVITE frases que comecam com "E" repetidamente.
+      * EVITE texto formal demais: "criacao de conteudo" → "criar conteudo". "producao" → "produzir".
+      * Use PERGUNTAS RETORICAS pra criar conversa: "Sabe o que aconteceu?", "E ai?", "Sacou?"
+      * A transicao entre cenas deve ser COERENTE — a ultima frase de uma cena deve conectar com a primeira da proxima.
+      * REGRA DE TIMING: cada cena deve ter tempo SIMILAR de fala. Nao faca uma cena com 3 palavras e outra com 30.
     - GESTOS E MAOS:
       * O avatar faz gestos automaticos baseados no ritmo do texto.
       * Frases curtas e pausadas = gestos CONTIDOS e naturais.

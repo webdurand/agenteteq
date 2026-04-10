@@ -78,14 +78,24 @@ async def _generate_elevenlabs(
 
     url = f"{ELEVENLABS_API_URL}/text-to-speech/{voice_id}"
 
+    # Add natural pauses between sentences via SSML breaks
+    import re
+    natural_text = text
+    # Add short break after periods (not inside numbers like "6.2")
+    natural_text = re.sub(r'\.(\s+)(?=[A-ZÀ-Ú])', r'. <break time="0.4s" />\1', natural_text)
+    # Add break after ellipsis
+    natural_text = natural_text.replace('...', '... <break time="0.6s" />')
+    # Add break after em-dash
+    natural_text = natural_text.replace(' — ', ' — <break time="0.3s" />')
+
     payload = {
-        "text": text,
+        "text": natural_text,
         "model_id": "eleven_multilingual_v2",
         "voice_settings": {
-            "stability": 0.5,
-            "similarity_boost": 0.75,
-            "style": 0.3,
-            "use_speaker_boost": True,
+            "stability": 0.45,
+            "similarity_boost": 0.55,
+            "style": 0,
+            "use_speaker_boost": False,
         },
     }
 

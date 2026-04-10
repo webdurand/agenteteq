@@ -515,8 +515,8 @@ async def api_transcribe_audio(
 
 @router.get("/queue/active")
 async def api_queue_active(user=Depends(get_current_user)):
-    """List active (pending/processing) tasks for the user."""
-    from src.db.models import BackgroundTask
+    """List active (pending/processing) tasks for the user, with video progress."""
+    from src.db.models import BackgroundTask, VideoProject
     user_id = user["phone_number"]
     with get_db() as session:
         tasks = (
@@ -528,15 +528,31 @@ async def api_queue_active(user=Depends(get_current_user)):
             .order_by(BackgroundTask.created_at.desc())
             .all()
         )
-        return {"tasks": [
-            {
+        result = []
+        for t in tasks:
+            task_data = {
                 "task_id": str(t.id),
                 "type": t.task_type,
                 "status": t.status,
                 "created_at": t.created_at,
             }
-            for t in tasks
-        ]}
+            # Enrich video tasks with current_step from VideoProject
+            if t.task_type == "video":
+                project = (
+                    session.query(VideoProject)
+                    .filter(
+                        VideoProject.user_id == user_id,
+                        VideoProject.status.notin_(["done", "failed"]),
+                    )
+                    .order_by(VideoProject.created_at.desc())
+                    .first()
+                )
+                if project:
+                    task_data["current_step"] = project.current_step
+                    task_data["title"] = project.script_id[:8] if project.script_id else ""
+
+            result.append(task_data)
+        return {"tasks": result}
 
 
 @router.get("/queue/history")

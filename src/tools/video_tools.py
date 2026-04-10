@@ -565,29 +565,15 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
             )
             session.add(db_script)
 
-        # Show preview of changes
+        # Show preview of changes — do NOT auto-enqueue, let user approve first
         from src.video.script_generator import format_script_preview
         preview = format_script_preview(modified_script)
 
-        # Enqueue re-generation
-        from src.queue.task_queue import enqueue_task
-        payload = {
-            "script_id": new_script_id,
-            "source_type": project_dict.get("source_type", "avatar"),
-            "photo_url": project_dict.get("source_url", ""),
-        }
-
-        result = enqueue_task(user_id, "video", channel, payload)
-
-        if result["status"] == "queued":
-            return (
-                f"**Roteiro ajustado!**\n\n{preview}\n\n"
-                "---\n"
-                f"Video re-enfileirado! Posicao: {result['position']}\n"
-                f"Tempo estimado: {result['estimated_wait']}"
-            )
-
-        return f"Roteiro ajustado mas nao consegui enfileirar: {result}"
+        return (
+            f"**Roteiro ajustado!** (ID: {new_script_id[:8]})\n\n{preview}\n\n"
+            "---\n"
+            "Quer gerar o video com esse roteiro? Use generate_video para produzir."
+        )
 
     def review_video(
         video_id: str = "",
@@ -1126,48 +1112,26 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
     def update_voice(
         audio_urls: str = "",
         voice_name: str = "",
+        action: str = "add",
     ) -> str:
         """
-        Atualiza a voz clonada do avatar no HeyGen.
-        Aceita 1 ou mais URLs de audio. Clona a voz no HeyGen e gera um preview
-        para o usuario ouvir e aprovar.
+        Gerencia a voz clonada do avatar.
+        Aceita audios PICOTADOS (1 por vez ou varios de uma vez). Acumula tudo.
+        Quando quiser, clona a voz no ElevenLabs com todas as amostras.
 
         Args:
             audio_urls: URLs de audio separadas por virgula (Cloudinary).
-                Cada audio deve ter 30s-5min de fala limpa.
-            voice_name: Nome para a voz (opcional, padrao: "Minha voz").
+            voice_name: Nome para a voz (opcional).
+            action: "add" salva amostras, "clone" clona no ElevenLabs com tudo que tem,
+                    "status" mostra amostras salvas, "clear" limpa amostras.
 
         Returns:
-            Preview da voz com URL do audio para o usuario ouvir.
+            Status ou confirmacao.
         """
-        if not audio_urls:
-            return (
-                "Envie URLs de audio para clonar sua voz no HeyGen.\n"
-                "Exemplo: update_voice(audio_urls='url1,url2')\n"
-                "Dicas para melhor qualidade:\n"
-                "- Audio de 30 segundos a 5 minutos\n"
-                "- Fale naturalmente, como numa conversa\n"
-                "- Ambiente silencioso, sem musica de fundo\n"
-                "- Evite pausas longas"
-            )
-
-        urls = [u.strip() for u in audio_urls.split(",") if u.strip()]
-        if not urls:
-            return "Nenhuma URL valida fornecida."
-
-        # Validate URLs
-        for url in urls:
-            if "cloudinary.com" not in url and "res.cloudinary.com" not in url:
-                return (
-                    f"URL rejeitada: {url[:80]}...\n"
-                    "Apenas URLs do Cloudinary sao aceitas."
-                )
-
         from src.db.session import get_db
         from src.db.models import UserAvatar
         import json as _json
 
-        # Check active avatar
         with get_db() as session:
             avatar = (
                 session.query(UserAvatar)
@@ -1175,83 +1139,129 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
                 .first()
             )
             if not avatar:
-                return "Nenhum avatar ativo. Configure um avatar primeiro com setup_avatar."
-            avatar_id = avatar.id
+                return "Nenhum avatar ativo. Configure um com setup_avatar."
+            avatar_id_local = avatar.id
             existing_samples = _json.loads(avatar.voice_samples or "[]")
+            current_voice = avatar.voice_id
 
-        # Add new samples to the list (local persistence)
-        all_samples = existing_samples + urls
-        _notify(f"Salvando {len(urls)} amostra(s) de audio...")
-
-        with get_db() as session:
-            av = session.get(UserAvatar, avatar_id)
-            if av:
-                av.voice_samples = _json.dumps(all_samples)
-                av.voice_sample_url = urls[0]  # Keep first as reference
-
-        # Clone voice on HeyGen
-        import os as _os
-        if not _os.getenv("HEYGEN_API_KEY"):
-            return "HEYGEN_API_KEY nao configurada."
-
-        _notify("Clonando voz no HeyGen...")
-        import asyncio as _aio
-        from src.video.providers.heygen import clone_voice_from_urls, generate_voice_preview
-
-        try:
-            async def _do_clone_and_preview():
-                # Clone
-                new_voice_id = await clone_voice_from_urls(
-                    audio_urls=urls,
-                    voice_name=voice_name or "Minha voz",
-                )
-                # Generate preview
-                preview_data = await generate_voice_preview(
-                    voice_id=new_voice_id,
-                    preview_text=(
-                        "Oi, tudo bem? Esse e um preview da minha voz clonada. "
-                        "Estou testando pra ver se ficou natural e parecida comigo."
-                    ),
-                )
-                return new_voice_id, preview_data
-
-            try:
-                loop = _aio.get_event_loop()
-                if loop.is_running():
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor() as pool:
-                        new_voice_id, preview_data = pool.submit(
-                            _aio.run, _do_clone_and_preview()
-                        ).result()
-                else:
-                    new_voice_id, preview_data = _aio.run(_do_clone_and_preview())
-            except RuntimeError:
-                new_voice_id, preview_data = _aio.run(_do_clone_and_preview())
-
-            # Save new voice_id to avatar
-            with get_db() as session:
-                av = session.get(UserAvatar, avatar_id)
-                if av:
-                    av.heygen_voice_id = new_voice_id
-                    av.voice_name = voice_name or "Minha voz"
-
-            preview_url = preview_data.get("audio_url", "")
-            duration = preview_data.get("duration", 0)
-
+        if action == "status":
             return (
-                f"Voz clonada com sucesso no HeyGen!\n"
-                f"Voice ID: {new_voice_id}\n"
-                f"Amostras salvas: {len(all_samples)} audio(s)\n\n"
-                f"**Preview da voz:**\n"
-                f"{preview_url}\n"
-                f"Duracao: {duration:.1f}s\n\n"
-                "Ouca o preview e me diga se ficou bom! "
-                "Se quiser melhorar, envie mais audios e chame update_voice de novo."
+                f"**Amostras de voz salvas:** {len(existing_samples)}\n"
+                + ("\n".join(f"  {i+1}. {u[:60]}..." for i, u in enumerate(existing_samples)) if existing_samples else "  Nenhuma amostra salva.\n")
+                + f"\n\n**Voz clonada atual:** {'sim (ID: ' + current_voice + ')' if current_voice else 'nao'}\n"
+                + f"\nDica: quanto mais amostras (ideal 5-25), melhor a qualidade.\n"
+                + "Pode mandar audios picotados — eu acumulo tudo.\n"
+                + "Quando quiser clonar, use update_voice(action='clone')."
             )
 
-        except Exception as e:
-            logger.error("Voice clone/preview failed: %s", e)
-            return f"Erro ao clonar voz no HeyGen: {e}\nAs amostras de audio foram salvas localmente."
+        if action == "clear":
+            with get_db() as session:
+                av = session.get(UserAvatar, avatar_id_local)
+                if av:
+                    av.voice_samples = "[]"
+            return "Amostras de voz limpas! Envie novos audios quando quiser."
+
+        if not audio_urls and action == "add":
+            return (
+                f"Voce tem {len(existing_samples)} amostra(s) salva(s).\n\n"
+                "**Como melhorar sua voz clonada:**\n"
+                "1. Me envie audios pelo chat (pode ser picotado, varios curtos)\n"
+                "2. Cada audio deve ter 30s a 5 min de fala limpa\n"
+                "3. Fale naturalmente, como numa conversa\n"
+                "4. Ambiente silencioso, sem musica de fundo\n"
+                "5. Varie emocoes: fale animado, serio, calmo, surpreso\n"
+                "6. Quanto mais amostras (5-25), melhor a qualidade\n\n"
+                "Quando tiver amostras suficientes, diga 'clona minha voz' que eu processo tudo!"
+            )
+
+        # Add new samples
+        if audio_urls and action in ("add", "clone"):
+            urls = [u.strip() for u in audio_urls.split(",") if u.strip()]
+            for url in urls:
+                if "cloudinary.com" not in url:
+                    return f"URL rejeitada: {url[:80]}... (apenas Cloudinary)"
+
+            all_samples = existing_samples + urls
+            with get_db() as session:
+                av = session.get(UserAvatar, avatar_id_local)
+                if av:
+                    av.voice_samples = _json.dumps(all_samples)
+                    av.voice_sample_url = urls[0]
+
+            _notify(f"{len(urls)} amostra(s) salva(s)! Total: {len(all_samples)}")
+
+            if action == "add":
+                return (
+                    f"Audio(s) salvo(s)! Total de amostras: **{len(all_samples)}**\n\n"
+                    "Pode enviar mais audios ou dizer 'clona minha voz' quando quiser processar."
+                )
+
+        # Clone on ElevenLabs
+        if action == "clone":
+            with get_db() as session:
+                av = session.get(UserAvatar, avatar_id_local)
+                all_samples = _json.loads(av.voice_samples or "[]") if av else []
+
+            if not all_samples:
+                return "Nenhuma amostra salva. Envie audios primeiro."
+
+            _notify(f"Clonando voz no ElevenLabs com {len(all_samples)} amostra(s)...")
+
+            import asyncio as _aio_clone
+            import httpx as _hx_clone
+            from src.video.voice_cloner import clone_voice
+
+            try:
+                # Download all audio samples
+                async def _do_clone():
+                    audio_bytes_list = []
+                    async with _hx_clone.AsyncClient(timeout=60) as client:
+                        for url in all_samples:
+                            resp = await client.get(url)
+                            resp.raise_for_status()
+                            audio_bytes_list.append(resp.content)
+
+                    # Clone with all samples
+                    result = await clone_voice(
+                        audio_samples=audio_bytes_list,
+                        voice_name=voice_name or "Minha voz",
+                        user_id=user_id,
+                    )
+                    return result
+
+                try:
+                    loop = _aio_clone.get_event_loop()
+                    if loop.is_running():
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor() as pool:
+                            clone_result = pool.submit(_aio_clone.run, _do_clone()).result()
+                    else:
+                        clone_result = _aio_clone.run(_do_clone())
+                except RuntimeError:
+                    clone_result = _aio_clone.run(_do_clone())
+
+                new_voice_id = clone_result["voice_id"]
+
+                # Save to avatar
+                with get_db() as session:
+                    av = session.get(UserAvatar, avatar_id_local)
+                    if av:
+                        av.voice_id = new_voice_id
+                        av.voice_name = voice_name or "Minha voz"
+
+                return (
+                    f"Voz clonada com sucesso no ElevenLabs!\n"
+                    f"Voice ID: {new_voice_id}\n"
+                    f"Amostras usadas: {len(all_samples)}\n\n"
+                    "A proxima geracao de video ja vai usar essa voz!\n"
+                    "Se quiser melhorar ainda mais, envie mais audios e clone de novo."
+                )
+
+            except Exception as e:
+                logger.error("ElevenLabs clone failed: %s", e)
+                return f"Erro ao clonar voz: {e}\nAs amostras estao salvas. Tente novamente."
+
+        return f"Acao '{action}' nao reconhecida. Use: add, clone, status, clear."
 
     def setup_digital_twin(
         video_url: str = "",

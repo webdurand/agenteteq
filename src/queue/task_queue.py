@@ -270,13 +270,21 @@ def complete_task(task_id: str, result: dict):
 
 
 def fail_task(task_id: str, error: str) -> bool:
-    """Mark task as failed. Returns True if all retries exhausted (final failure)."""
+    """Mark task as failed. Returns True if all retries exhausted (final failure).
+    Video tasks do NOT retry — too expensive (HeyGen/ElevenLabs credits)."""
     now_iso = datetime.now(timezone.utc).isoformat()
     final = False
     with get_db() as session:
         task = session.get(BackgroundTask, task_id)
         if task:
-            if (task.attempts or 0) < 3:
+            task.attempts = (task.attempts or 0) + 1
+
+            # Video tasks never retry — each attempt costs real money
+            if task.task_type == "video":
+                task.status = "failed"
+                task.result = json.dumps({"error": error})
+                final = True
+            elif task.attempts < 3:
                 task.status = "pending"
             else:
                 task.status = "failed"

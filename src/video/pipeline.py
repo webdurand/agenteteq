@@ -110,6 +110,20 @@ async def run_pipeline(
 
     _notify_progress(user_id, channel, "Iniciando geracao do video...")
 
+    # ── Guard: block if user already has a video being generated ──
+    from src.db.models import VideoProject as _VP
+    with get_db() as session:
+        active_count = session.query(_VP).filter(
+            _VP.user_id == user_id,
+            _VP.id != project_id,
+            _VP.status.notin_(["done", "failed"]),
+        ).count()
+        if active_count > 0:
+            raise RuntimeError(
+                f"Ja tem {active_count} video(s) sendo processado(s). "
+                "Aguarde terminar ou cancele pela aba Fila."
+            )
+
     # ── Validações e auto-correção de source_type ──
     if source_type == "heygen_seedance":
         raise RuntimeError(
@@ -716,6 +730,19 @@ async def run_pipeline(
                     save_message(user_id, user_id, "agent", f"__VIDEO_READY__{ready_payload}")
             except Exception as e:
                 logger.error("Failed to update chat to VIDEO_READY: %s", e)
+
+            # Notify frontend via WebSocket so chat updates without F5
+            try:
+                from src.endpoints.web import ws_manager
+                await ws_manager.send_personal_message(user_id, {
+                    "type": "video_ready",
+                    "video_url": video_url,
+                    "thumbnail_url": thumbnail_url,
+                    "title": script.get("title", ""),
+                    "duration": duration_s,
+                })
+            except Exception as e:
+                logger.warning("Failed to send video_ready WS: %s", e)
 
             _notify_progress(user_id, channel, f"Video pronto! {video_url}")
             await _deliver_video(user_id, channel, video_url, whatsapp_url)
