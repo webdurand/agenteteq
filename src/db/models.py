@@ -875,9 +875,9 @@ class CanvasSession(Base):
 
 
 class UserAvatar(Base):
-    """User's avatar for AI Motion video generation.
-    Stores reference photos or video frames used by Kling I2V to generate
-    realistic clips of the user in different scenarios."""
+    """User's avatar for video generation (Kling I2V and HeyGen).
+    Stores reference photos/video frames and HeyGen avatar IDs for
+    generating realistic clips of the user in different scenarios."""
     __tablename__ = "user_avatars"
     __table_args__ = (
         Index("idx_user_avatars_user_active", "user_id", "is_active"),
@@ -893,8 +893,17 @@ class UserAvatar(Base):
     is_active = Column(Boolean, default=True)
     label = Column(String)               # optional label, e.g. "professional look"
     voice_id = Column(String)            # ElevenLabs cloned voice ID
-    voice_sample_url = Column(String)    # URL of the audio used to clone the voice
+    voice_sample_url = Column(String)    # URL of the first audio used to clone the voice
+    voice_samples = Column(Text)         # JSON array: all audio sample URLs used for voice cloning
     voice_name = Column(String)          # Display name of the cloned voice
+    # HeyGen-specific fields
+    heygen_group_id = Column(String)     # HeyGen photo avatar group ID
+    heygen_avatar_id = Column(String)    # HeyGen talking_photo_id or digital_twin_id
+    heygen_avatar_type = Column(String)  # "photo_avatar" | "digital_twin"
+    heygen_voice_id = Column(String)     # HeyGen cloned/selected voice ID
+    heygen_training_status = Column(String)  # "pending" | "training" | "completed" | "failed"
+    heygen_training_video_url = Column(String)   # Cloudinary URL of training footage (2-5 min)
+    heygen_consent_video_url = Column(String)    # Cloudinary URL of consent video
     created_at = Column(String, default=lambda: _utcnow().isoformat())
 
     def to_dict(self) -> dict:
@@ -909,8 +918,16 @@ class UserAvatar(Base):
             "label": self.label,
             "voice_id": self.voice_id,
             "voice_sample_url": self.voice_sample_url,
+            "voice_samples": json.loads(self.voice_samples or "[]"),
             "voice_name": self.voice_name,
-            "has_voice": bool(self.voice_id),
+            "has_voice": bool(self.voice_id or self.heygen_voice_id),
+            "heygen_group_id": self.heygen_group_id,
+            "heygen_avatar_id": self.heygen_avatar_id,
+            "heygen_avatar_type": self.heygen_avatar_type or "photo_avatar",
+            "heygen_voice_id": self.heygen_voice_id,
+            "heygen_training_status": self.heygen_training_status,
+            "has_heygen": bool(self.heygen_avatar_id),
+            "has_digital_twin": self.heygen_avatar_type == "digital_twin",
             "created_at": self.created_at,
         }
 

@@ -56,6 +56,64 @@ def generate_script(
             "Use esses padroes como inspiracao para o roteiro (nao copie, adapte)."
         )
 
+    heygen_instruction = ""
+    if source_type == "heygen":
+        person_desc = person_description or "o creator"
+        heygen_instruction = f"""
+
+=== REGRAS DE GERACAO VISUAL (HEYGEN AVATAR — OBRIGATORIO) ===
+
+Voce TAMBEM e um especialista em videos com avatares digitais da HeyGen.
+O sistema usa um avatar fotorrealista treinado do creator — ele APARECE falando em cada cena.
+Cada cena pode ter cenario diferente (background), emocao diferente, e velocidade de fala diferente.
+O HeyGen gera transicoes automaticas entre cenas.
+
+11. HEYGEN_BACKGROUND — CENARIOS POR CENA:
+    - Cada cena DEVE ter um campo "heygen_background" com tipo e valor.
+    - Para AGORA, use apenas "color" com cores OUSADAS e VARIADAS.
+      Exemplos: "#0D1117" (dark tech), "#1a1a2e" (dark blue), "#e63946" (vermelho bold),
+      "#2d6a4f" (verde profundo), "#f77f00" (laranja vibrante), "#7209b7" (roxo),
+      "#16213e" (navy), "#0f3460" (deep blue), "#533483" (deep purple), "#e94560" (pink bold)
+    - VARIACAO OBRIGATORIA: NUNCA use a mesma cor em 2 cenas seguidas.
+    - CONTRASTE EMOCIONAL:
+      * Cenas de DOR/PROBLEMA = cores escuras e frias (#0D1117, #1a1a2e)
+      * Cenas de ENERGIA/REVELACAO = cores quentes e vibrantes (#e63946, #f77f00)
+      * Cenas de SOLUCAO/RESULTADO = cores ricas (#7209b7, #2d6a4f)
+      * Hook = cor ousada que GRITA (#e63946, #e94560)
+      * CTA/Callback = cor que CONVIDA (#2d6a4f, #16213e)
+
+12. HEYGEN_SCENE_DESCRIPTION — DESCRICAO VISUAL CINEMATOGRAFICA:
+    - Cada cena DEVE ter um campo "heygen_scene_description" em PORTUGUES.
+    - Descreva o que o VIEWER deveria ver: expressao do creator, gestos, cenario ideal, camera.
+    - Essa descricao e usada pro Seedance 2.0 (cenarios cinematograficos com IA).
+    - EXEMPLOS BEM ESCRITOS:
+      * "Creator em escritorio moderno, pilha de papeis e telas, expressando frustracao. Camera faz zoom out lento mostrando a sobrecarga."
+      * "Close no rosto do creator com sorriso enigmatico. Efeito digital sutil. Corte rapido."
+      * "Creator caminhando enquanto telas virtuais aparecem ao redor. Cenario dinamico e futurista."
+      * "Creator para, sorriso confiante, gesticula para a tela. Cenario vibrante e impactante."
+    - A descricao deve refletir a EMOCAO da narracao (frustracao, surpresa, confianca, entusiasmo).
+
+13. HEYGEN_EMOTION — EMOCAO DA VOZ:
+    - Cada cena DEVE ter um campo "heygen_emotion" com uma das opcoes:
+      * "Excited" — energia alta, entusiasmo, surpresa. Use em hooks e revelacoes.
+      * "Friendly" — conversa natural, acessivel. Use em explicacoes e transicoes.
+      * "Serious" — peso, autoridade, dados importantes. Use em dados surpreendentes.
+      * "Soothing" — calma, confianca, conclusao. Use em callbacks e CTAs.
+      * "Broadcaster" — tom de apresentador profissional. Use em listagens e fatos.
+    - VARIACAO: alterne emocoes entre cenas para criar dinamismo.
+    - A emocao deve COMBINAR com o conteudo da narracao.
+
+13. HEYGEN_SPEED — VELOCIDADE DA FALA:
+    - Cada cena pode ter "heygen_speed" (0.5 a 1.5, default 1.0).
+    - Hook: 1.1-1.2 (levemente mais rapido, energia alta).
+    - Explicacoes: 1.0 (natural).
+    - Revelacoes/dados: 0.9 (mais lento, peso).
+    - Callback/CTA: 0.95 (calmo, direto).
+
+14. PERSON_DESCRIPTION:
+    - Inclua no topo do JSON: "person_description": "{person_desc}"
+"""
+
     ai_motion_instruction = ""
     if source_type == "ai_motion":
         person_desc = person_description or "a person"
@@ -111,7 +169,7 @@ Cada cena gera um video cinematografico onde o creator APARECE no cenario com mo
 2. ESTRATEGISTA DE MARKETING DIGITAL — domina algoritmo Instagram/TikTok 2026, metricas, growth
 3. EDITOR DE VIDEO PROFISSIONAL — domina cortes, transicoes, pacing visual, regra dos 2-4s
 4. NEUROCIENTISTA DE ATENCAO — domina dopamina, FFA (fusiform face area), orienting response, pattern interrupts
-5. ESPECIALISTA EM IA GENERATIVA — domina prompts para Kling AI, descricoes cinematograficas
+5. ESPECIALISTA EM IA GENERATIVA — domina prompts para geracao de video com IA (Kling, HeyGen), descricoes cinematograficas
 
 Seu trabalho: criar roteiros que MAXIMIZAM retencao, compartilhamentos e conversao.
 
@@ -166,12 +224,30 @@ C. FACE PROCESSING (FFA):
    {"- PAS: Problema (dor) -> Agitacao (consequencias) -> Solucao (alivio)" if framework == "PAS" else ""}{"- BAB: Before (estado ruim) -> After (resultado incrivel) -> Bridge (como chegar la)" if framework == "BAB" else ""}{"- AIDA: Atencao (hook) -> Interesse (dados/fatos) -> Desejo (beneficios) -> Acao (CTA)" if framework == "AIDA" else ""}{"- STAR: Situacao -> Tarefa -> Acao -> Resultado" if framework == "STAR" else ""}
    - O arco emocional deve ter CONTRASTE: alto-baixo-alto. Monotonia = scroll.
 
-5. PACING E RITMO:
+5. PACING, RITMO E PONTUACAO (CRITICO PARA TTS):
    - 170-200 palavras por minuto para Reels.
    - Mais LENTO (120 WPM) em pontos-chave — cria ENFASE e peso.
    - Mais RAPIDO (200 WPM) em transicoes — cria URGENCIA e energia.
-   - Micro-pausas de 200-400ms apos pontos importantes (marque com [pausa]).
    - REGRA DE OURO: cada frase deve ter NO MAXIMO 15 palavras. Frases curtas = impacto.
+
+   PONTUACAO EXPRESSIVA (o TTS le pontuacao como respiracao e ritmo):
+   - Use PONTO FINAL apos cada frase. Cada ponto = respiracao natural.
+   - Use VIRGULAS pra criar micro-pausas ritmicas dentro da frase.
+   - Use RETICENCIAS (...) antes de revelacoes e dados surpreendentes. Ex: "E o resultado... foi de 300%."
+   - Use PONTO DE EXCLAMACAO com moderacao (max 1-2 por cena) pra enfase real.
+   - Use TRAVESSAO (—) pra criar pausas dramaticas. Ex: "Eu testei tudo — e nada funcionava."
+   - NUNCA junte frases longas sem pontuacao. Cada ideia = uma frase separada.
+   - Exemplo RUIM: "eu descobri que a maioria das pessoas erra nessa parte e por isso nao consegue resultado"
+   - Exemplo BOM: "Eu descobri algo. A maioria das pessoas... erra nessa parte. E por isso, nao consegue resultado."
+
+   PARAGRAFOS SIMETRICOS (OBRIGATORIO):
+   - Cada cena deve ter narracao com tamanho SIMILAR (variacao max 30% entre cenas).
+   - Divida a narracao em blocos curtos de 2-3 frases, separados por ponto final.
+   - Cada bloco deve ter entre 8-20 palavras.
+   - Se uma cena tem 15 palavras, a proxima nao deve ter 40. Mantenha equilibrio.
+   - Hook: 8-15 palavras (curto, impactante).
+   - Cenas: 15-25 palavras cada (consistente entre elas).
+   - Callback: 10-18 palavras (fechamento conciso).
 
 6. CORTES E MOVIMENTOS DE CAMERA:
    - Corte de cena / mudanca visual a cada 2-4 segundos (regra MrBeast/Hormozi).
@@ -206,13 +282,13 @@ C. FACE PROCESSING (FFA):
     - Regra 60/40: 60% concorda + 40% discorda = MAXIMO de comentarios/shares.
     - Emocoes que viralizam (em ordem): AWE > amusement > anger > anxiety > surprise.
     - Dados surpreendentes geram AWE — o gatilho #1 de viralização (+30% shares).
-{ai_motion_instruction}
+{heygen_instruction}{ai_motion_instruction}
 === FORMATO DE SAIDA (JSON ESTRITO) ===
 
 Retorne APENAS o JSON abaixo, sem texto antes ou depois:
 
 {{
-  "title": "titulo curto do video (para referencia interna)",{'"person_description": "descricao fixa da aparencia da pessoa para consistencia visual",' if source_type == 'ai_motion' else ''}
+  "title": "titulo curto do video (para referencia interna)",{'"person_description": "descricao fixa da aparencia da pessoa para consistencia visual",' if source_type in ('ai_motion', 'heygen') else ''}
   "hook": {{
     "type": "bold_statement|question|pattern_interrupt|proof_first|controversy",
     "narration": "texto exato da narracao do hook (max 15 palavras, portugues BR)",
@@ -220,7 +296,7 @@ Retorne APENAS o JSON abaixo, sem texto antes ou depois:
     "overlay_animation": "scale_pop",
     "movement": "zoom_in_face",
     "duration_s": 3,
-    "open_loop": "descricao do open loop que abre aqui"{(',' + chr(10) + '    "i2v_prompt": "@Element1 [action] [setting] [lighting] [camera movement]",' + chr(10) + '    "camera_direct": true') if source_type == 'ai_motion' else ''}
+    "open_loop": "descricao do open loop que abre aqui"{(',' + chr(10) + '    "i2v_prompt": "@Element1 [action] [setting] [lighting] [camera movement]",' + chr(10) + '    "camera_direct": true') if source_type == 'ai_motion' else ''}{(',' + chr(10) + '    "heygen_background": {{"type": "color", "value": "#hex_ousado"}},' + chr(10) + '    "heygen_scene_description": "descricao visual cinematografica da cena em portugues",' + chr(10) + '    "heygen_emotion": "Excited",' + chr(10) + '    "heygen_speed": 1.1') if source_type == 'heygen' else ''}
   }},
   "scenes": [
     {{
@@ -230,7 +306,10 @@ Retorne APENAS o JSON abaixo, sem texto antes ou depois:
       "overlay_animation": "slide_up|scale_pop|fade_blur|slide_left",
       "movement": "zoom_in_face|zoom_out|ken_burns|zoom_pulse|whip_pan|drift_right|dolly_zoom",
       "broll_prompt": "descricao em ingles para gerar B-roll contextual (ou null)",{'"i2v_prompt": "@Element1 [action] [setting] [lighting] [camera movement description in English]",' if source_type == 'ai_motion' else ''}
-      {"" if source_type != "ai_motion" else '"camera_direct": "true se personagem olha pra camera e fala | false se cena de acao/voiceover",'}
+      {"" if source_type != "ai_motion" else '"camera_direct": "true se personagem olha pra camera e fala | false se cena de acao/voiceover",'}{"" if source_type != "heygen" else '"heygen_background": {"type": "color|image", "value": "#hex ou url", "image_prompt": "scene description in english for background (optional)"},'}
+      {"" if source_type != "heygen" else '"heygen_scene_description": "descricao visual cinematografica da cena (cenario, expressao, gestos, camera)",'}
+      {"" if source_type != "heygen" else '"heygen_emotion": "Excited|Friendly|Serious|Soothing|Broadcaster",'}
+      {"" if source_type != "heygen" else '"heygen_speed": 1.0,'}
       "overlay_image_prompt": "descricao para gerar imagem de contexto (ou null)",
       "duration_s": 8,
       "sfx": "whoosh|bass_hit|pop|ding|riser|impact|glitch|null",
@@ -242,7 +321,7 @@ Retorne APENAS o JSON abaixo, sem texto antes ou depois:
     "on_screen_text": "TEXTO FINAL",
     "overlay_animation": "scale_pop",
     "movement": "zoom_out",
-    "duration_s": 5{(',' + chr(10) + '    "i2v_prompt": "@Element1 [action] [setting] [lighting] [camera movement]",' + chr(10) + '    "camera_direct": true') if source_type == 'ai_motion' else ''}
+    "duration_s": 5{(',' + chr(10) + '    "i2v_prompt": "@Element1 [action] [setting] [lighting] [camera movement]",' + chr(10) + '    "camera_direct": true') if source_type == 'ai_motion' else ''}{(',' + chr(10) + '    "heygen_background": {{"type": "color", "value": "#hex_ousado"}},' + chr(10) + '    "heygen_scene_description": "descricao visual cinematografica do callback",' + chr(10) + '    "heygen_emotion": "Soothing",' + chr(10) + '    "heygen_speed": 0.95') if source_type == 'heygen' else ''}
   }},
   "config": {{
     "framework": "{framework}",
@@ -260,10 +339,12 @@ REGRAS FINAIS (CRITICAS):
 - A soma de duration_s de TODAS as cenas + hook + callback deve ser ~{duration}s.
 - Total de palavras em narration deve ser ~{target_words}.
 - Cada on_screen_text deve ter MAX 30 caracteres.
-- Cada frase de narracao deve ter MAX 15 palavras.
+- Cada frase de narracao deve ter MAX 15 palavras. Separe por ponto final.
 - A narracao deve soar NATURAL em portugues BR (como se fosse falada, nao escrita).
+- PONTUACAO: use pontos finais entre frases, virgulas pra ritmo, reticencias pra suspense, travessoes pra pausas dramaticas.
+- SIMETRIA: as narracoes das cenas devem ter tamanho SIMILAR entre si (variacao max 30%).
 - overlay_animation deve variar: use scale_pop no hook, slide_up nas cenas, fade_blur em revelacoes, slide_left em transicoes.
-- SFX: hook SEMPRE tem bass_hit. Transicoes = whoosh. Revelacoes = bass_hit ou impact. CTA = ding.{' ' + chr(10) + '- CADA i2v_prompt deve ser UNICO: cenarios, iluminacao e acoes DIFERENTES entre cenas.' if source_type == 'ai_motion' else ''}
+- SFX: hook SEMPRE tem bass_hit. Transicoes = whoosh. Revelacoes = bass_hit ou impact. CTA = ding.{' ' + chr(10) + '- CADA i2v_prompt deve ser UNICO: cenarios, iluminacao e acoes DIFERENTES entre cenas.' if source_type == 'ai_motion' else ''}{' ' + chr(10) + '- HEYGEN: cada cena DEVE ter heygen_background, heygen_emotion e heygen_speed.' + chr(10) + '- HEYGEN: NUNCA repita a mesma cor de background em 2 cenas seguidas.' + chr(10) + '- HEYGEN: alterne emocoes (Excited/Friendly/Serious/Soothing) para criar dinamismo.' + chr(10) + '- HEYGEN: hook = Excited + velocidade 1.1. Callback = Soothing + velocidade 0.95.' if source_type == 'heygen' else ''}
 - Responda APENAS com o JSON, sem markdown, sem comentarios."""
 
     try:
@@ -323,24 +404,41 @@ def format_script_preview(script: dict) -> str:
     lines.append(f"Duracao: ~{config.get('total_duration_s', '?')}s | Palavras: ~{config.get('total_words', '?')}")
     lines.append("")
 
+    # Check if this is a HeyGen script
+    is_heygen = bool(script.get("hook", {}).get("heygen_emotion"))
+
     # Hook
     hook = script.get("hook", {})
-    lines.append(f"**HOOK ({hook.get('duration_s', 3)}s)** [{hook.get('type', '?')}]")
+    hook_extra = ""
+    if hook.get("heygen_emotion"):
+        hook_extra = f' | {hook["heygen_emotion"]}'
+    lines.append(f"**HOOK ({hook.get('duration_s', 3)}s)** [{hook.get('type', '?')}]{hook_extra}")
     lines.append(f'  Fala: "{hook.get("narration", "")}"')
-    lines.append(f'  Tela: {hook.get("on_screen_text", "")}')
+    if is_heygen and hook.get("heygen_scene_description"):
+        lines.append(f'  Visual: {hook["heygen_scene_description"]}')
+    elif hook.get("on_screen_text"):
+        lines.append(f'  Tela: {hook["on_screen_text"]}')
     if hook.get("open_loop"):
         lines.append(f'  Open loop: {hook["open_loop"]}')
+    if hook.get("heygen_background"):
+        bg = hook["heygen_background"]
+        lines.append(f'  Background: {bg.get("value", "")}')
     lines.append("")
 
     # Scenes
     for i, scene in enumerate(script.get("scenes", []), 1):
-        lines.append(f"**CENA {i}: {scene.get('name', '')}** ({scene.get('duration_s', '?')}s) [{scene.get('movement', '')}]")
+        scene_extra = ""
+        if scene.get("heygen_emotion"):
+            scene_extra = f' | {scene["heygen_emotion"]}'
+        lines.append(f"**CENA {i}: {scene.get('name', '')}** ({scene.get('duration_s', '?')}s){scene_extra}")
         lines.append(f'  Fala: "{scene.get("narration", "")}"')
-        lines.append(f'  Tela: {scene.get("on_screen_text", "")}')
-        if scene.get("broll_prompt"):
-            lines.append(f'  B-roll: {scene["broll_prompt"]}')
-        if scene.get("overlay_image_prompt"):
-            lines.append(f'  Overlay: {scene["overlay_image_prompt"]}')
+        if is_heygen and scene.get("heygen_scene_description"):
+            lines.append(f'  Visual: {scene["heygen_scene_description"]}')
+        elif scene.get("on_screen_text"):
+            lines.append(f'  Tela: {scene["on_screen_text"]}')
+        if scene.get("heygen_background"):
+            bg = scene["heygen_background"]
+            lines.append(f'  Background: {bg.get("value", "")}')
         if scene.get("loop_note"):
             lines.append(f'  Loop: {scene["loop_note"]}')
         lines.append("")
@@ -348,9 +446,18 @@ def format_script_preview(script: dict) -> str:
     # Callback
     callback = script.get("callback", {})
     if callback:
-        lines.append(f"**CALLBACK ({callback.get('duration_s', 5)}s)**")
+        cb_extra = ""
+        if callback.get("heygen_emotion"):
+            cb_extra = f' | {callback["heygen_emotion"]}'
+        lines.append(f"**CALLBACK ({callback.get('duration_s', 5)}s)**{cb_extra}")
         lines.append(f'  Fala: "{callback.get("narration", "")}"')
-        lines.append(f'  Tela: {callback.get("on_screen_text", "")}')
+        if is_heygen and callback.get("heygen_scene_description"):
+            lines.append(f'  Visual: {callback["heygen_scene_description"]}')
+        elif callback.get("on_screen_text"):
+            lines.append(f'  Tela: {callback["on_screen_text"]}')
+        if callback.get("heygen_background"):
+            bg = callback["heygen_background"]
+            lines.append(f'  Background: {bg.get("value", "")}')
         lines.append("")
 
     # Config

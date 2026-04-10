@@ -111,12 +111,36 @@ async def run_pipeline(
     _notify_progress(user_id, channel, "Iniciando geracao do video...")
 
     # ── Validações e auto-correção de source_type ──
-    if source_type == "avatar" and not source_url:
-        # Auto-upgrade: se não tem photo_url mas tem avatar configurado, usar ai_motion
+    if source_type == "heygen_seedance":
         try:
-            _load_user_avatar(user_id, avatar_id=script.get("_avatar_id", ""))
-            logger.info("Auto-upgrading source_type from 'avatar' to 'ai_motion' (no photo_url but avatar exists)")
-            source_type = "ai_motion"
+            avatar = _load_user_avatar(user_id, avatar_id=script.get("_avatar_id", ""))
+            if not avatar.heygen_avatar_id:
+                raise RuntimeError(
+                    "Digital Twin nao configurado. "
+                    "Use setup_digital_twin para criar seu avatar cinematografico."
+                )
+        except RuntimeError:
+            raise
+    elif source_type == "heygen":
+        try:
+            avatar = _load_user_avatar(user_id, avatar_id=script.get("_avatar_id", ""))
+            if not avatar.heygen_avatar_id:
+                raise RuntimeError(
+                    "Avatar HeyGen nao configurado. "
+                    "Use setup_avatar para criar seu avatar no HeyGen primeiro."
+                )
+        except RuntimeError:
+            raise
+    elif source_type == "avatar" and not source_url:
+        # Auto-upgrade: se não tem photo_url mas tem avatar configurado, usar heygen ou ai_motion
+        try:
+            avatar = _load_user_avatar(user_id, avatar_id=script.get("_avatar_id", ""))
+            if avatar.heygen_avatar_id and avatar.heygen_voice_id:
+                logger.info("Auto-upgrading source_type from 'avatar' to 'heygen' (HeyGen avatar configured)")
+                source_type = "heygen"
+            else:
+                logger.info("Auto-upgrading source_type from 'avatar' to 'ai_motion' (no photo_url but avatar exists)")
+                source_type = "ai_motion"
         except RuntimeError:
             raise RuntimeError(
                 "Modo avatar requer uma foto (photo_url). "
@@ -133,67 +157,72 @@ async def run_pipeline(
 
     assets = {}
     cost_total = 0
+    audio_url = ""
+    audio_duration = 0
+    captions = []
 
     try:
-        # Step 1: Generate voice
-        _update_status("generating_voice")
-        _update_chat_step("generating_voice")
-        _notify_progress(user_id, channel, "Gerando narracao...")
+        # Steps 1-2: Voice + Captions (skip for HeyGen — it handles voice internally)
+        if source_type != "heygen":
+            # Step 1: Generate voice
+            _update_status("generating_voice")
+            _update_chat_step("generating_voice")
+            _notify_progress(user_id, channel, "Gerando narracao...")
 
-        narration_text = _extract_full_narration(script)
+            narration_text = _extract_full_narration(script)
 
-        # Use avatar's cloned voice if available and no explicit voice was requested
-        effective_voice = voice
-        if not effective_voice and source_type in ("ai_motion", "avatar"):
-            try:
-                _avatar = _load_user_avatar(user_id, avatar_id=script.get("_avatar_id", ""))
-                if _avatar and _avatar.voice_id:
-                    effective_voice = _avatar.voice_id
-                    logger.info("Using avatar cloned voice: %s", _avatar.voice_id)
-            except RuntimeError:
-                pass  # No avatar = use default voice
+            # Use avatar's cloned voice if available and no explicit voice was requested
+            effective_voice = voice
+            if not effective_voice and source_type in ("ai_motion", "avatar"):
+                try:
+                    _avatar = _load_user_avatar(user_id, avatar_id=script.get("_avatar_id", ""))
+                    if _avatar and _avatar.voice_id:
+                        effective_voice = _avatar.voice_id
+                        logger.info("Using avatar cloned voice: %s", _avatar.voice_id)
+                except RuntimeError:
+                    pass  # No avatar = use default voice
 
-        from src.video.voice_generator import generate_voice
-        audio_bytes, audio_mime, audio_duration = await generate_voice(
-            text=narration_text,
-            voice=effective_voice,
-            user_id=user_id,
-            channel=channel,
-        )
+            from src.video.voice_generator import generate_voice
+            audio_bytes, audio_mime, audio_duration = await generate_voice(
+                text=narration_text,
+                voice=effective_voice,
+                user_id=user_id,
+                channel=channel,
+            )
 
-        # Upload audio to Cloudinary
-        audio_result = cloudinary.uploader.upload(
-            audio_bytes,
-            folder="teq/video_assets",
-            public_id=f"voice_{project_id}",
-            resource_type="video",
-            overwrite=True,
-        )
-        audio_url = audio_result["secure_url"]
-        assets["voice_url"] = audio_url
-        _save_assets(assets)
+            # Upload audio to Cloudinary
+            audio_result = cloudinary.uploader.upload(
+                audio_bytes,
+                folder="teq/video_assets",
+                public_id=f"voice_{project_id}",
+                resource_type="video",
+                overwrite=True,
+            )
+            audio_url = audio_result["secure_url"]
+            assets["voice_url"] = audio_url
+            _save_assets(assets)
 
-        _check_cancelled()
+            _check_cancelled()
 
-        # Step 2: Caption sync
-        _update_status("syncing_captions")
-        _update_chat_step("syncing_captions")
-        _notify_progress(user_id, channel, "Sincronizando legendas...")
+            # Step 2: Caption sync
+            _update_status("syncing_captions")
+            _update_chat_step("syncing_captions")
+            _notify_progress(user_id, channel, "Sincronizando legendas...")
 
-        from src.video.voice_generator import convert_to_wav
-        from src.video.caption_sync import generate_captions
+            from src.video.voice_generator import convert_to_wav
+            from src.video.caption_sync import generate_captions
 
-        wav_bytes = await convert_to_wav(audio_bytes, audio_mime)
-        captions = await generate_captions(
-            audio_bytes=wav_bytes,
-            language="pt",
-            user_id=user_id,
-            channel=channel,
-        )
-        assets["captions"] = captions
-        _save_assets(assets)
+            wav_bytes = await convert_to_wav(audio_bytes, audio_mime)
+            captions = await generate_captions(
+                audio_bytes=wav_bytes,
+                language="pt",
+                user_id=user_id,
+                channel=channel,
+            )
+            assets["captions"] = captions
+            _save_assets(assets)
 
-        _check_cancelled()
+            _check_cancelled()
 
         # Step 3+4: Generate visual assets (depends on source_type)
         talking_head_url = ""
@@ -321,6 +350,356 @@ async def run_pipeline(
             broll_urls = await _generate_broll_for_script(script, user_id, channel)
             cost_total += sum(14 for _ in broll_urls.values() if _)
             assets["broll_urls"] = broll_urls
+
+        elif source_type == "heygen_seedance":
+            # --- HEYGEN SEEDANCE 2.0: Cinematic scenes via Video Agent API ---
+            # Each scene generates a 5-15s cinematic clip with the user as actor.
+            # Clips are concatenated via FFmpeg into the final video.
+            _update_status("generating_scenes")
+            _update_chat_step("generating_scenes")
+            _notify_progress(user_id, channel, "Preparando video cinematografico (Seedance 2.0)...")
+
+            avatar_id_local = script.get("_avatar_id", "")
+            avatar = _load_user_avatar(user_id, avatar_id=avatar_id_local)
+
+            if not avatar.heygen_avatar_id:
+                raise RuntimeError("Digital Twin nao configurado. Use setup_digital_twin primeiro.")
+            if not avatar.heygen_voice_id:
+                raise RuntimeError("Voz HeyGen nao configurada.")
+
+            # Build seedance scenes from script
+            seedance_scenes = []
+
+            hook = script.get("hook", {})
+            if hook.get("narration"):
+                seedance_scenes.append({
+                    "prompt": hook.get("heygen_scene_description", "Presenter looking at camera with energy"),
+                    "narration": hook["narration"],
+                    "duration_sec": min(15, max(5, hook.get("duration_s", 5))),
+                })
+
+            for scene in script.get("scenes", []):
+                if scene.get("narration"):
+                    seedance_scenes.append({
+                        "prompt": scene.get("heygen_scene_description", "Presenter explaining with natural gestures"),
+                        "narration": scene["narration"],
+                        "duration_sec": min(15, max(5, scene.get("duration_s", 8))),
+                    })
+
+            callback = script.get("callback", {})
+            if callback.get("narration"):
+                seedance_scenes.append({
+                    "prompt": callback.get("heygen_scene_description", "Presenter smiling confidently at camera"),
+                    "narration": callback["narration"],
+                    "duration_sec": min(15, max(5, callback.get("duration_s", 5))),
+                })
+
+            if not seedance_scenes:
+                raise RuntimeError("Roteiro sem narracao — impossivel gerar video.")
+
+            total = len(seedance_scenes)
+            _notify_progress(user_id, channel,
+                f"Gerando {total} cenas cinematograficas com Seedance 2.0...")
+
+            from src.video.providers.heygen import (
+                generate_seedance_multi_scene,
+                wait_for_video as heygen_wait_for_video,
+                estimate_seedance_cost_cents,
+            )
+
+            # Generate all clips
+            scene_results = await generate_seedance_multi_scene(
+                scenes=seedance_scenes,
+                avatar_id=avatar.heygen_avatar_id,
+                orientation="portrait",
+            )
+
+            assets["seedance_results"] = scene_results
+            _save_assets(assets)
+            _check_cancelled()
+
+            # Poll each clip for completion and collect URLs
+            clip_urls = []
+            for i, sr in enumerate(scene_results):
+                if sr.get("status") == "failed" or not sr.get("video_id"):
+                    logger.warning("Seedance scene %d failed, skipping", i)
+                    continue
+
+                _notify_progress(user_id, channel,
+                    f"Aguardando cena {i + 1}/{total}...")
+
+                try:
+                    clip_data = await heygen_wait_for_video(
+                        video_id=sr["video_id"],
+                        max_attempts=120,
+                        interval_s=10,
+                    )
+                    clip_url = clip_data.get("video_url", "")
+                    if clip_url:
+                        clip_urls.append(clip_url)
+                        cost_total += estimate_seedance_cost_cents(
+                            seedance_scenes[i].get("duration_sec", 10)
+                        )
+                        logger.info("Seedance scene %d ready: %s", i, clip_url[:80])
+                except Exception as e:
+                    logger.error("Seedance scene %d poll failed: %s", i, e)
+
+            if not clip_urls:
+                raise RuntimeError("Nenhuma cena Seedance foi gerada com sucesso.")
+
+            assets["seedance_clip_urls"] = clip_urls
+            _save_assets(assets)
+            _check_cancelled()
+
+            # Concatenate clips via FFmpeg
+            _update_status("assembling")
+            _update_chat_step("assembling")
+            _notify_progress(user_id, channel,
+                f"Montando {len(clip_urls)} clips em um video...")
+
+            import tempfile
+            import subprocess
+            import httpx as _httpx
+
+            temp_dir = tempfile.mkdtemp(prefix="seedance_")
+            clip_paths = []
+
+            # Download all clips
+            async with _httpx.AsyncClient(timeout=120) as dl_client:
+                for idx, url in enumerate(clip_urls):
+                    resp = await dl_client.get(url)
+                    resp.raise_for_status()
+                    clip_path = os.path.join(temp_dir, f"clip_{idx:03d}.mp4")
+                    with open(clip_path, "wb") as f:
+                        f.write(resp.content)
+                    clip_paths.append(clip_path)
+
+            # Create FFmpeg concat list
+            concat_list_path = os.path.join(temp_dir, "concat.txt")
+            with open(concat_list_path, "w") as f:
+                for cp in clip_paths:
+                    f.write(f"file '{cp}'\n")
+
+            output_path = os.path.join(temp_dir, "final.mp4")
+            ffmpeg_cmd = [
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                "-i", concat_list_path,
+                "-c", "copy",
+                "-movflags", "+faststart",
+                output_path,
+            ]
+            proc = subprocess.run(ffmpeg_cmd, capture_output=True, timeout=120)
+            if proc.returncode != 0:
+                logger.error("FFmpeg concat failed: %s", proc.stderr.decode()[:500])
+                raise RuntimeError("Falha ao concatenar clips do Seedance.")
+
+            # Upload final video to Cloudinary
+            _update_status("uploading")
+            _update_chat_step("uploading")
+            _notify_progress(user_id, channel, "Fazendo upload do video...")
+
+            video_result = cloudinary.uploader.upload(
+                output_path,
+                folder="teq/videos",
+                public_id=f"video_{project_id}",
+                resource_type="video",
+                overwrite=True,
+            )
+            video_url = video_result["secure_url"]
+            whatsapp_url = video_url
+
+            # Get duration from FFmpeg
+            probe_cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                         "-of", "default=noprint_wrappers=1:nokey=1", output_path]
+            try:
+                probe_result = subprocess.run(probe_cmd, capture_output=True, timeout=10)
+                duration_s = int(float(probe_result.stdout.decode().strip()))
+            except Exception:
+                duration_s = sum(s.get("duration_sec", 10) for s in seedance_scenes)
+
+            thumbnail_url = ""
+
+            # Cleanup temp files
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+            # Finalize
+            _finalize(video_url, whatsapp_url, thumbnail_url, duration_s, cost_total)
+
+            try:
+                from src.models.chat_messages import update_message_by_prefix, save_message
+                ready_payload = json.dumps({
+                    "video_url": video_url,
+                    "thumbnail_url": thumbnail_url,
+                    "title": script.get("title", ""),
+                    "duration": duration_s,
+                    "whatsapp_url": whatsapp_url,
+                })
+                updated = update_message_by_prefix(user_id, "__VIDEO_GENERATING__", f"__VIDEO_READY__{ready_payload}")
+                if not updated:
+                    save_message(user_id, user_id, "agent", f"__VIDEO_READY__{ready_payload}")
+            except Exception as e:
+                logger.error("Failed to update chat to VIDEO_READY: %s", e)
+
+            _notify_progress(user_id, channel, f"Video cinematografico pronto! {video_url}")
+            await _deliver_video(user_id, channel, video_url, whatsapp_url)
+            return  # Seedance flow complete
+
+        elif source_type == "heygen":
+            # --- HEYGEN: Full video generation via HeyGen API ---
+            # HeyGen handles: avatar + voice + backgrounds + transitions in one call.
+            # No Remotion, no Whisper, no audio splitting needed.
+            _update_status("generating_scenes")
+            _update_chat_step("generating_scenes")
+            _notify_progress(user_id, channel, "Preparando video com HeyGen...")
+
+            avatar_id = script.get("_avatar_id", "")
+            avatar = _load_user_avatar(user_id, avatar_id=avatar_id)
+
+            if not avatar.heygen_avatar_id:
+                raise RuntimeError(
+                    "Avatar HeyGen nao configurado. "
+                    "Use setup_avatar para criar seu avatar no HeyGen primeiro."
+                )
+            if not avatar.heygen_voice_id:
+                raise RuntimeError(
+                    "Voz HeyGen nao configurada. "
+                    "Configure sua voz no setup do avatar."
+                )
+
+            # Build scenes from script
+            heygen_scenes = []
+
+            # Hook
+            hook = script.get("hook", {})
+            if hook.get("narration"):
+                heygen_scenes.append({
+                    "narration": hook["narration"],
+                    "background": hook.get("heygen_background", {"type": "color", "value": "#0D1117"}),
+                    "emotion": hook.get("heygen_emotion", "Excited"),
+                    "speed": hook.get("heygen_speed", 1.1),
+                })
+
+            # Scenes
+            for scene in script.get("scenes", []):
+                if scene.get("narration"):
+                    heygen_scenes.append({
+                        "narration": scene["narration"],
+                        "background": scene.get("heygen_background", {"type": "color", "value": "#1a1a2e"}),
+                        "emotion": scene.get("heygen_emotion", "Friendly"),
+                        "speed": scene.get("heygen_speed", 1.0),
+                    })
+
+            # Callback
+            callback = script.get("callback", {})
+            if callback.get("narration"):
+                heygen_scenes.append({
+                    "narration": callback["narration"],
+                    "background": callback.get("heygen_background", {"type": "color", "value": "#0D1117"}),
+                    "emotion": callback.get("heygen_emotion", "Soothing"),
+                    "speed": callback.get("heygen_speed", 0.95),
+                })
+
+            if not heygen_scenes:
+                raise RuntimeError("Roteiro sem narracao — impossivel gerar video.")
+
+            _notify_progress(user_id, channel,
+                f"Gerando video com {len(heygen_scenes)} cenas no HeyGen...")
+
+            from src.video.providers.heygen import (
+                generate_video as heygen_generate_video,
+                wait_for_video as heygen_wait_for_video,
+                estimate_video_cost_cents,
+            )
+
+            video_id = await heygen_generate_video(
+                scenes=heygen_scenes,
+                talking_photo_id=avatar.heygen_avatar_id,
+                voice_id=avatar.heygen_voice_id,
+                title=script.get("title", ""),
+                width=1080,
+                height=1920,
+            )
+
+            assets["heygen_video_id"] = video_id
+            _save_assets(assets)
+            _check_cancelled()
+
+            # Poll for completion
+            _notify_progress(user_id, channel, "HeyGen processando video... aguarde.")
+
+            def _on_heygen_progress(status):
+                _notify_progress(user_id, channel, f"HeyGen: {status}...")
+
+            video_data = await heygen_wait_for_video(
+                video_id=video_id,
+                on_progress=_on_heygen_progress,
+            )
+
+            heygen_video_url = video_data.get("video_url", "")
+            heygen_duration = video_data.get("duration", 0)
+            heygen_thumbnail = video_data.get("thumbnail_url", "")
+
+            if not heygen_video_url:
+                raise RuntimeError("HeyGen nao retornou URL do video.")
+
+            cost_total += estimate_video_cost_cents(heygen_duration or 60)
+
+            # Upload HeyGen video to Cloudinary for permanent storage
+            _update_status("uploading")
+            _update_chat_step("uploading")
+            _notify_progress(user_id, channel, "Fazendo upload do video...")
+
+            video_result = cloudinary.uploader.upload(
+                heygen_video_url,
+                folder="teq/videos",
+                public_id=f"video_{project_id}",
+                resource_type="video",
+                overwrite=True,
+            )
+            video_url = video_result["secure_url"]
+
+            # WhatsApp version (same video, HeyGen already optimized)
+            whatsapp_url = video_url
+
+            # Thumbnail
+            thumbnail_url = heygen_thumbnail or ""
+            if heygen_thumbnail:
+                try:
+                    thumb_result = cloudinary.uploader.upload(
+                        heygen_thumbnail,
+                        folder="teq/videos",
+                        public_id=f"thumb_{project_id}",
+                        overwrite=True,
+                    )
+                    thumbnail_url = thumb_result["secure_url"]
+                except Exception as e:
+                    logger.warning("Failed to upload HeyGen thumbnail: %s", e)
+
+            duration_s = int(heygen_duration) if heygen_duration else 60
+
+            # Finalize
+            _finalize(video_url, whatsapp_url, thumbnail_url, duration_s, cost_total)
+
+            # Update chat message: GENERATING → READY
+            try:
+                from src.models.chat_messages import update_message_by_prefix, save_message
+                ready_payload = json.dumps({
+                    "video_url": video_url,
+                    "thumbnail_url": thumbnail_url,
+                    "title": script.get("title", ""),
+                    "duration": duration_s,
+                    "whatsapp_url": whatsapp_url,
+                })
+                updated = update_message_by_prefix(user_id, "__VIDEO_GENERATING__", f"__VIDEO_READY__{ready_payload}")
+                if not updated:
+                    save_message(user_id, user_id, "agent", f"__VIDEO_READY__{ready_payload}")
+            except Exception as e:
+                logger.error("Failed to update chat to VIDEO_READY: %s", e)
+
+            _notify_progress(user_id, channel, f"Video pronto! {video_url}")
+            await _deliver_video(user_id, channel, video_url, whatsapp_url)
+            return  # HeyGen flow complete — skip Remotion/FFmpeg steps below
 
         elif source_type == "real" and source_url:
             # --- REAL: User-uploaded video + generic B-roll ---

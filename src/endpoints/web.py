@@ -3,6 +3,9 @@ import re
 import json
 import base64
 import asyncio
+import time
+
+import cloudinary.uploader
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
 def split_into_sentences(text: str) -> list[str]:
@@ -22,7 +25,6 @@ from src.utils.privacy import mask_phone
 from src.models.chat_messages import save_message
 from src.agent.prompts import GREETING_INJECTION_WEB as GREETING_INJECTION
 from src.queue.task_queue import get_usage_context, get_usage_status
-import time
 import logging
 
 logger = logging.getLogger(__name__)
@@ -539,6 +541,23 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
                 if msg_type == "user_message":
                     user_text = msg.get("text", "").strip()
                     images_b64 = msg.get("images", [])
+                    videos_b64 = msg.get("videos", [])
+
+                    # Handle video URLs (already uploaded via POST /api/video/upload)
+                    if videos_b64:
+                        video_urls = [v for v in videos_b64 if v and isinstance(v, str)]
+                        if video_urls:
+                            urls_text = ", ".join(video_urls)
+                            count = len(video_urls)
+                            logger.info("[WEB WS] %d video URL(s) received: %s", count, urls_text[:200])
+                            user_text += (
+                                f"\n\n[VIDEOS ENVIADOS PELO USUARIO - {count} arquivo(s) - "
+                                f"URLs no Cloudinary: {urls_text}. "
+                                f"{'Se sao 2 videos, o MAIOR e o de treinamento e o MENOR e o de consentimento. ' if count >= 2 else ''}"
+                                "Chame setup_digital_twin(video_url=URL, video_type='training' ou 'consent') "
+                                "para CADA video. NUNCA invente URLs - use SOMENTE estas.]"
+                            )
+
                     if not user_text and not images_b64:
                         continue
                     logger.info("[WEB WS] Texto do usuario: \"%s\" | %s imagens", user_text[:80], len(images_b64))
