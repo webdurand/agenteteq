@@ -98,9 +98,34 @@ async def run_pipeline(
         if not heygen_scenes:
             raise RuntimeError("Roteiro sem narracao — impossivel gerar video.")
 
-        voice_id = avatar.heygen_voice_id or ""
-        if not voice_id:
-            logger.warning("No heygen_voice_id — HeyGen will use default voice")
+        # ── Step 1.5: Generate audio via ElevenLabs v3 (if voice cloned) ──
+        elevenlabs_voice_id = avatar.voice_id or ""
+        heygen_voice_id = avatar.heygen_voice_id or ""
+
+        if elevenlabs_voice_id:
+            _update_chat_step("generating_voice")
+            _notify_progress(user_id, channel, "Gerando voz com ElevenLabs v3...")
+
+            full_narration = " ... ".join(
+                s["narration"] for s in heygen_scenes if s.get("narration")
+            )
+
+            audio_url = await _generate_full_audio(
+                full_narration, elevenlabs_voice_id, user_id, channel,
+            )
+
+            if audio_url:
+                # Collapse into single scene with the full audio
+                heygen_scenes = [{
+                    "narration": "",
+                    "audio_url": audio_url,
+                    "background": heygen_scenes[0].get("background", {"type": "color", "value": "#0D1117"}),
+                }]
+                logger.info("ElevenLabs audio ready, using single scene with audio_url")
+            else:
+                logger.warning("ElevenLabs failed, falling back to HeyGen TTS")
+        elif not heygen_voice_id:
+            logger.warning("No voice configured — HeyGen will use default voice")
 
         _notify_progress(user_id, channel,
             f"Gerando video com {len(heygen_scenes)} cenas no HeyGen...")
@@ -115,7 +140,7 @@ async def run_pipeline(
         video_id = await heygen_generate_video(
             scenes=heygen_scenes,
             talking_photo_id=avatar.heygen_avatar_id,
-            voice_id=voice_id,
+            voice_id=heygen_voice_id,
             title=script.get("title", ""),
         )
 
@@ -322,6 +347,44 @@ def _load_user_avatar(user_id: str, avatar_id: str = ""):
             session.expunge(avatar)
             return avatar
     raise RuntimeError("Nenhum avatar configurado. Use setup_avatar primeiro.")
+
+
+async def _generate_full_audio(
+    narration: str,
+    elevenlabs_voice_id: str,
+    user_id: str,
+    channel: str,
+) -> str | None:
+    """
+    Generate full narration audio via ElevenLabs v3, upload to Cloudinary.
+    Returns audio URL or None if failed.
+    """
+    from src.video.voice_generator import generate_voice
+
+    try:
+        audio_bytes, mime_type, duration_s = await generate_voice(
+            text=narration,
+            voice=elevenlabs_voice_id,
+            user_id=user_id,
+            channel=channel,
+        )
+
+        import io
+        import time
+        result = cloudinary.uploader.upload(
+            io.BytesIO(audio_bytes),
+            folder="teq/audio",
+            public_id=f"voice_{user_id[:8]}_{int(time.time())}",
+            resource_type="video",  # Cloudinary uses "video" for audio files
+            overwrite=True,
+        )
+        audio_url = result["secure_url"]
+        logger.info("ElevenLabs audio uploaded: %.1fs, url=%s", duration_s, audio_url[:60])
+        return audio_url
+
+    except Exception as e:
+        logger.error("ElevenLabs audio generation failed: %s", e)
+        return None
 
 
 async def _deliver_video(user_id: str, channel: str, video_url: str, whatsapp_url: str):

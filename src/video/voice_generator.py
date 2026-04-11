@@ -3,6 +3,7 @@ Voice generator for video narration.
 Primary: ElevenLabs API (mid tier). Fallback: Gemini TTS (free, already in project).
 """
 
+import asyncio
 import io
 import os
 import logging
@@ -61,41 +62,97 @@ async def generate_voice(
     return result
 
 
+async def generate_voice_takes(
+    text: str,
+    voice: str = "",
+    num_takes: int = 3,
+    user_id: str = "",
+    channel: str = "web",
+) -> list[tuple[bytes, str, float]]:
+    """
+    Generate multiple takes of the same narration (v3 is non-deterministic).
+    Useful for social media content — pick the best take in post-production.
+
+    Returns:
+        List of (audio_bytes, mime_type, duration_seconds) tuples.
+    """
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    if not api_key:
+        result = await _generate_gemini_tts(text)
+        _log_cost(user_id, channel, "gemini_tts", len(text), result[2])
+        return [result]
+
+    num_takes = max(1, min(num_takes, 5))
+
+    async def _one_take():
+        return await _generate_elevenlabs(text, voice, api_key)
+
+    results = await asyncio.gather(*[_one_take() for _ in range(num_takes)], return_exceptions=True)
+
+    takes = [r for r in results if not isinstance(r, Exception)]
+    if not takes:
+        logger.warning("All ElevenLabs takes failed, falling back to Gemini TTS")
+        result = await _generate_gemini_tts(text)
+        _log_cost(user_id, channel, "gemini_tts", len(text), result[2])
+        return [result]
+
+    for take in takes:
+        _log_cost(user_id, channel, "elevenlabs", len(text), take[2])
+
+    logger.info("Generated %d/%d takes successfully", len(takes), num_takes)
+    return takes
+
+
+ELEVENLABS_CHAR_LIMIT = 5000
+
+
 async def _generate_elevenlabs(
     text: str,
     voice: str,
     api_key: str,
 ) -> tuple[bytes, str, float]:
-    """Generate audio via ElevenLabs API."""
+    """Generate audio via ElevenLabs API. Splits long texts automatically."""
     if not voice:
         voice_id = DEFAULT_VOICE_ID
     elif voice.lower() in VOICE_PRESETS:
-        # Known preset name (e.g. "rachel", "adam")
         voice_id = VOICE_PRESETS[voice.lower()]
     else:
-        # Assume it's a direct ElevenLabs voice ID (e.g. cloned voice)
         voice_id = voice
 
-    url = f"{ELEVENLABS_API_URL}/text-to-speech/{voice_id}"
+    if len(text) <= ELEVENLABS_CHAR_LIMIT:
+        return await _call_elevenlabs(text, voice_id, api_key)
 
-    # Add natural pauses between sentences via SSML breaks
-    import re
-    natural_text = text
-    # Add short break after periods (not inside numbers like "6.2")
-    natural_text = re.sub(r'\.(\s+)(?=[A-ZÀ-Ú])', r'. <break time="0.4s" />\1', natural_text)
-    # Add break after ellipsis
-    natural_text = natural_text.replace('...', '... <break time="0.6s" />')
-    # Add break after em-dash
-    natural_text = natural_text.replace(' — ', ' — <break time="0.3s" />')
+    # Text exceeds limit — split semantically and concatenate audio
+    chunks = _split_text(text, ELEVENLABS_CHAR_LIMIT)
+    logger.info("Text too long (%d chars), split into %d chunks", len(text), len(chunks))
+
+    all_audio = b""
+    total_duration = 0.0
+
+    for i, chunk in enumerate(chunks):
+        audio_bytes, _, duration_s = await _call_elevenlabs(chunk, voice_id, api_key)
+        all_audio += audio_bytes
+        total_duration += duration_s
+        logger.info("Chunk %d/%d done: %d chars, %.1fs", i + 1, len(chunks), len(chunk), duration_s)
+
+    return all_audio, "audio/mpeg", total_duration
+
+
+async def _call_elevenlabs(
+    text: str,
+    voice_id: str,
+    api_key: str,
+) -> tuple[bytes, str, float]:
+    """Single ElevenLabs API call (text must be within char limit)."""
+    url = f"{ELEVENLABS_API_URL}/text-to-speech/{voice_id}"
+    model_id = os.getenv("ELEVENLABS_MODEL", "eleven_v3")
 
     payload = {
-        "text": natural_text,
-        "model_id": "eleven_multilingual_v2",
+        "text": text,
+        "model_id": model_id,
         "voice_settings": {
-            "stability": 0.45,
-            "similarity_boost": 0.55,
-            "style": 0,
-            "use_speaker_boost": False,
+            "stability": 0.50,
+            "similarity_boost": 0.75,
         },
     }
 
@@ -110,10 +167,81 @@ async def _generate_elevenlabs(
         resp.raise_for_status()
         audio_bytes = resp.content
 
-    # Estimate duration: MP3 ~128kbps → bytes / 16000 ≈ seconds
     duration_s = max(1.0, len(audio_bytes) / 16000)
-
     return audio_bytes, "audio/mpeg", duration_s
+
+
+def _split_text(text: str, max_chars: int) -> list[str]:
+    """
+    Split text into chunks that fit within max_chars using AI.
+    Preserves natural speech flow — never breaks mid-sentence.
+    """
+    if len(text) <= max_chars:
+        return [text]
+
+    try:
+        return _split_text_ai(text, max_chars)
+    except Exception as e:
+        logger.warning("AI split failed, using simple fallback: %s", e)
+        return _split_text_simple(text, max_chars)
+
+
+def _split_text_ai(text: str, max_chars: int) -> list[str]:
+    """Use Gemini Flash to split text semantically."""
+    from google import genai
+    from google.genai.types import GenerateContentConfig
+
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    client = genai.Client(api_key=api_key)
+
+    prompt = (
+        f"Divida o texto abaixo em pedacos de no maximo {max_chars} caracteres cada.\n"
+        "Regras:\n"
+        "- Quebre em pontos naturais de pausa (fim de frase, fim de paragrafo, mudanca de assunto)\n"
+        "- NUNCA quebre no meio de uma frase\n"
+        "- Mantenha o texto EXATAMENTE como esta, sem alterar nenhuma palavra\n"
+        "- Retorne um JSON array de strings: [\"pedaco1\", \"pedaco2\", ...]\n\n"
+        f"Texto:\n{text}"
+    )
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+        config=GenerateContentConfig(
+            temperature=0.0,
+            response_mime_type="application/json",
+        ),
+    )
+
+    import json
+    chunks = json.loads(response.text)
+
+    # Validate: all chunks must be within limit
+    for chunk in chunks:
+        if len(chunk) > max_chars:
+            logger.warning("AI returned chunk with %d chars (limit %d), falling back", len(chunk), max_chars)
+            return _split_text_simple(text, max_chars)
+
+    return [c for c in chunks if c.strip()]
+
+
+def _split_text_simple(text: str, max_chars: int) -> list[str]:
+    """Fallback: split on sentence boundaries."""
+    import re
+    sentences = re.split(r'(?<=[.!?…])\s+', text)
+    chunks = []
+    current = ""
+    for sentence in sentences:
+        candidate = f"{current} {sentence}".strip() if current else sentence
+        if len(candidate) <= max_chars:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+            current = sentence
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 async def _generate_gemini_tts(text: str) -> tuple[bytes, str, float]:
