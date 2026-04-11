@@ -28,9 +28,9 @@ class SocialPost:
     likes_count: int
     comments_count: int
     shares_count: int
-    saves_count: int = 0
     views_count: int
     posted_at: str
+    saves_count: int = 0
     video_url: str = ""
     owner_username: str = ""
     metadata: dict = field(default_factory=dict)
