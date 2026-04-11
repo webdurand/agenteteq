@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
 
-from src.auth.deps import get_current_user
+from src.auth.deps import get_current_user, require_active_plan
 from src.models.social import (
     track_account as db_track_account,
     untrack_account as db_untrack_account,
@@ -49,7 +49,7 @@ async def api_list_accounts(
 async def api_track_account(
     body: AccountCreate,
     background_tasks: BackgroundTasks,
-    user=Depends(get_current_user),
+    user=Depends(require_active_plan),
 ):
     from src.social import get_social_provider
 
@@ -160,10 +160,8 @@ def _fetch_posts_background(account_id: int, user_id: str, platform: str, userna
 
     try:
         provider = get_social_provider(platform)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
 
-        profile = loop.run_until_complete(provider.get_profile(platform, username))
+        profile = asyncio.run(provider.get_profile(platform, username))
         update_account_metadata(
             account_id,
             display_name=profile.display_name,
@@ -173,7 +171,7 @@ def _fetch_posts_background(account_id: int, user_id: str, platform: str, userna
             profile_pic_url=profile.profile_pic_url,
         )
 
-        posts = loop.run_until_complete(provider.get_recent_posts(platform, username, limit=20))
+        posts = asyncio.run(provider.get_recent_posts(platform, username, limit=20))
         posts_dicts = [
             {
                 "platform_post_id": p.platform_post_id,
@@ -190,7 +188,11 @@ def _fetch_posts_background(account_id: int, user_id: str, platform: str, userna
             for p in posts
         ]
         save_content_batch(account_id, user_id, platform, posts_dicts)
-        loop.close()
         logger.info("Background fetch concluido para @%s/%s", platform, username)
     except Exception as e:
         logger.error("Erro no background fetch de @%s/%s: %s", platform, username, e)
+        try:
+            from src.models.social import update_account_status
+            update_account_status(account_id, "error", str(e)[:200])
+        except Exception:
+            pass

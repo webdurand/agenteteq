@@ -424,10 +424,11 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
                 from src.db.models import VideoScript
                 with get_db() as session:
                     s = session.get(VideoScript, script_id)
-                    # Fallback: partial ID match (first 8 chars)
+                    # Fallback: partial ID match (first 8 chars), scoped to user
                     if not s:
                         s = session.query(VideoScript).filter(
-                            VideoScript.id.startswith(script_id)
+                            VideoScript.id.startswith(script_id),
+                            VideoScript.user_id == user_id,
                         ).first()
                     if s:
                         script_id = s.id  # Use full ID from here on

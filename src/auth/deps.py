@@ -14,9 +14,11 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         
     token = credentials.credentials
     payload = decode_token(token)
-    
+
     if not payload:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalido ou expirado")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalido")
+    if payload.get("_error") == "expired":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expirado")
         
     phone_number = payload.get("sub")
     if not phone_number:

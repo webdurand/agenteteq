@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from typing import List, Dict, Any
-from src.auth.deps import get_current_user
+from src.auth.deps import get_current_user, require_active_plan
 from src.models.carousel import list_user_carousels, get_carousel, delete_carousel
 
 router = APIRouter(prefix="/carousel", tags=["Carousel"])

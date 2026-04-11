@@ -40,4 +40,9 @@ def get_social_provider(platform: str = "instagram") -> SocialProvider:
 
         return YouTubeProvider()
 
+    elif platform == "tiktok":
+        from .tiktok_provider import TikTokProvider
+
+        return TikTokProvider()
+
     raise ValueError(f"Plataforma nao suportada: {platform}")

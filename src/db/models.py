@@ -52,6 +52,7 @@ class User(Base):
     trend_alerts_enabled = Column(String, default="false")
     last_trend_alert_at = Column(DateTime(timezone=True))
     current_session_id = Column(String, nullable=True)
+    product_tour_completed = Column(Boolean, default=False)
 
     chat_messages = relationship("ChatMessage", back_populates="user")
     tasks = relationship("Task", back_populates="user")
@@ -77,6 +78,7 @@ class User(Base):
             "stripe_customer_id": self.stripe_customer_id,
             "terms_accepted_version": self.terms_accepted_version,
             "current_session_id": self.current_session_id,
+            "product_tour_completed": bool(self.product_tour_completed),
         }
 
 
@@ -409,6 +411,9 @@ class RefundLog(Base):
 
 class UsageEvent(Base):
     __tablename__ = "usage_events"
+    __table_args__ = (
+        Index("idx_usage_events_budget", "user_id", "event_type", "created_at"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(String, nullable=False)
@@ -418,6 +423,7 @@ class UsageEvent(Base):
     status = Column(String)
     latency_ms = Column(Integer)
     extra_data = Column(Text)
+    cost_usd = Column(Float, default=0.0)
     created_at = Column(String, default=lambda: _utcnow().isoformat())
 
 
@@ -515,6 +521,9 @@ class MessageBuffer(Base):
 
 class ProcessedMessage(Base):
     __tablename__ = "processed_messages"
+    __table_args__ = (
+        Index("idx_processed_messages_created", "created_at"),
+    )
 
     message_id = Column(String, primary_key=True)
     created_at = Column(String, default=lambda: _utcnow().isoformat())
@@ -762,6 +771,7 @@ class ContentPlan(Base):
     platforms = Column(Text, default="[]")               # JSON array
     scheduled_at = Column(String)                        # ISO 8601
     status = Column(String, default="idea")              # idea, planned, producing, ready, published
+    content_pillar = Column(String)                      # e.g. educacional, entretenimento, vendas, autoridade, comunidade
     carousel_id = Column(Integer)                        # optional link to carousel
     notes = Column(Text)
     created_at = Column(String, nullable=False)
@@ -778,6 +788,7 @@ class ContentPlan(Base):
             "platforms": json.loads(self.platforms) if self.platforms else [],
             "scheduled_at": self.scheduled_at,
             "status": self.status,
+            "content_pillar": self.content_pillar,
             "carousel_id": self.carousel_id,
             "notes": self.notes,
             "created_at": self.created_at,

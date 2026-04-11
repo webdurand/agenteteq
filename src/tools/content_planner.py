@@ -30,6 +30,7 @@ def create_content_planner_tools(user_id: str, notifier=None):
         platform: str = "instagram",
         scheduled_at: str = "",
         description: str = "",
+        content_pillar: str = "",
     ) -> str:
         """
         Adicionar um conteudo ao calendario de publicacoes.
@@ -41,6 +42,7 @@ def create_content_planner_tools(user_id: str, notifier=None):
             platform: Plataforma alvo: instagram, youtube, blog. Pode separar com virgula para multiplas.
             scheduled_at: Data/hora planejada para publicacao (ISO 8601). Opcional.
             description: Descricao ou briefing do conteudo. Opcional.
+            content_pillar: Pilar de conteudo: educacional, entretenimento, vendas, autoridade, comunidade, bastidores. Opcional.
 
         Returns:
             Confirmacao com detalhes do plano criado.
@@ -55,6 +57,7 @@ def create_content_planner_tools(user_id: str, notifier=None):
             platforms=platforms,
             scheduled_at=scheduled_at,
             description=description,
+            content_pillar=content_pillar.lower().strip() if content_pillar else "",
         )
 
         platform_str = ", ".join(platforms) if platforms else "nao definida"

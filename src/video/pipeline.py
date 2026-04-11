@@ -3,6 +3,7 @@ Video generation pipeline — HeyGen Standard.
 Flow: script → HeyGen multi-scene video (Digital Twin voice) → Cloudinary upload.
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -27,7 +28,7 @@ async def run_pipeline(
 
     # ── Helpers (closures over project_id, user_id, task_id) ──
 
-    def _update_status(step: str, error: str = ""):
+    def _update_status_sync(step: str, error: str = ""):
         now = datetime.now(timezone.utc).isoformat()
         with get_db() as session:
             project = session.get(VideoProject, project_id)
@@ -37,6 +38,13 @@ async def run_pipeline(
                 project.updated_at = now
                 if error:
                     project.error_message = error[:500]
+
+    def _update_status(step: str, error: str = ""):
+        try:
+            loop = asyncio.get_running_loop()
+            loop.run_in_executor(None, _update_status_sync, step, error)
+        except RuntimeError:
+            _update_status_sync(step, error)
 
     _script_title = script.get("title", "")
 
@@ -110,11 +118,14 @@ async def run_pipeline(
                 s["narration"] for s in heygen_scenes if s.get("narration")
             )
 
-            audio_url = await _generate_full_audio(
+            audio_url, audio_duration = await _generate_full_audio(
                 full_narration, elevenlabs_voice_id, user_id, channel,
             )
 
             if audio_url:
+                # Track ElevenLabs cost (~$0.003/sec → 0.3 cents/sec)
+                cost_total += int(audio_duration * 0.3) if audio_duration else 0
+
                 # Collapse into single scene with the full audio
                 heygen_scenes = [{
                     "narration": "",
@@ -165,34 +176,74 @@ async def run_pipeline(
         cost_total += estimate_video_cost_cents(heygen_duration or 60)
         _check_cancelled()
 
+        # ── Step 3.5: Add captions (optional) ──
+        try:
+            from src.video.caption_sync import generate_captions
+            _notify_progress(user_id, channel, "Gerando legendas automaticas...")
+
+            # Download HeyGen video to extract audio
+            import httpx
+            async with httpx.AsyncClient(timeout=120) as client:
+                video_resp = await client.get(heygen_video_url)
+                video_bytes = video_resp.content
+
+            # Extract audio and generate word-level captions
+            from src.video.audio_splitter import extract_audio
+            audio_bytes = await asyncio.to_thread(extract_audio, video_bytes)
+            captions = await asyncio.to_thread(generate_captions, audio_bytes)
+
+            if captions:
+                # Store captions in project metadata for Remotion rendering
+                with get_db() as session:
+                    project = session.get(VideoProject, project_id)
+                    if project:
+                        meta = json.loads(project.metadata_json or "{}")
+                        meta["captions"] = captions
+                        project.metadata_json = json.dumps(meta, ensure_ascii=False)
+                logger.info("Pipeline %s: %d caption words generated", project_id, len(captions))
+        except Exception as e:
+            logger.warning("Pipeline %s: caption generation failed (non-fatal): %s", project_id, e)
+            # Captions are optional — continue without them
+
         # ── Step 4: Upload to Cloudinary ──
         _update_status("uploading")
         _update_chat_step("uploading")
         _notify_progress(user_id, channel, "Fazendo upload do video...")
 
-        video_result = cloudinary.uploader.upload(
-            heygen_video_url,
-            folder="teq/videos",
-            public_id=f"video_{project_id}",
-            resource_type="video",
-            overwrite=True,
-            quality="auto:best",
-        )
-        video_url = video_result["secure_url"]
-        whatsapp_url = video_url
+        # Upload video + thumbnail to Cloudinary in parallel (non-blocking)
+        async def _upload_video():
+            return await asyncio.to_thread(
+                cloudinary.uploader.upload,
+                heygen_video_url,
+                folder="teq/videos",
+                public_id=f"video_{project_id}",
+                resource_type="video",
+                overwrite=True,
+                quality="auto:best",
+            )
 
-        thumbnail_url = ""
-        if heygen_thumbnail:
+        async def _upload_thumbnail():
+            if not heygen_thumbnail:
+                return None
             try:
-                thumb_result = cloudinary.uploader.upload(
+                return await asyncio.to_thread(
+                    cloudinary.uploader.upload,
                     heygen_thumbnail,
                     folder="teq/videos",
                     public_id=f"thumb_{project_id}",
                     overwrite=True,
                 )
-                thumbnail_url = thumb_result["secure_url"]
             except Exception as e:
                 logger.warning("Failed to upload thumbnail: %s", e)
+                return None
+
+        video_result, thumb_result = await asyncio.gather(
+            _upload_video(), _upload_thumbnail()
+        )
+
+        video_url = video_result["secure_url"]
+        whatsapp_url = video_url
+        thumbnail_url = thumb_result["secure_url"] if thumb_result else ""
 
         duration_s = int(heygen_duration) if heygen_duration else 60
 
@@ -354,10 +405,10 @@ async def _generate_full_audio(
     elevenlabs_voice_id: str,
     user_id: str,
     channel: str,
-) -> str | None:
+) -> tuple[str | None, float]:
     """
     Generate full narration audio via ElevenLabs v3, upload to Cloudinary.
-    Returns audio URL or None if failed.
+    Returns (audio_url, duration_seconds) or (None, 0) if failed.
     """
     from src.video.voice_generator import generate_voice
 
@@ -371,20 +422,21 @@ async def _generate_full_audio(
 
         import io
         import time
-        result = cloudinary.uploader.upload(
+        result = await asyncio.to_thread(
+            cloudinary.uploader.upload,
             io.BytesIO(audio_bytes),
             folder="teq/audio",
             public_id=f"voice_{user_id[:8]}_{int(time.time())}",
-            resource_type="video",  # Cloudinary uses "video" for audio files
+            resource_type="video",
             overwrite=True,
         )
         audio_url = result["secure_url"]
         logger.info("ElevenLabs audio uploaded: %.1fs, url=%s", duration_s, audio_url[:60])
-        return audio_url
+        return audio_url, duration_s
 
     except Exception as e:
         logger.error("ElevenLabs audio generation failed: %s", e)
-        return None
+        return None, 0.0
 
 
 async def _deliver_video(user_id: str, channel: str, video_url: str, whatsapp_url: str):

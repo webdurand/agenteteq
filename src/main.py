@@ -78,23 +78,38 @@ app = FastAPI(title="Agente WhatsApp - Diario Teq", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+_env = os.getenv("ENV", "dev")
 _frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 _allowed_origins = [
     _frontend_origin,
     "https://teq.ia.br",
     "https://agenteteq-front.vercel.app",
-    "http://localhost:5173",
-    "http://localhost:3000",
 ]
+# Localhost only in dev/test
+if _env in ("dev", "test"):
+    _allowed_origins.extend(["http://localhost:5173", "http://localhost:3000"])
 # Deduplica mantendo ordem
 _allowed_origins = list(dict.fromkeys(_allowed_origins))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
+
+
+# [SEC] Security headers middleware
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if _env == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):

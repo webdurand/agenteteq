@@ -1,5 +1,6 @@
+import hmac as _hmac
 import os
-import random
+import secrets
 import string
 from datetime import datetime, timedelta, timezone
 
@@ -16,7 +17,7 @@ def generate_code(phone_number: str, purpose: str) -> str:
     Retorna o codigo gerado.
     """
     characters = string.ascii_uppercase + string.digits
-    code = ''.join(random.choice(characters) for _ in range(6))
+    code = ''.join(secrets.choice(characters) for _ in range(6))
     
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=get_expiry_seconds())
     
@@ -59,8 +60,8 @@ def verify_code(phone_number: str, code: str, purpose: str) -> bool:
             
         record.attempts = (record.attempts or 0) + 1
         
-        # Compara ignorando case
-        if record.code.upper() == code.upper():
+        # [SEC] Constant-time comparison to prevent timing attacks (CWE-208)
+        if _hmac.compare_digest(record.code.upper(), code.upper()):
             # Consome o codigo
             session.delete(record)
             return True

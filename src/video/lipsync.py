@@ -97,17 +97,23 @@ async def _poll_fal_status(
     # Don't send Content-Type for GET requests
     poll_headers = {"Authorization": headers["Authorization"]}
 
+    use_response_url = False  # cache 405 detection to avoid redundant requests
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         for attempt in range(max_attempts):
             await asyncio.sleep(interval_s)
 
             # Try status URL first, fall back to response URL
             try:
-                resp = await client.get(status_url, headers=poll_headers)
-                if resp.status_code == 405:
-                    # Some fal.ai models don't support /status — poll result URL directly
-                    logger.info("Status URL returned 405, switching to response URL polling")
+                if use_response_url:
                     resp = await client.get(response_url, headers=poll_headers)
+                else:
+                    resp = await client.get(status_url, headers=poll_headers)
+                    if resp.status_code == 405:
+                        # Some fal.ai models don't support /status — poll result URL directly
+                        logger.info("Status URL returned 405, switching to response URL polling")
+                        use_response_url = True
+                        resp = await client.get(response_url, headers=poll_headers)
 
                 if resp.status_code == 202:
                     # Still in progress (202 Accepted)

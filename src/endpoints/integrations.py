@@ -223,17 +223,23 @@ async def _connect_slack(req: ConnectIntegrationRequest, user: dict) -> dict:
 @router.get("/slack/callback", response_class=HTMLResponse)
 async def slack_oauth_callback(code: str = Query(None), state: str = Query(None), error: str = Query(None)):
     """Recebe o redirect do Slack OAuth e devolve um HTML que envia o code via postMessage pro frontend."""
+    import json as _json
+    import html as _html
+    _origin = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
     if error:
+        _safe_error = _json.dumps(error)
         return HTMLResponse(f"""
         <html><body><script>
-            window.opener && window.opener.postMessage({{type:"slack_oauth",error:"{error}"}}, "*");
+            window.opener && window.opener.postMessage({{type:"slack_oauth",error:{_safe_error}}}, {_json.dumps(_origin)});
             window.close();
-        </script><p>Erro: {error}. Fechando...</p></body></html>
+        </script><p>Erro: {_html.escape(error or '')}. Fechando...</p></body></html>
         """)
 
+    _safe_code = _json.dumps(code or "")
+    _safe_state = _json.dumps(state or "")
     return HTMLResponse(f"""
     <html><body><script>
-        window.opener && window.opener.postMessage({{type:"slack_oauth",code:"{code}",state:"{state}"}}, "*");
+        window.opener && window.opener.postMessage({{type:"slack_oauth",code:{_safe_code},state:{_safe_state}}}, {_json.dumps(_origin)});
         window.close();
     </script><p>Conectando Slack... Fechando...</p></body></html>
     """)

@@ -154,8 +154,22 @@ def _get_billing_period(user_id: str) -> tuple[str, str]:
 
 
 def _sum_costs_in_period(user_id: str, start: str, end: str) -> float:
-    """Soma TODOS os custos rastreados (USD) entre start e end."""
+    """Soma TODOS os custos rastreados (USD) entre start e end.
+    Usa coluna cost_usd (SUM no DB) com fallback para parse JSON."""
     with get_db() as session:
+        # Fast path: aggregate cost_usd column in DB (avoids Python JSON parse)
+        db_total = (
+            session.query(func.coalesce(func.sum(UsageEvent.cost_usd), 0.0))
+            .filter(
+                UsageEvent.user_id == user_id,
+                UsageEvent.event_type.in_(_COST_EVENT_TYPES),
+                UsageEvent.created_at >= start,
+                UsageEvent.created_at <= end,
+            )
+            .scalar()
+        ) or 0.0
+
+        # Fallback: rows with cost_usd=0 but cost in extra_data (legacy)
         rows = (
             session.query(UsageEvent.extra_data)
             .filter(
@@ -163,17 +177,19 @@ def _sum_costs_in_period(user_id: str, start: str, end: str) -> float:
                 UsageEvent.event_type.in_(_COST_EVENT_TYPES),
                 UsageEvent.created_at >= start,
                 UsageEvent.created_at <= end,
+                (UsageEvent.cost_usd == None) | (UsageEvent.cost_usd == 0),  # noqa: E711
+                UsageEvent.extra_data != None,  # noqa: E711
             )
             .all()
         )
-    total = 0.0
+    legacy_total = 0.0
     for (ed,) in rows:
         try:
             meta = json.loads(ed) if ed else {}
-            total += meta.get("cost_usd", 0) or 0
+            legacy_total += meta.get("cost_usd", 0) or 0
         except (json.JSONDecodeError, TypeError):
             pass
-    return round(total, 4)
+    return round(db_total + legacy_total, 4)
 
 
 def _get_addon_budget(user_id: str) -> float:

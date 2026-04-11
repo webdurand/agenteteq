@@ -146,7 +146,8 @@ async def process_task_queue():
                         # Fallback: partial ID match (agent sends first 8 chars)
                         if not db_script:
                             db_script = session.query(VideoScript).filter(
-                                VideoScript.id.startswith(script_id)
+                                VideoScript.id.startswith(script_id),
+                                VideoScript.user_id == task["user_id"],
                             ).first()
                         if db_script and db_script.script_json:
                             script = _json.loads(db_script.script_json)
@@ -179,16 +180,11 @@ async def process_task_queue():
                 error_detail = script.get("error", "Unknown") if isinstance(script, dict) else "No script_id, no inline script, and no topic provided"
                 raise RuntimeError(f"Could not load/generate script: {error_detail}")
 
-            # Create VideoProject record (ensure table exists)
+            # Create VideoProject record
             import uuid as _uuid
             from datetime import datetime as _dt, timezone as _tz
-            from src.db.session import get_db, get_engine
+            from src.db.session import get_db
             from src.db.models import VideoProject, VideoScript
-            try:
-                VideoProject.__table__.create(get_engine(), checkfirst=True)
-                VideoScript.__table__.create(get_engine(), checkfirst=True)
-            except Exception:
-                pass
 
             now = _dt.now(_tz.utc).isoformat()
             initial_step = "initializing"

@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 
-from src.auth.deps import get_current_user
+from src.auth.deps import get_current_user, require_active_plan
 from src.models.branding import (
     create_brand_profile,
     update_brand_profile,
@@ -67,7 +67,7 @@ async def api_list_brand_profiles(user=Depends(get_current_user)):
 
 
 @router.post("")
-async def api_create_brand_profile(body: BrandProfileCreate, user=Depends(get_current_user)):
+async def api_create_brand_profile(body: BrandProfileCreate, user=Depends(require_active_plan)):
     if not body.name.strip():
         raise HTTPException(status_code=400, detail="Nome da marca e obrigatorio.")
 

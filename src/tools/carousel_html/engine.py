@@ -290,9 +290,27 @@ class CarouselHTMLEngine:
             return i, html
 
         results = await asyncio.gather(*[_gen_slide(i, s) for i, s in enumerate(slides)])
-        # Reordena pelos índices (gather mantém ordem, mas por segurança)
+        # Reordena pelos indices (gather mantem ordem, mas por seguranca)
         results.sort(key=lambda x: x[0])
         html_slides = [html for _, html in results]
+
+        # 3.5. WCAG contrast check
+        try:
+            from .contrast import check_slide_contrast, suggest_fix
+            for idx, html in enumerate(html_slides):
+                issues = check_slide_contrast(html)
+                if issues:
+                    logger.warning(
+                        "Slide %d: %d contrast issues found (worst ratio: %.1f:1)",
+                        idx + 1, len(issues), min(i["ratio"] for i in issues),
+                    )
+                    # Auto-fix: replace low-contrast text colors with suggested fix
+                    for issue in issues:
+                        fix = suggest_fix(issue["bg"], issue["text"])
+                        html = html.replace(f"color: {issue['text']}", f"color: {fix}")
+                    html_slides[idx] = html
+        except Exception as e:
+            logger.warning("Contrast check skipped: %s", e)
 
         # 4. Renderiza via Playwright (sequencial — reutiliza browser)
         png_slides = await self.renderer.render_carousel(html_slides, width, height)

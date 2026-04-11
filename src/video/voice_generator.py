@@ -122,20 +122,68 @@ async def _generate_elevenlabs(
     if len(text) <= ELEVENLABS_CHAR_LIMIT:
         return await _call_elevenlabs(text, voice_id, api_key)
 
-    # Text exceeds limit — split semantically and concatenate audio
+    # Text exceeds limit — split semantically, generate in parallel, concat with ffmpeg
     chunks = _split_text(text, ELEVENLABS_CHAR_LIMIT)
     logger.info("Text too long (%d chars), split into %d chunks", len(text), len(chunks))
 
-    all_audio = b""
-    total_duration = 0.0
+    chunk_results = await asyncio.gather(
+        *[_call_elevenlabs(chunk, voice_id, api_key) for chunk in chunks]
+    )
 
-    for i, chunk in enumerate(chunks):
-        audio_bytes, _, duration_s = await _call_elevenlabs(chunk, voice_id, api_key)
-        all_audio += audio_bytes
-        total_duration += duration_s
-        logger.info("Chunk %d/%d done: %d chars, %.1fs", i + 1, len(chunks), len(chunk), duration_s)
+    total_duration = sum(r[2] for r in chunk_results)
+
+    if len(chunk_results) == 1:
+        return chunk_results[0]
+
+    # Concatenate MP3 chunks via ffmpeg concat demuxer (raw byte concat is invalid)
+    all_audio = await _concat_mp3_chunks([r[0] for r in chunk_results])
+
+    for i, (_, _, dur) in enumerate(chunk_results):
+        logger.info("Chunk %d/%d done: %d chars, %.1fs", i + 1, len(chunks), len(chunks[i]), dur)
 
     return all_audio, "audio/mpeg", total_duration
+
+
+async def _concat_mp3_chunks(chunks: list[bytes]) -> bytes:
+    """Concatenate multiple MP3 byte chunks into a single valid MP3 using ffmpeg concat demuxer."""
+    import tempfile
+    import os as _os
+
+    tmpdir = tempfile.mkdtemp(prefix="teq_mp3_")
+    try:
+        # Write each chunk to a temp file
+        chunk_paths = []
+        for i, chunk in enumerate(chunks):
+            path = _os.path.join(tmpdir, f"chunk_{i}.mp3")
+            with open(path, "wb") as f:
+                f.write(chunk)
+            chunk_paths.append(path)
+
+        # Create concat list file
+        list_path = _os.path.join(tmpdir, "concat.txt")
+        with open(list_path, "w") as f:
+            for p in chunk_paths:
+                f.write(f"file '{p}'\n")
+
+        output_path = _os.path.join(tmpdir, "output.mp3")
+
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            "-i", list_path, "-c", "copy", output_path,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            logger.warning("ffmpeg concat failed (rc=%d), falling back to raw concat: %s",
+                           proc.returncode, stderr.decode()[:200])
+            return b"".join(chunks)
+
+        with open(output_path, "rb") as f:
+            return f.read()
+    finally:
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 async def _call_elevenlabs(

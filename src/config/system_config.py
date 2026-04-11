@@ -60,7 +60,25 @@ def get_config_for_plan(key: str, plan_type: str, default: str = "") -> str:
     return get_config(key, default)
 
 
+ALLOWED_CONFIG_KEYS = {
+    "max_concurrent_images",
+    "max_image_workers",
+    "max_global_processing",
+    "task_timeout_minutes",
+    "admin_bypass_limits",
+    "maintenance_mode",
+    "default_tts_provider",
+    "default_llm_provider",
+    "video_max_duration_s",
+    "carousel_default_format",
+}
+
+
 def set_config(key: str, value: str):
+    # [SEC] Validate key against allowlist (CWE-15)
+    if key not in ALLOWED_CONFIG_KEYS and not key.startswith(tuple(f"{k}:" for k in ALLOWED_CONFIG_KEYS)):
+        raise ValueError(f"Config key '{key}' nao permitida. Keys validas: {sorted(ALLOWED_CONFIG_KEYS)}")
+
     global _cache
     now_iso = datetime.now(timezone.utc).isoformat()
 

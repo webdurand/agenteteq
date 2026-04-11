@@ -22,6 +22,8 @@ def _get_fernet():
 
     key = os.getenv("TOKEN_ENCRYPTION_KEY", "")
     if not key:
+        if os.getenv("ENV", "").lower() == "production":
+            logger.error("TOKEN_ENCRYPTION_KEY obrigatório em produção! Tokens NÃO serão criptografados.")
         return None
 
     # Derive a 32-byte key via SHA-256, then base64-encode for Fernet

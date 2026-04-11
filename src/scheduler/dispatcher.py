@@ -73,6 +73,18 @@ def dispatch_proactive_message(reminder_id: int):
         channel = reminder["notification_channel"]
         workflow_id = reminder.get("workflow_id")
 
+        # [SEC] Check if user plan is active and has budget before running agent
+        from src.memory.identity import get_user, is_plan_active
+        from src.config.feature_gates import check_budget
+        user_data = get_user(user_phone)
+        if not user_data or not is_plan_active(user_data):
+            logger.info("Reminder %s: usuario %s*** sem plano ativo. Pulando.", reminder_id, user_phone[:4])
+            return
+        budget_info = check_budget(user_phone)
+        if budget_info and budget_info.get("percentage_used", 0) >= 100:
+            logger.info("Reminder %s: usuario %s*** sem budget. Pulando.", reminder_id, user_phone[:4])
+            return
+
         logger.info("Reminder %s | User: %s | Channel: %s | Workflow: %s | Task: %s...",
                      reminder_id, user_phone, channel, workflow_id, task_instructions[:60])
 

@@ -34,14 +34,18 @@ async def extract_key_frames(
     """
     num_frames = max(1, min(4, num_frames))
 
-    # Download video to temp file
-    video_path = tempfile.mktemp(suffix=".mp4", prefix="teq_avatar_")
+    # Download video to temp file (streaming to avoid loading 500MB in RAM)
+    video_fd = tempfile.NamedTemporaryFile(suffix=".mp4", prefix="teq_avatar_", delete=False)
+    video_path = video_fd.name
+    video_fd.close()
+    frame_paths: list[str] = []
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.get(video_url)
-            resp.raise_for_status()
-            with open(video_path, "wb") as f:
-                f.write(resp.content)
+            async with client.stream("GET", video_url) as resp:
+                resp.raise_for_status()
+                with open(video_path, "wb") as f:
+                    async for chunk in resp.aiter_bytes(chunk_size=1024 * 1024):
+                        f.write(chunk)
 
         # Get video duration
         duration = await _get_duration(video_path)
@@ -54,23 +58,31 @@ async def extract_key_frames(
         # Extract frames
         frame_paths = []
         for i, ts in enumerate(timestamps):
-            frame_path = tempfile.mktemp(suffix=".jpg", prefix=f"teq_frame_{i}_")
+            frame_fd = tempfile.NamedTemporaryFile(suffix=".jpg", prefix=f"teq_frame_{i}_", delete=False)
+            frame_path = frame_fd.name
+            frame_fd.close()
             await _extract_frame(video_path, ts, frame_path)
             frame_paths.append(frame_path)
 
-        # Upload to Cloudinary
-        frame_urls = []
-        for frame_path in frame_paths:
+        # Upload to Cloudinary in parallel
+        import asyncio as _aio
+
+        async def _upload_frame(fpath: str) -> str | None:
             try:
-                result = cloudinary.uploader.upload(
-                    frame_path,
+                result = await _aio.to_thread(
+                    cloudinary.uploader.upload,
+                    fpath,
                     folder=f"teq/avatars/{user_id}",
                     public_id=f"frame_{uuid.uuid4().hex[:8]}",
                     overwrite=True,
                 )
-                frame_urls.append(result["secure_url"])
+                return result["secure_url"]
             except Exception as e:
                 logger.error("Frame upload failed: %s", e)
+                return None
+
+        results = await _aio.gather(*[_upload_frame(fp) for fp in frame_paths])
+        frame_urls = [u for u in results if u]
 
         if not frame_urls:
             raise RuntimeError("No frames could be uploaded")
@@ -80,7 +92,8 @@ async def extract_key_frames(
 
     finally:
         # Cleanup temp files
-        for path in [video_path] + [p for p in locals().get("frame_paths", [])]:
+        cleanup_paths = [video_path] + frame_paths
+        for path in cleanup_paths:
             try:
                 if path and os.path.exists(path):
                     os.unlink(path)

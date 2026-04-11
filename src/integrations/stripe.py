@@ -116,6 +116,8 @@ def update_subscription_price(subscription_id: str, new_price_id: str) -> stripe
 
 def construct_webhook_event(payload: bytes, sig_header: str) -> stripe.Event:
     webhook_secret = get_webhook_secret()
+    if not webhook_secret:
+        raise ValueError("STRIPE_WEBHOOK_SECRET not configured")
     return stripe.Webhook.construct_event(
         payload, sig_header, webhook_secret
     )

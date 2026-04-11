@@ -18,10 +18,9 @@ from src.integrations.status_notifier import StatusNotifier
 from src.agent.factory import create_agent_with_tools
 from src.agent.response_utils import extract_final_response, split_whatsapp_messages, parse_interactive_elements
 from src.agent.prompts import GREETING_INJECTION
-from src.memory.identity import get_user, create_user, update_user_name, update_last_seen, is_new_session, is_plan_active, get_or_rotate_session
+from src.memory.identity import get_user, create_user, update_last_seen, is_new_session, is_plan_active, get_or_rotate_session
 from src.memory.knowledge import get_vector_db
 from src.memory.extractor import extract_and_save_facts
-from src.tools.memory_manager import add_memory
 from src.memory.analytics import log_event, log_agent_tools, log_run_metrics
 from src.db.session import get_db
 from src.db.models import ProcessedMessage, MessageBuffer
@@ -69,19 +68,19 @@ def flush_ready_buffers():
             .all()
         )
         for buf in buffers:
-            ready_rows.append((buf.user_id, buf.events))
+            ready_rows.append((buf.id, buf.user_id, buf.events))
             db.delete(buf)
 
-    for user_id, events_json in ready_rows:
+    from src.events import _main_loop
+    for buf_id, user_id, events_json in ready_rows:
         try:
             events = json.loads(events_json) if isinstance(events_json, str) else events_json
             if events:
                 aggregated = aggregate_events(events)
-                from src.events import _main_loop
                 if _main_loop and _main_loop.is_running():
                     asyncio.run_coroutine_threadsafe(orchestrate_message(aggregated), _main_loop)
                 else:
-                    asyncio.create_task(orchestrate_message(aggregated))
+                    logger.warning("Event loop nao disponivel para processar buffer do usuario %s", user_id)
         except Exception as e:
             logger.error("Erro ao processar buffer do usuário %s: %s", user_id, e)
 
@@ -107,6 +106,9 @@ async def buffer_message(from_number: str, event: dict):
 async def _verify_meta_signature(request: Request) -> bytes:
     body = await request.body()
     if not WHATSAPP_APP_SECRET:
+        logger.warning("WHATSAPP_APP_SECRET not set — skipping webhook signature verification")
+        if os.getenv("ENV", "dev") != "dev":
+            raise HTTPException(403, "Webhook signature verification not configured")
         return body
     sig = request.headers.get("X-Hub-Signature-256", "")
     expected = "sha256=" + hmac.new(WHATSAPP_APP_SECRET.encode(), body, hashlib.sha256).hexdigest()
@@ -248,7 +250,7 @@ def parse_webhook_payload(data: dict) -> list:
                             dedup_key = f"meta_{msg_id}"
                         else:
                             fallback = content_str or json.dumps(msg, sort_keys=True, ensure_ascii=False)
-                            dedup_key = f"meta_fallback_{hashlib.md5(fallback.encode()).hexdigest()}"
+                            dedup_key = f"meta_fallback_{hashlib.sha256(fallback.encode()).hexdigest()}"
 
                         events.append({
                             "provider": "meta",
@@ -303,7 +305,7 @@ def parse_webhook_payload(data: dict) -> list:
                     dedup_key = f"evo_{msg_id}"
                 else:
                     fallback = json.dumps(msg_content, sort_keys=True, ensure_ascii=False)
-                    dedup_key = f"evo_fallback_{hashlib.md5(fallback.encode()).hexdigest()}"
+                    dedup_key = f"evo_fallback_{hashlib.sha256(fallback.encode()).hexdigest()}"
 
                 normalized_type = "unknown"
                 normalized_msg = {}
@@ -558,7 +560,13 @@ async def process_aggregated_message(from_number: str, message_id: str, event: d
     asyncio.create_task(asyncio.to_thread(log_run_metrics, from_number, "whatsapp", response))
     final_text = extract_final_response(response)
 
-    if not final_text.strip():
+    # Verifica se tools de side-effect foram chamadas (evita retry duplicando carrossel/imagem)
+    _side_effect_tools = {"generate_carousel", "edit_image", "generate_image", "create_video"}
+    _had_side_effects = any(
+        getattr(m, "tool_name", None) in _side_effect_tools
+        for m in (response.messages if response and hasattr(response, "messages") else [])
+    )
+    if not final_text.strip() and not _had_side_effects:
         logger.warning("Resposta vazia para %s. Retentando...", from_number)
         retry_response = await asyncio.to_thread(agent.run, "Continue sua resposta anterior.", **kwargs)
         final_text = extract_final_response(retry_response)

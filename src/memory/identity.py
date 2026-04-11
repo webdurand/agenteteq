@@ -75,6 +75,20 @@ def get_user_by_email(email: str) -> Optional[dict]:
     return None
 
 
+def update_password(phone_number: str, new_password_hash: str) -> bool:
+    """Update the password hash for a user. Returns True if successful."""
+    try:
+        with get_db() as session:
+            user = session.query(User).filter_by(phone_number=phone_number).first()
+            if not user:
+                return False
+            user.password_hash = new_password_hash
+        return True
+    except Exception as e:
+        logger.error("Erro ao atualizar senha de %s: %s", phone_number, e)
+    return False
+
+
 def get_user_by_username(username: str) -> Optional[dict]:
     try:
         with get_db() as session:
@@ -192,24 +206,38 @@ def change_user_phone_number(old_phone_number: str, new_phone_number: str):
         if get_user(new_phone_number):
             raise ValueError("Novo telefone ja cadastrado")
 
+        from src.db.models import (
+            BackgroundTask, BrandProfile, BudgetAddOn, Carousel,
+            CarouselPreset, CanvasSession, ContentPlan, MessageBuffer,
+            OtpCode, ProcessedMessage, SocialContent, StyleReference,
+            TrackedAccount, UserAvatar, UserIntegration, VideoProject,
+            VideoScript, Workflow,
+        )
+
+        from sqlalchemy import text
         with get_db() as session:
-            # FK children first to avoid constraint violations
-            session.query(Task).filter_by(user_id=old_phone_number).update(
-                {"user_id": new_phone_number}
-            )
-            session.query(Subscription).filter_by(user_id=old_phone_number).update(
-                {"user_id": new_phone_number}
-            )
-            session.query(Reminder).filter_by(user_id=old_phone_number).update(
-                {"user_id": new_phone_number}
-            )
-            session.query(UsageEvent).filter_by(user_id=old_phone_number).update(
-                {"user_id": new_phone_number}
-            )
-            session.query(ChatMessage).filter_by(user_id=old_phone_number).update(
-                {"user_id": new_phone_number}
-            )
+            # Defer FK checks for the duration of this transaction
+            try:
+                session.execute(text("PRAGMA defer_foreign_keys = ON"))
+            except Exception:
+                pass  # PostgreSQL doesn't use PRAGMA
+
+            # Update User PK first, then all children
             session.query(User).filter_by(phone_number=old_phone_number).update(
+                {"phone_number": new_phone_number}
+            )
+            for model in [
+                ChatMessage, Task, Subscription, Reminder, UsageEvent,
+                UserIntegration, Workflow, Carousel, BudgetAddOn,
+                BackgroundTask, MessageBuffer, BrandProfile, CarouselPreset,
+                StyleReference, TrackedAccount, SocialContent, ContentPlan,
+                CanvasSession, UserAvatar, VideoScript, VideoProject,
+            ]:
+                session.query(model).filter_by(user_id=old_phone_number).update(
+                    {"user_id": new_phone_number}
+                )
+            # OtpCode uses phone_number as PK
+            session.query(OtpCode).filter_by(phone_number=old_phone_number).update(
                 {"phone_number": new_phone_number}
             )
     except Exception as e:
@@ -294,12 +322,12 @@ def delete_account(phone_number: str) -> bool:
     Retorna True se o usuario existia e foi removido.
     """
     from src.db.models import (
-        BackgroundTask,
-        Carousel,
-        ImageSession,
-        MessageBuffer,
-        OtpCode,
-        UserIntegration,
+        BackgroundTask, BrandProfile, BudgetAddOn,
+        Carousel, CarouselPreset, CanvasSession, ContentPlan,
+        MessageBuffer, OtpCode,
+        SocialContent, StyleReference, TrackedAccount,
+        UserAvatar, UserIntegration, VideoProject, VideoScript,
+        Workflow,
     )
 
     try:
@@ -327,16 +355,16 @@ def delete_account(phone_number: str) -> bool:
             except Exception:
                 pass  # tabela pode nao existir em dev
 
-            # Remove dados de todas as tabelas filhas
-            session.query(ChatMessage).filter_by(user_id=phone_number).delete()
-            session.query(Task).filter_by(user_id=phone_number).delete()
-            session.query(Reminder).filter_by(user_id=phone_number).delete()
-            session.query(Subscription).filter_by(user_id=phone_number).delete()
-            session.query(UsageEvent).filter_by(user_id=phone_number).delete()
-            session.query(UserIntegration).filter_by(user_id=phone_number).delete()
-            session.query(BackgroundTask).filter_by(user_id=phone_number).delete()
-            session.query(Carousel).filter_by(user_id=phone_number).delete()
-            session.query(MessageBuffer).filter_by(user_id=phone_number).delete()
+            # Remove dados de TODAS as tabelas filhas (LGPD Art. 18 VI)
+            for model in [
+                ChatMessage, Task, Reminder, Subscription, UsageEvent,
+                UserIntegration, BackgroundTask, Carousel, MessageBuffer,
+                BudgetAddOn, Workflow, BrandProfile, CarouselPreset,
+                StyleReference, TrackedAccount, SocialContent, ContentPlan,
+                CanvasSession, UserAvatar, VideoScript,
+                VideoProject,
+            ]:
+                session.query(model).filter_by(user_id=phone_number).delete()
             session.query(OtpCode).filter_by(phone_number=phone_number).delete()
 
             # Remove o usuario

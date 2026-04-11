@@ -377,88 +377,15 @@ def create_agent_with_tools(
         )
 
     # Instruções de tarefas: prioridade, categoria e auto-link com reminders
-    task_instructions = [
-        "TAREFAS — PRIORIDADE E CATEGORIA: Ao criar tarefas, INFIRA automaticamente a prioridade e categoria "
-        "do contexto quando o usuario nao especificar:\n"
-        "- Prioridade: 'high' para urgente/importante/prazo curto, 'medium' para normal, 'low' para secundario/sem pressa.\n"
-        "  Exemplos: 'entregar relatorio pro cliente sexta' → high; 'comprar cafe' → low; 'responder email do parceiro' → medium.\n"
-        "- Categoria: infira do assunto. Exemplos: 'Trabalho', 'Pessoal', 'Conteudo', 'Financeiro', 'Saude'.\n"
-        "  Se nao conseguir inferir, deixe vazio (nao invente).\n\n"
-        "TAREFAS — AUTO-LINK COM REMINDERS: Sempre que criar uma tarefa com due_date, OFERECA criar um lembrete. "
-        "Exemplo: 'Quer que eu te lembre? Posso avisar um dia antes e/ou no dia.' "
-        "Se o usuario aceitar, crie o reminder usando schedule_message com trigger_type='date' no horario adequado. "
-        "Nao crie o reminder automaticamente — SEMPRE pergunte primeiro."
-    ]
+    from src.agent.instructions import (
+        TASK_INSTRUCTIONS, UPSELL_INSTRUCTIONS,
+        BRIEFING_INSTRUCTIONS, REPURPOSING_INSTRUCTIONS,
+    )
+    task_instructions = TASK_INSTRUCTIONS
+    upsell_instructions = UPSELL_INSTRUCTIONS
+    briefing_instructions = BRIEFING_INSTRUCTIONS
 
-    # Instruções de comunicação de limites e upsell natural
-    upsell_instructions = [
-        "COMUNICACAO DE LIMITES E UPSELL: O bloco [STATUS LIMITES] no inicio da mensagem mostra os limites atuais. "
-        "Siga estas regras:\n"
-        "- Se alguma feature mostra '⚠️ quase no limite': mencione BREVEMENTE ao final da resposta, em tom casual. "
-        "Ex: 'Ah, so um aviso: voce ta quase no limite de buscas de hoje no plano gratuito. "
-        "Se quiser mais, da uma olhada no Premium.'\n"
-        "- Se alguma feature mostra 'LIMITE ATINGIDO' e o usuario tenta usa-la: explique que atingiu o limite "
-        "e compartilhe o link de upgrade (presente no STATUS LIMITES) se estiver no plano gratuito.\n"
-        "- Se o usuario perguntar sobre uma feature 'nao disponivel no plano': explique que esta no Premium "
-        "e compartilhe o link.\n"
-        "- NUNCA mencione limites quando o uso esta baixo (sem ⚠️ ou LIMITE ATINGIDO). Responda normalmente.\n"
-        "- Tom: amigavel e util, como um amigo dando um toque. NUNCA insistente ou repetitivo.\n"
-        "- Maximo UMA mencao de limite por resposta. Nao repita se ja mencionou na mesma conversa.\n"
-        "- NUNCA invente precos ou detalhes do plano Premium. Direcione ao link de upgrade."
-    ]
-
-    # Instruções de briefing matinal
-    briefing_instructions = [
-        "BRIEFING MATINAL: Quando o usuario pedir para ativar um resumo/briefing diario "
-        "(ex: 'ativa meu briefing', 'quero um resumo todo dia de manha', 'me manda um resumo as 7h'), "
-        "crie um reminder com schedule_message usando:\n"
-        "- trigger_type='cron'\n"
-        "- cron_expression com o horario solicitado (ex: '0 7 * * *' para 7h, '0 8 * * 1-5' para dias uteis as 8h)\n"
-        "- notification_channel='whatsapp_text'\n"
-        "- task_instructions com TODAS as instrucoes do briefing. Exemplo:\n"
-        "  'Compile um briefing matinal completo. Faca o seguinte:\n"
-        "   1. Use list_tasks(status=\"pending\") para listar tarefas pendentes, destacando as que vencem hoje.\n"
-        "   2. Se o usuario tem Google Calendar conectado, use get_calendar_events para eventos de hoje.\n"
-        "   3. Se o usuario tem contas monitoradas, use get_trending_content para destaques recentes.\n"
-        "   4. Se o usuario tem Gmail conectado, use read_emails(query=\"is:unread newer_than:1d\") para emails nao lidos.\n"
-        "   Formate tudo de forma concisa e agradavel para WhatsApp, com emojis.'\n\n"
-        "Confirme o horario e o que incluir antes de criar. "
-        "Para desativar, o usuario pode pedir 'desativa meu briefing' — use cancel_schedule.",
-
-        "REGRA CRITICA PARA AGENDAMENTOS: Quando usar schedule_message ou schedule_workflow "
-        "para agendamentos RECORRENTES (cron/interval), NUNCA inclua datas absolutas "
-        "(ex: '13/03/2026', '10 de marco') nas task_instructions ou request. "
-        "Use SEMPRE termos relativos: 'de hoje', 'mais recentes', 'ultimas 24h', 'desta semana'. "
-        "O agente que executar no futuro tera acesso a data correta automaticamente.",
-    ]
-
-    # Instruções de repurposing e relatório competitivo
-    repurposing_instructions = [
-        "REPURPOSING DE CONTEUDO: Quando o usuario pedir para criar conteudo em multiplos formatos "
-        "(ex: 'cria em 3 formatos', 'adapta pra instagram e youtube', 'quero carrossel e roteiro', "
-        "'faz um post e um video sobre X'), execute MULTIPLAS tools sequencialmente:\n"
-        "1. Gere o carrossel com generate_image (se pedido)\n"
-        "2. Gere o roteiro de video com create_content_script (se pedido)\n"
-        "3. Gere o texto de blog (se pedido) diretamente na resposta\n"
-        "4. Consolide tudo numa resposta unica mostrando cada formato\n"
-        "5. OFERECA adicionar todos ao calendario de conteudo\n\n"
-        "Adapte o conteudo para cada formato — nao e so copiar. "
-        "Carrossel: visual, slides curtos. Video: roteiro com gancho, cenas, CTA. Blog: texto completo.\n\n"
-        "RELATORIO COMPETITIVO: Quando o usuario pedir um relatorio ou comparacao de perfis monitorados "
-        "(ex: 'gera um relatorio dos perfis X, Y e Z', 'compara essas contas', 'quero um panorama'), "
-        "use generate_competitive_report para gerar um relatorio com graficos e insights. "
-        "O relatorio compara seguidores, engajamento, crescimento e top posts entre as contas.\n\n"
-        "FORMATOS DE RELATORIO: O usuario pode escolher o formato do relatorio:\n"
-        "- 'me manda em texto', 'so o texto', 'resumo rapido' → format='text'\n"
-        "- 'quero com imagens', 'slides', 'graficos' → format='images' (padrao)\n"
-        "- 'texto e imagens', 'completo' → format='text_images'\n"
-        "- 'PDF', 'documento', 'quero baixar' → format='pdf'\n"
-        "Se o usuario nao especificar, use format='images' (comportamento padrao). "
-        "Infira o formato da frase do usuario naturalmente.\n"
-        "TODOS os formatos funcionam em TODOS os canais, incluindo WhatsApp. "
-        "PDFs sao enviados como documento anexado, imagens como midia. "
-        "NUNCA diga que nao consegue enviar PDF ou imagens pelo WhatsApp — SEMPRE chame a tool."
-    ]
+    repurposing_instructions = REPURPOSING_INSTRUCTIONS
 
     all_instructions = (extra_instructions or []) + google_instructions + slack_instructions + social_instructions + branding_instructions + canvas_instructions + calendar_instructions + video_instructions + copilot_instructions + interactive_instructions + task_instructions + upsell_instructions + briefing_instructions + repurposing_instructions
 

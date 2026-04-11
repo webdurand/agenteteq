@@ -4,6 +4,7 @@ REST API endpoints for video creation.
 
 import logging
 import os
+import secrets
 import uuid
 from datetime import datetime, timezone
 
@@ -11,7 +12,7 @@ import cloudinary.uploader
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from typing import Optional
 
-from src.auth.deps import get_current_user
+from src.auth.deps import get_current_user, require_admin
 from src.db.session import get_db
 from src.db.models import UserAvatar, VideoProject, VideoScript
 
@@ -138,7 +139,7 @@ async def api_share_video(
 
         # Generate share token if not exists
         if not video.share_token:
-            video.share_token = str(uuid.uuid4())[:8]
+            video.share_token = secrets.token_urlsafe(32)
             video.updated_at = datetime.now(timezone.utc).isoformat()
 
         return {
@@ -164,11 +165,20 @@ async def api_upload_video(
             detail=f"Tipo de arquivo nao suportado: {file.content_type}. Aceitos: MP4, MOV, WebM.",
         )
 
-    # Read file (max 500MB)
-    contents = await file.read()
+    # Read file in chunks (max 500MB) to avoid loading everything into RAM at once
     max_size = 500 * 1024 * 1024
-    if len(contents) > max_size:
-        raise HTTPException(status_code=400, detail="Arquivo muito grande. Maximo: 500MB.")
+    import tempfile, shutil
+    tmp = tempfile.SpooledTemporaryFile(max_size=10 * 1024 * 1024)  # spool to disk after 10MB
+    total_size = 0
+    while chunk := await file.read(1024 * 1024):
+        total_size += len(chunk)
+        if total_size > max_size:
+            tmp.close()
+            raise HTTPException(status_code=400, detail="Arquivo muito grande. Maximo: 500MB.")
+        tmp.write(chunk)
+    tmp.seek(0)
+    contents = tmp.read()
+    tmp.close()
 
     # Upload to Cloudinary
     try:
@@ -447,7 +457,7 @@ async def api_add_voice_to_avatar(
         )
     except Exception as e:
         logger.error("Voice cloning failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"Erro ao clonar voz: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao clonar voz. Tente novamente.")
 
     # Save to avatar
     with get_db() as session:
@@ -523,7 +533,7 @@ async def api_transcribe_audio(
             text = result.get("text", "").strip()
     except Exception as e:
         logger.error("Transcription failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"Erro na transcrição: {e}")
+        raise HTTPException(status_code=500, detail="Erro na transcrição. Tente novamente.")
 
     if not text:
         raise HTTPException(status_code=400, detail="Não consegui entender o áudio. Tente novamente.")
@@ -605,7 +615,7 @@ async def api_queue_history(
 
 
 @router.post("/admin/cleanup-stuck")
-async def api_cleanup_stuck(user=Depends(get_current_user)):
+async def api_cleanup_stuck(user=Depends(require_admin)):
     """Mark all stuck VideoProjects as failed and clear stuck chat messages."""
     from datetime import datetime, timezone
     user_id = user["phone_number"]

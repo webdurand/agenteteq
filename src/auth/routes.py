@@ -7,7 +7,7 @@ from slowapi.util import get_remote_address
 
 logger = logging.getLogger(__name__)
 from src.auth.passwords import hash_password, verify_password
-from src.auth.jwt import create_token
+from src.auth.jwt import create_token, create_refresh_token, decode_token
 from src.auth.otp import generate_code, verify_code
 from src.auth.google import verify_google_token
 from src.auth.deps import get_current_user
@@ -18,6 +18,7 @@ from src.memory.identity import (
     get_user_by_email,
     get_user_by_username,
     get_password_hash_by_email,
+    update_password,
     set_whatsapp_verified,
     link_google_account,
     is_plan_active,
@@ -29,6 +30,8 @@ limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+from pydantic import field_validator
+
 class RegisterRequest(BaseModel):
     username: str
     name: str
@@ -36,6 +39,17 @@ class RegisterRequest(BaseModel):
     birth_date: str
     phone: str
     password: str
+
+    @field_validator("password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Senha deve ter no minimo 8 caracteres")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Senha deve conter ao menos um numero")
+        if not any(c.isalpha() for c in v):
+            raise ValueError("Senha deve conter ao menos uma letra")
+        return v
 
 class VerifyRequest(BaseModel):
     phone: str
@@ -99,8 +113,13 @@ async def register(request: Request, req: RegisterRequest):
         password_hash=hashed,
         terms_accepted_version=CURRENT_TERMS_VERSION,
     )
-    
-    await send_otp_whatsapp(req.phone, "register")
+
+    try:
+        await send_otp_whatsapp(req.phone, "register")
+    except HTTPException:
+        # OTP falhou -- limpa o usuário para permitir re-registro
+        delete_account(req.phone)
+        raise
     return {"message": "Usuario criado. Codigo enviado para o WhatsApp."}
 
 @router.post("/verify-whatsapp")
@@ -114,14 +133,16 @@ async def verify_whatsapp(request: Request, req: VerifyRequest):
         raise HTTPException(status_code=400, detail="Codigo invalido ou expirado")
         
     set_whatsapp_verified(req.phone)
-    
+
     # Atualiza dados para adicionar ao JWT
     user = get_user(req.phone)
     token = create_token(user["phone_number"], user["username"], user["email"], user.get("role", "user"))
-    
+    refresh = create_refresh_token(user["phone_number"])
+
     return {
         "message": "WhatsApp verificado com sucesso",
-        "token": token
+        "token": token,
+        "refresh_token": refresh,
     }
 
 @router.post("/login")
@@ -135,16 +156,19 @@ async def login(request: Request, req: LoginRequest):
     if not stored_hash or not verify_password(req.password, stored_hash):
         raise HTTPException(status_code=401, detail="Credenciais invalidas")
         
-    # Conta de teste: pula 2FA e retorna token direto (para verificacao Google OAuth)
+    # Conta de teste: pula 2FA somente em dev/test (para verificacao Google OAuth)
     import os
     _test_email = os.getenv("TEST_ACCOUNT_EMAIL")
-    if _test_email and req.email.lower() == _test_email.lower() and user.get("whatsapp_verified"):
+    _env = os.getenv("ENV", "dev")
+    if _test_email and _env in ("dev", "test") and req.email.lower() == _test_email.lower() and user.get("whatsapp_verified"):
         token = create_token(user["phone_number"], user["username"], user["email"], user.get("role", "user"))
+        refresh = create_refresh_token(user["phone_number"])
         return {
             "message": "Login bem sucedido (test account)",
             "token": token,
+            "refresh_token": refresh,
             "phone": user["phone_number"],
-            "purpose": "none"
+            "purpose": "none",
         }
 
     if not user.get("whatsapp_verified"):
@@ -165,23 +189,21 @@ async def login(request: Request, req: LoginRequest):
     }
 
 @router.post("/verify-2fa")
-async def verify_2fa(req: VerifyRequest):
+@limiter.limit("5/minute")
+async def verify_2fa(request: Request, req: VerifyRequest):
     user = get_user(req.phone)
     if not user:
         raise HTTPException(status_code=404, detail="Usuario nao encontrado")
         
     if not verify_code(req.phone, req.code, "login_2fa"):
-        # Tenta fallback para "register" caso seja primeiro acesso incompleto
-        if not verify_code(req.phone, req.code, "register"):
-            raise HTTPException(status_code=400, detail="Codigo invalido ou expirado")
-        else:
-            set_whatsapp_verified(req.phone)
-            user = get_user(req.phone)
-            
+        raise HTTPException(status_code=400, detail="Codigo invalido ou expirado")
+
     token = create_token(user["phone_number"], user["username"], user["email"], user.get("role", "user"))
+    refresh = create_refresh_token(user["phone_number"])
     return {
         "message": "Login bem sucedido",
-        "token": token
+        "token": token,
+        "refresh_token": refresh,
     }
 
 @router.post("/google")
@@ -208,10 +230,12 @@ async def google_auth(request: Request, req: GoogleAuthRequest):
             }
             
         token = create_token(user["phone_number"], user["username"], user["email"], user.get("role", "user"))
+        refresh = create_refresh_token(user["phone_number"])
         return {
             "needs_registration": False,
             "needs_verification": False,
-            "token": token
+            "token": token,
+            "refresh_token": refresh,
         }
     else:
         # Usuario novo
@@ -222,7 +246,8 @@ async def google_auth(request: Request, req: GoogleAuthRequest):
         }
 
 @router.post("/google/complete", status_code=status.HTTP_201_CREATED)
-async def google_complete(req: GoogleCompleteRequest):
+@limiter.limit("5/minute")
+async def google_complete(request: Request, req: GoogleCompleteRequest):
     try:
         google_data = verify_google_token(req.google_id_token)
     except ValueError as e:
@@ -252,7 +277,8 @@ async def google_complete(req: GoogleCompleteRequest):
     return {"message": "Conta vinculada. Codigo enviado para o WhatsApp."}
 
 @router.post("/resend-code")
-async def resend_code(req: ResendCodeRequest):
+@limiter.limit("3/minute")
+async def resend_code(request: Request, req: ResendCodeRequest):
     user = get_user(req.phone)
     if not user:
         raise HTTPException(status_code=404, detail="Usuario nao encontrado")
@@ -261,7 +287,8 @@ async def resend_code(req: ResendCodeRequest):
 
 
 @router.post("/change-phone/request")
-async def request_phone_change(req: ChangePhoneRequest, current_user: dict = Depends(get_current_user)):
+@limiter.limit("3/minute")
+async def request_phone_change(request: Request, req: ChangePhoneRequest, current_user: dict = Depends(get_current_user)):
     if get_user(req.new_phone):
         raise HTTPException(status_code=400, detail="Telefone ja cadastrado")
     await send_otp_whatsapp(req.new_phone, "change_phone")
@@ -269,7 +296,8 @@ async def request_phone_change(req: ChangePhoneRequest, current_user: dict = Dep
 
 
 @router.post("/change-phone/verify")
-async def verify_phone_change(req: ChangePhoneVerifyRequest, current_user: dict = Depends(get_current_user)):
+@limiter.limit("5/minute")
+async def verify_phone_change(request: Request, req: ChangePhoneVerifyRequest, current_user: dict = Depends(get_current_user)):
     if not verify_code(req.new_phone, req.code, "change_phone"):
         raise HTTPException(status_code=400, detail="Codigo invalido ou expirado")
 
@@ -277,13 +305,50 @@ async def verify_phone_change(req: ChangePhoneVerifyRequest, current_user: dict 
     change_user_phone_number(old_phone, req.new_phone)
     updated_user = get_user(req.new_phone)
     token = create_token(updated_user["phone_number"], updated_user["username"], updated_user["email"], updated_user.get("role", "user"))
+    refresh = create_refresh_token(updated_user["phone_number"])
     return {
         "message": "Telefone atualizado com sucesso",
         "token": token,
+        "refresh_token": refresh,
         "phone_number": updated_user["phone_number"],
     }
 
 from src.billing.service import get_billing_context
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+@router.post("/refresh")
+@limiter.limit("10/minute")
+async def refresh_token(request: Request, req: RefreshRequest):
+    """
+    Troca um refresh_token valido por um novo par access + refresh token.
+    """
+    payload = decode_token(req.refresh_token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Refresh token invalido")
+    if payload.get("_error") == "expired":
+        raise HTTPException(status_code=401, detail="Refresh token expirado. Faca login novamente.")
+    if payload.get("type") != "refresh":
+        raise HTTPException(status_code=401, detail="Token invalido para refresh")
+
+    phone = payload.get("sub")
+    if not phone:
+        raise HTTPException(status_code=401, detail="Token malformado")
+
+    user = get_user(phone)
+    if not user:
+        raise HTTPException(status_code=401, detail="Usuario nao encontrado")
+
+    new_access = create_token(user["phone_number"], user["username"], user["email"], user.get("role", "user"))
+    new_refresh = create_refresh_token(user["phone_number"])
+    return {
+        "token": new_access,
+        "refresh_token": new_refresh,
+    }
+
 
 @router.get("/me")
 async def get_me(current_user: dict = Depends(get_current_user)):
@@ -409,3 +474,60 @@ async def export_my_data(current_user: dict = Depends(get_current_user)):
     except Exception as e:
         logger.error("Erro ao exportar dados: %s", e)
         raise HTTPException(status_code=500, detail="Erro ao exportar dados.")
+
+
+# ── Forgot Password (via WhatsApp OTP) ──
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    phone: str
+    code: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Senha deve ter no minimo 8 caracteres")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Senha deve conter ao menos um numero")
+        if not any(c.isalpha() for c in v):
+            raise ValueError("Senha deve conter ao menos uma letra")
+        return v
+
+
+@router.post("/forgot-password")
+@limiter.limit("3/minute")
+async def forgot_password(request: Request, req: ForgotPasswordRequest):
+    """Send OTP to user's WhatsApp for password reset. Always returns success to prevent enumeration."""
+    user = get_user_by_email(req.email)
+    if user and user.get("phone_number"):
+        try:
+            await send_otp_whatsapp(user["phone_number"], "reset_password")
+        except Exception:
+            pass  # Don't leak whether user exists
+    # Always return same response to prevent email enumeration
+    return {
+        "message": "Se o e-mail estiver cadastrado, enviamos um codigo para o WhatsApp associado.",
+        "phone_hint": user["phone_number"][-4:] if user else None,
+    }
+
+
+@router.post("/reset-password")
+@limiter.limit("5/minute")
+async def reset_password(request: Request, req: ResetPasswordRequest):
+    """Verify OTP and reset password."""
+    if not verify_code(req.phone, req.code, "reset_password"):
+        raise HTTPException(status_code=400, detail="Codigo invalido ou expirado")
+
+    user = get_user(req.phone)
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+
+    hashed = hash_password(req.new_password)
+    if not update_password(req.phone, hashed):
+        raise HTTPException(status_code=500, detail="Erro ao atualizar senha")
+
+    return {"message": "Senha atualizada com sucesso. Faca login com a nova senha."}

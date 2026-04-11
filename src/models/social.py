@@ -134,6 +134,22 @@ def get_tracked_account_by_username(user_id: str, platform: str, username: str) 
         return account.to_dict()
 
 
+def update_account_status(account_id: int, status: str, error_detail: str = ""):
+    """Update account status (active, error, paused)."""
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as db:
+        account = db.get(TrackedAccount, account_id)
+        if not account:
+            return
+        account.status = status
+        account.updated_at = now
+        if error_detail:
+            import json
+            meta = json.loads(account.metadata_json or "{}")
+            meta["last_error"] = error_detail
+            account.metadata_json = json.dumps(meta)
+
+
 def update_account_metadata(
     account_id: int,
     display_name: str = "",

@@ -619,12 +619,14 @@ async def wait_for_video(
             error = data.get("error", {})
             raise RuntimeError(f"HeyGen video failed: {error}")
 
-        await asyncio.sleep(interval_s)
-
         if cancel_check:
             cancel_check()  # raises RuntimeError if cancelled
 
-    raise RuntimeError(f"HeyGen video timed out after {max_attempts * interval_s}s")
+        # Exponential backoff: start at interval_s, grow up to 30s
+        actual_interval = min(interval_s * (1.3 ** min(attempt, 10)), 30)
+        await asyncio.sleep(actual_interval)
+
+    raise RuntimeError(f"HeyGen video timed out after polling {max_attempts} times")
 
 
 # ──────────────────────────────────────────────
@@ -705,12 +707,9 @@ async def setup_full_avatar(
     if not photo_urls:
         raise ValueError("At least one photo URL is required")
 
-    # Step 1: Upload all photos to HeyGen
+    # Step 1: Upload all photos to HeyGen (in parallel)
     logger.info("Uploading %d photos to HeyGen...", len(photo_urls))
-    uploaded = []
-    for url in photo_urls:
-        asset_data = await upload_image_from_url(url)
-        uploaded.append(asset_data)
+    uploaded = await asyncio.gather(*[upload_image_from_url(url) for url in photo_urls])
 
     # Step 2: Create avatar group with the first photo
     first_image_key = uploaded[0].get("image_key", "")

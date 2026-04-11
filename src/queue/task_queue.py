@@ -271,20 +271,19 @@ def complete_task(task_id: str, result: dict):
 
 def fail_task(task_id: str, error: str) -> bool:
     """Mark task as failed. Returns True if all retries exhausted (final failure).
-    Video tasks do NOT retry — too expensive (HeyGen/ElevenLabs credits)."""
+    Video tasks do NOT retry — too expensive (HeyGen/ElevenLabs credits).
+    NOTE: attempts is already incremented by claim_next_task, do NOT increment again here."""
     now_iso = datetime.now(timezone.utc).isoformat()
     final = False
     with get_db() as session:
         task = session.get(BackgroundTask, task_id)
         if task:
-            task.attempts = (task.attempts or 0) + 1
-
             # Video tasks never retry — each attempt costs real money
             if task.task_type == "video":
                 task.status = "failed"
                 task.result = json.dumps({"error": error})
                 final = True
-            elif task.attempts < 3:
+            elif (task.attempts or 1) < 3:
                 task.status = "pending"
             else:
                 task.status = "failed"
@@ -379,6 +378,7 @@ def recover_stale_tasks():
     now_iso = datetime.now(timezone.utc).isoformat()
 
     with get_db() as session:
+        # Recover non-video tasks (retry if attempts < 3)
         session.execute(
             text(
                 "UPDATE background_tasks "
@@ -388,4 +388,15 @@ def recover_stale_tasks():
                 "WHERE status = 'processing' AND started_at < :cutoff AND task_type != 'video'"
             ),
             {"now": now_iso, "cutoff": cutoff, "error_json": '{"error": "timeout"}'},
+        )
+        # Video tasks stuck in processing → mark as failed (never retry — costs real money)
+        session.execute(
+            text(
+                "UPDATE background_tasks "
+                "SET status = 'failed', "
+                "    result = :error_json, "
+                "    updated_at = :now "
+                "WHERE status = 'processing' AND started_at < :cutoff AND task_type = 'video'"
+            ),
+            {"now": now_iso, "cutoff": cutoff, "error_json": '{"error": "timeout — video task stuck"}'},
         )

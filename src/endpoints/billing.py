@@ -4,8 +4,17 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from typing import Optional
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 logger = logging.getLogger(__name__)
+limiter = Limiter(key_func=get_remote_address)
+
+
+def ts_to_iso(ts) -> str | None:
+    """Convert a Unix timestamp to ISO 8601 string."""
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else None
+
 
 from src.auth.deps import get_current_user
 from src.billing.service import (
@@ -16,7 +25,6 @@ from src.billing.service import (
 )
 from src.models.subscriptions import get_default_active_plan, list_plans, get_plan
 from src.integrations.stripe import (
-    create_subscription,
     create_portal_session,
     cancel_subscription,
     construct_webhook_event,
@@ -40,7 +48,8 @@ class UpgradeRequest(BaseModel):
 
 
 @router.post("/setup")
-def setup_checkout(req: SetupRequest, user: dict = Depends(get_current_user)):
+@limiter.limit("5/minute")
+def setup_checkout(request: Request, req: SetupRequest, user: dict = Depends(get_current_user)):
     """
     Step 1: Create Stripe customer + SetupIntent to collect the card.
     No subscription is created yet — trial only starts after /activate.
@@ -72,7 +81,8 @@ def setup_checkout(req: SetupRequest, user: dict = Depends(get_current_user)):
 
 
 @router.post("/activate")
-def activate_subscription(req: ActivateRequest, user: dict = Depends(get_current_user)):
+@limiter.limit("5/minute")
+def activate_subscription(request: Request, req: ActivateRequest, user: dict = Depends(get_current_user)):
     """
     Step 2: Card was confirmed. Now create the subscription with the saved payment method.
     Trial starts only here, after the card is validated.
@@ -95,6 +105,10 @@ def activate_subscription(req: ActivateRequest, user: dict = Depends(get_current
 
     if si.status != "succeeded":
         raise HTTPException(status_code=400, detail="Cartão ainda não foi confirmado")
+
+    # [SEC] Verify SetupIntent belongs to this customer (prevents IDOR - CWE-639)
+    if si.customer and si.customer != customer_id:
+        raise HTTPException(status_code=403, detail="SetupIntent não pertence a este usuário")
 
     payment_method_id = si.payment_method
     if not payment_method_id:
@@ -124,9 +138,6 @@ def activate_subscription(req: ActivateRequest, user: dict = Depends(get_current
             params["trial_period_days"] = trial_days
 
         subscription = stripe.Subscription.create(**params)
-
-        def ts_to_iso(ts):
-            return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else None
 
         upsert_subscription({
             "user_id": user["phone_number"],
@@ -174,10 +185,6 @@ def upgrade_plan(req: UpgradeRequest, user: dict = Depends(get_current_user)):
     if target_plan["code"] == "free":
         try:
             updated_sub = cancel_subscription(sub["provider_subscription_id"])
-            from datetime import datetime, timezone
-            def ts_to_iso(ts):
-                return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else None
-
             upsert_subscription({
                 "user_id": user["phone_number"],
                 "plan_code": sub["plan_code"],
@@ -210,10 +217,6 @@ def upgrade_plan(req: UpgradeRequest, user: dict = Depends(get_current_user)):
             sub["provider_subscription_id"],
             target_plan["stripe_price_id"],
         )
-
-        from datetime import datetime, timezone
-        def ts_to_iso(ts):
-            return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else None
 
         upsert_subscription({
             "user_id": user["phone_number"],
@@ -262,6 +265,27 @@ def get_available_plans(user: dict = Depends(get_current_user)):
     return {"plans": list_plans(active_only=True)}
 
 
+@router.get("/plans/public")
+def get_public_plans():
+    """Public endpoint for landing page pricing — no auth required."""
+    plans = list_plans(active_only=True)
+    # Strip sensitive Stripe IDs from public response
+    return {
+        "plans": [
+            {
+                "code": p["code"],
+                "name": p["name"],
+                "description": p.get("description", ""),
+                "amount_cents": p.get("amount_cents", 0),
+                "trial_days": p.get("trial_days", 0),
+                "features_json": p.get("features_json", "[]"),
+            }
+            for p in plans
+            if p.get("code") != "free"
+        ]
+    }
+
+
 @router.post("/setup-payment-method")
 def setup_payment_method(user: dict = Depends(get_current_user)):
     customer_id = get_or_create_customer(user)
@@ -278,6 +302,7 @@ class UpdateDefaultPaymentRequest(BaseModel):
 
 @router.post("/update-default-payment")
 def update_default_payment(req: UpdateDefaultPaymentRequest, user: dict = Depends(get_current_user)):
+    import stripe as _stripe
     from src.models.subscriptions import get_active_subscription
     customer_id = user.get("stripe_customer_id")
     if not customer_id:
@@ -285,6 +310,15 @@ def update_default_payment(req: UpdateDefaultPaymentRequest, user: dict = Depend
     sub = get_active_subscription(user["phone_number"])
     if not sub:
         raise HTTPException(status_code=400, detail="Sem assinatura ativa")
+    # [SEC] Verify PaymentMethod belongs to this customer (prevents IDOR - CWE-639)
+    try:
+        pm = _stripe.PaymentMethod.retrieve(req.payment_method_id)
+        if pm.customer and pm.customer != customer_id:
+            raise HTTPException(status_code=403, detail="Método de pagamento não pertence a este usuário")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Método de pagamento inválido")
     try:
         set_default_payment_method(customer_id, sub["provider_subscription_id"], req.payment_method_id)
         return {"status": "updated"}
@@ -294,7 +328,8 @@ def update_default_payment(req: UpdateDefaultPaymentRequest, user: dict = Depend
 
 
 @router.post("/cancel")
-def cancel(user: dict = Depends(get_current_user)):
+@limiter.limit("3/minute")
+def cancel(request: Request, user: dict = Depends(get_current_user)):
     # Get active subscription from local db
     from src.models.subscriptions import get_active_subscription
     sub = get_active_subscription(user["phone_number"])
@@ -313,14 +348,28 @@ def cancel(user: dict = Depends(get_current_user)):
 # Budget Add-on: comprar mais limite (R$99,90 avulso)
 # ---------------------------------------------------------------------------
 
+MAX_ACTIVE_ADDONS = 3
+
 @router.post("/addon")
-def purchase_addon(user: dict = Depends(get_current_user)):
+@limiter.limit("3/minute")
+def purchase_addon(request: Request, user: dict = Depends(get_current_user)):
     """
     Cria um PaymentIntent para comprar limite adicional (R$99,90).
     Após confirmação do pagamento, o budget do usuário é ampliado em $10 USD
-    por 30 dias.
+    por 30 dias. Máximo de 3 add-ons ativos por vez.
     """
     import stripe
+    from src.db.models import BudgetAddOn
+    from src.db.session import get_db
+
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as session:
+        active_count = session.query(BudgetAddOn).filter(
+            BudgetAddOn.user_id == user["phone_number"],
+            BudgetAddOn.expires_at > now,
+        ).count()
+    if active_count >= MAX_ACTIVE_ADDONS:
+        raise HTTPException(status_code=400, detail=f"Limite de {MAX_ACTIVE_ADDONS} add-ons ativos. Aguarde um expirar.")
 
     customer_id = get_or_create_customer(user)
     amount_cents = 9990  # R$99,90
@@ -345,23 +394,56 @@ def purchase_addon(user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="Erro ao processar pagamento")
 
 
+class AddonConfirmRequest(BaseModel):
+    payment_intent_id: str
+
 @router.post("/addon/confirm")
-def confirm_addon(user: dict = Depends(get_current_user)):
+@limiter.limit("5/minute")
+def confirm_addon(request: Request, req: AddonConfirmRequest, user: dict = Depends(get_current_user)):
     """
     Chamado pelo frontend após confirmação do pagamento.
-    Registra o add-on no banco para ampliar o budget.
+    Verifica o PaymentIntent no Stripe e registra o add-on no banco.
     """
+    import stripe as _stripe
     from datetime import timedelta
     from src.db.models import BudgetAddOn
     from src.db.session import get_db
+
+    try:
+        intent = _stripe.PaymentIntent.retrieve(req.payment_intent_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="PaymentIntent inválido")
+
+    if intent.status != "succeeded":
+        raise HTTPException(status_code=400, detail="Pagamento não confirmado")
+
+    if intent.metadata.get("user_id") != user["phone_number"]:
+        raise HTTPException(status_code=403, detail="PaymentIntent não pertence a este usuário")
 
     now = datetime.now(timezone.utc)
     expires = now + timedelta(days=30)
 
     with get_db() as session:
+        existing = session.query(BudgetAddOn).filter_by(
+            user_id=user["phone_number"],
+            stripe_payment_id=req.payment_intent_id,
+        ).first()
+        if existing:
+            from src.config.feature_gates import get_budget_summary
+            return {"ok": True, "message": "Add-on já registrado.", "budget": get_budget_summary(user["phone_number"])}
+
+        # [SEC] Re-check addon limit inside transaction to prevent race condition (CWE-362)
+        active_count = session.query(BudgetAddOn).filter(
+            BudgetAddOn.user_id == user["phone_number"],
+            BudgetAddOn.expires_at > now.isoformat(),
+        ).count()
+        if active_count >= MAX_ACTIVE_ADDONS:
+            raise HTTPException(status_code=400, detail=f"Limite de {MAX_ACTIVE_ADDONS} add-ons ativos.")
+
         addon = BudgetAddOn(
             user_id=user["phone_number"],
             amount_usd=10.00,
+            stripe_payment_id=req.payment_intent_id,
             purchased_at=now.isoformat(),
             expires_at=expires.isoformat(),
         )

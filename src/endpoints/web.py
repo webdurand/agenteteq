@@ -16,9 +16,8 @@ from src.agent.factory import create_agent_with_tools
 from src.agent.response_utils import extract_final_response, parse_interactive_elements
 from src.integrations.tts import get_tts
 from src.config.feature_gates import is_feature_enabled, check_budget, get_user_plan_type
-from src.memory.identity import get_user, update_user_name, update_last_seen, is_new_session, is_plan_active, get_or_rotate_session
+from src.memory.identity import get_user, update_last_seen, is_new_session, is_plan_active, get_or_rotate_session
 from src.memory.extractor import extract_and_save_facts
-from src.tools.memory_manager import add_memory
 from src.auth.jwt import decode_token
 from src.memory.analytics import log_event, log_agent_tools, log_run_metrics
 from src.utils.privacy import mask_phone
@@ -93,7 +92,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     if images_b64 is None:
         images_b64 = []
 
-    # Enforcement: orcamento mensal
+    # Enforcement: orcamento mensal (ANTES de qualquer upload)
     try:
         budget_msg = check_budget(phone_number)
     except Exception as e:
@@ -110,7 +109,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
     start_time = time.time()
     log_event(user_id=phone_number, channel="web", event_type="message_received", status="success",
               extra_data={"mode": mode, "image_count": len(images_b64) if images_b64 else 0})
-    
+
     # Decodificar imagens
     image_bytes_list = []
     for b64 in images_b64:
@@ -132,7 +131,7 @@ async def _process_text(websocket, phone_number: str, user_text: str, tts, user:
         for i_bytes in image_bytes_list:
             agent_images.append(Image(content=i_bytes))
 
-        # Upload to Cloudinary BEFORE calling agent so URLs are available
+        # Upload to Cloudinary AFTER budget check passed
         from src.integrations.image_storage import upload_user_image, describe_and_store_images
         loop_img = asyncio.get_event_loop()
         upload_tasks = [loop_img.run_in_executor(None, upload_user_image, phone_number, img_bytes) for img_bytes in image_bytes_list]
@@ -490,6 +489,13 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
     ws_manager.connect(websocket, phone_number, channel="web")
     logger.info("[WEB WS] Cliente conectado: %s", mask_phone(phone_number))
 
+    # [SEC] Rate limiting and payload size limits
+    MAX_AUDIO_BYTES = 10 * 1024 * 1024  # 10MB
+    MAX_TEXT_LENGTH = 50_000  # 50K chars
+    MAX_IMAGES = 10
+    MAX_MESSAGES_PER_MINUTE = 30
+    _msg_timestamps: list[float] = []
+
     async def run_text(user_text: str, mode: str = "voice", images_b64: list = None) -> None:
         try:
             await _process_text(websocket, phone_number, user_text, tts, user, mode, images_b64)
@@ -509,6 +515,23 @@ async def voice_websocket(websocket: WebSocket, token: str = Query(...)):
             frame_type = raw.get("type", "unknown")
             audio_bytes = raw.get("bytes")
             text_frame = raw.get("text")
+
+            # [SEC] Rate limiting per connection
+            import time as _time
+            now_ts = _time.monotonic()
+            _msg_timestamps.append(now_ts)
+            _msg_timestamps[:] = [t for t in _msg_timestamps if now_ts - t < 60]
+            if len(_msg_timestamps) > MAX_MESSAGES_PER_MINUTE:
+                await websocket.send_json({"type": "error", "message": "Muitas mensagens. Aguarde um momento."})
+                continue
+
+            # [SEC] Payload size limits
+            if audio_bytes and len(audio_bytes) > MAX_AUDIO_BYTES:
+                await websocket.send_json({"type": "error", "message": "Audio muito grande (max 10MB)."})
+                continue
+            if text_frame and len(text_frame) > MAX_TEXT_LENGTH:
+                await websocket.send_json({"type": "error", "message": "Mensagem muito longa."})
+                continue
 
             logger.info("[WEB WS] Frame recebido | tipo=%s | bytes=%s | text=%s", frame_type, len(audio_bytes) if audio_bytes else 0, text_frame[:60] if text_frame else None)
 

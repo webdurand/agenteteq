@@ -167,7 +167,9 @@ def collect_report_data(
             avg_views = sum(views) // len(views) if views else 0
 
         followers = account.get("followers_count", 0)
-        engagement_rate = (avg_likes + avg_comments) / followers * 100 if followers > 0 else 0.0
+        # Weighted engagement: comments (2x), likes (1x), views (0.1x)
+        engagement_rate = (avg_likes + avg_comments * 2 + avg_views * 0.1) / followers * 100 if followers > 0 else 0.0
+        estimated_saves = int(avg_likes * 0.15)  # industry heuristic, internal use only
 
         top_post = top_posts[0] if top_posts else {}
 
@@ -202,6 +204,7 @@ def collect_report_data(
             "engagement_rate": round(engagement_rate, 2),
             "top_post_caption": (top_post.get("caption", "") or "")[:150],
             "top_post_likes": top_post.get("likes_count", 0),
+            "estimated_saves": estimated_saves,
             # Enriched fields for dashboard
             "content_types": dict(content_types),
             "top_posts": top_posts[:5],

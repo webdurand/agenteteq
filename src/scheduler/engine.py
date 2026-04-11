@@ -137,7 +137,10 @@ def reconcile_reminders():
                     scheduler.remove_job(old_job_id)
                     logger.info("Job legado %s removido para reminder %s.", old_job_id, reminder_id)
                 except Exception:
-                    pass
+                    logger.warning("Não conseguiu remover job legado %s para reminder %s — verificando se já existe.", old_job_id, reminder_id)
+                    if scheduler.get_job(old_job_id):
+                        logger.error("Job legado %s ainda ativo! Pulando recriação do reminder %s para evitar duplicação.", old_job_id, reminder_id)
+                        continue
 
             logger.info("Reminder %s (%s) sem job ativo. Recriando...", reminder_id, trigger_type)
 

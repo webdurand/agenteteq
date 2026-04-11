@@ -59,6 +59,33 @@ TEMPLATES = {
             "Tom casual e autentico."
         ),
     },
+    "pov": {
+        "name": "POV / Ponto de Vista",
+        "description": "Coloca o espectador na perspectiva de alguem. Altamente compartilhavel.",
+        "framework": "AIDA",
+        "guidance": (
+            "Estrutura sugerida: setup do POV → experiencia imersiva → twist/revelacao → reacao. "
+            "Use segunda pessoa ('voce') para criar imersao. Tom cinematografico."
+        ),
+    },
+    "myth_busting": {
+        "name": "Derrubando Mitos",
+        "description": "Desmonta uma crenca popular com fatos. Otimo para autoridade e alcance.",
+        "framework": "PAS",
+        "guidance": (
+            "Estrutura sugerida: mito popular → por que as pessoas acreditam → verdade com prova → conclusao. "
+            "Comece com o mito de forma assertiva para gerar curiosidade."
+        ),
+    },
+    "hot_take": {
+        "name": "Opiniao Polemica / Hot Take",
+        "description": "Opiniao forte e fundamentada. Gera debate e compartilhamento.",
+        "framework": "AIDA",
+        "guidance": (
+            "Estrutura sugerida: opiniao polemica (hook forte) → argumentacao → prova/exemplo → convite ao debate. "
+            "Seja firme mas respeitoso. Convide o espectador a comentar."
+        ),
+    },
 }
 
 # ~2.3 palavras por segundo e uma boa media para fala natural em PT-BR

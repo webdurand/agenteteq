@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from sqlalchemy import func
 
-from src.auth.deps import get_current_user
+from src.auth.deps import get_current_user, require_active_plan
 from src.billing.service import is_subscription_active
 from src.config.feature_gates import get_all_usage_summary
 from src.db.models import BackgroundTask, InAppCampaign
@@ -56,6 +56,7 @@ class ContentPlanCreate(BaseModel):
     platforms: List[str] = ["instagram"]
     scheduled_at: Optional[str] = ""
     description: Optional[str] = ""
+    content_pillar: Optional[str] = ""
 
 class ContentPlanUpdate(BaseModel):
     title: Optional[str] = None
@@ -64,6 +65,7 @@ class ContentPlanUpdate(BaseModel):
     platforms: Optional[List[str]] = None
     scheduled_at: Optional[str] = None
     status: Optional[str] = None
+    content_pillar: Optional[str] = None
 
 def _parse_iso_dt(value: str | None) -> Optional[datetime]:
     if not value:
@@ -88,7 +90,7 @@ async def api_get_tasks(
     return get_tasks(user_id, status=status, limit=limit, offset=offset)
 
 @router.post("/tasks")
-async def api_create_task(task: TaskCreate, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
+async def api_create_task(task: TaskCreate, background_tasks: BackgroundTasks, current_user: dict = Depends(require_active_plan)):
     user_id = current_user["phone_number"]
     result = add_task(
         user_id=user_id,
@@ -185,7 +187,7 @@ async def api_get_reminders(
     return {"reminders": reminders, "has_more": has_more}
 
 @router.post("/reminders")
-async def api_create_reminder(rem: ReminderCreate, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
+async def api_create_reminder(rem: ReminderCreate, background_tasks: BackgroundTasks, current_user: dict = Depends(require_active_plan)):
     user_id = current_user["phone_number"]
     schedule_message, _, _ = create_scheduler_tools(user_id)
     
@@ -285,7 +287,7 @@ async def api_list_content_plans(
 async def api_create_content_plan(
     body: ContentPlanCreate,
     background_tasks: BackgroundTasks,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_active_plan),
 ):
     from src.models.content_plans import create_content_plan
     user_id = current_user["phone_number"]
@@ -296,6 +298,7 @@ async def api_create_content_plan(
         platforms=body.platforms,
         scheduled_at=body.scheduled_at or "",
         description=body.description or "",
+        content_pillar=body.content_pillar or "",
     )
     background_tasks.add_task(emit_event, user_id, "content_plan_updated")
     return {"plan": plan}

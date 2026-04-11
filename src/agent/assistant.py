@@ -56,11 +56,22 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
 
     def get_greeting_context() -> str:
         """
-        Retorna contexto personalizado para inicio de sessao: memorias, tarefas
-        pendentes e lembretes proximos. Use no inicio de uma nova conversa ou
-        quando o usuario mandar uma saudacao (oi, bom dia, etc).
+        Retorna contexto personalizado para inicio de sessao: saudacao temporal,
+        memorias, tarefas pendentes, lembretes e calendario de conteudo.
+        Use no inicio de uma nova conversa ou quando o usuario mandar uma saudacao.
         """
-        parts = []
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("America/Sao_Paulo"))
+        hour = now.hour
+        if hour < 12:
+            greeting = "Bom dia"
+        elif hour < 18:
+            greeting = "Boa tarde"
+        else:
+            greeting = "Boa noite"
+
+        parts = [f"SAUDACAO: {greeting}! Agora sao {now.strftime('%H:%M')} de {now.strftime('%d/%m')}."]
         try:
             mem = list_memories(uid)
             if mem and "Não há memórias" not in mem and "Erro" not in mem:
@@ -81,8 +92,18 @@ def get_assistant(session_id: str, extra_tools: list = None, channel: str = "wha
                 parts.append(f"LEMBRETES ATIVOS:\n" + "\n".join(lines))
         except Exception:
             pass
-        if not parts:
-            return "Nenhum contexto salvo para este usuario ainda."
+        try:
+            from src.models.content_plans import list_content_plans
+            today_str = now.strftime("%Y-%m-%d")
+            week_end = (now + __import__('datetime').timedelta(days=7)).strftime("%Y-%m-%d")
+            plans = list_content_plans(uid, from_date=today_str, to_date=week_end, limit=5)
+            if plans:
+                lines = [f"- [{p.get('status', '?')}] {p.get('title', 'sem titulo')[:60]} ({p.get('scheduled_date', '?')})" for p in plans]
+                parts.append(f"CALENDARIO DA SEMANA:\n" + "\n".join(lines))
+        except Exception:
+            pass
+        if len(parts) <= 1:
+            return parts[0] + " Nenhum contexto salvo para este usuario ainda."
         return "\n\n".join(parts)
 
     try:

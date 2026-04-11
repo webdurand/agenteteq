@@ -1,5 +1,10 @@
 from datetime import datetime, timezone
 import json
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
 from src.billing.types import SubscriptionStatus, BillingContext
 from src.models.subscriptions import (
     upsert_subscription,
@@ -81,9 +86,33 @@ def sync_subscription_from_stripe(event_id: str, event_type: str, stripe_obj: di
         upsert_subscription(upsert_data)
         
     elif event_type == "invoice.payment_failed":
-        # Handle invoice payment failure (e.g. notify via whatsapp)
-        pass
-        
+        customer_id = stripe_obj.get("customer")
+        if customer_id:
+            from src.db.models import User
+            from src.db.session import get_db
+            with get_db() as db:
+                user = db.query(User).filter_by(stripe_customer_id=customer_id).first()
+                if user:
+                    try:
+                        from src.integrations.whatsapp import whatsapp_client
+                        from src.events import _main_loop
+                        import asyncio
+                        frontend_url = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+                        msg = (
+                            "Seu pagamento do Teq falhou. "
+                            "Para evitar a interrupção do serviço, atualize seu método de pagamento: "
+                            f"{frontend_url}/dashboard"
+                        )
+                        if _main_loop and _main_loop.is_running():
+                            asyncio.run_coroutine_threadsafe(
+                                whatsapp_client.send_text_message(to_number=user.phone_number, text=msg),
+                                _main_loop
+                            )
+                        else:
+                            logger.warning("Event loop nao disponivel para enviar notificacao de payment_failed")
+                    except Exception as e:
+                        logger.warning("Falha ao notificar usuario sobre payment_failed: %s", e)
+
     elif event_type == "invoice.paid":
         # Handle successful payment
         pass

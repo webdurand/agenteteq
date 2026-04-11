@@ -16,6 +16,7 @@ def create_content_plan(
     scheduled_at: str = "",
     description: str = "",
     notes: str = "",
+    content_pillar: str = "",
 ) -> dict:
     """Create a new content plan entry."""
     now = datetime.now(timezone.utc).isoformat()
@@ -28,6 +29,7 @@ def create_content_plan(
             platforms=json.dumps(platforms or []),
             scheduled_at=scheduled_at or None,
             status="idea",
+            content_pillar=content_pillar or None,
             notes=notes,
             created_at=now,
         )

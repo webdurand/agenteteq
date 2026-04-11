@@ -11,7 +11,9 @@ class SocialProfile:
     following_count: int
     posts_count: int
     profile_pic_url: str
-    profile_url: str
+    profile_url: str = ""
+    platform: str = ""
+    verified: bool = False
     metadata: dict = field(default_factory=dict)
 
 
@@ -26,6 +28,7 @@ class SocialPost:
     likes_count: int
     comments_count: int
     shares_count: int
+    saves_count: int = 0
     views_count: int
     posted_at: str
     video_url: str = ""
