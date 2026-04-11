@@ -975,6 +975,7 @@ class VideoProject(Base):
     )
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    task_id = Column(String, unique=True, nullable=True)  # idempotency key → BackgroundTask.id
     user_id = Column(String, nullable=False)
     script_id = Column(String)
     source_type = Column(String)        # "avatar" | "real" | "ai_motion"

@@ -314,7 +314,7 @@ def cancel_task_by_video(user_id: str, task_id: str) -> Optional[str]:
     with get_db() as session:
         task = session.get(BackgroundTask, task_id)
         if task and task.user_id == user_id and task.task_type == "video" and task.status in ("pending", "processing"):
-            task.status = "failed"
+            task.status = "cancelled"
             task.result = json.dumps({"error": "cancelled by user"})
             task.updated_at = now_iso
             cancelled_id = task.id
@@ -385,7 +385,7 @@ def recover_stale_tasks():
                 "SET status = CASE WHEN attempts < 3 THEN 'pending' ELSE 'failed' END, "
                 "    result = CASE WHEN attempts >= 3 THEN :error_json ELSE result END, "
                 "    updated_at = :now "
-                "WHERE status = 'processing' AND started_at < :cutoff"
+                "WHERE status = 'processing' AND started_at < :cutoff AND task_type != 'video'"
             ),
             {"now": now_iso, "cutoff": cutoff, "error_json": '{"error": "timeout"}'},
         )

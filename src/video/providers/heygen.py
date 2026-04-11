@@ -1,14 +1,7 @@
 """
 HeyGen API client for avatar video generation.
 
-Handles the full lifecycle:
-- Upload assets (photos, audio)
-- Create & train photo avatar groups
-- Generate looks/variations
-- Generate multi-scene avatar videos
-- Text-to-speech with cloned voice
-- Poll video status
-
+Handles: asset upload, avatar setup, voice cloning, multi-scene video generation, polling.
 API Docs: https://docs.heygen.com/
 Auth: X-Api-Key header
 """
@@ -232,81 +225,6 @@ async def wait_for_training(flow_id: str, max_attempts: int = 120, interval_s: i
 
 
 # ──────────────────────────────────────────────
-# Generate Looks (AI-generated variations)
-# ──────────────────────────────────────────────
-
-async def generate_look(
-    group_id: str,
-    prompt: str,
-    orientation: str = "vertical",
-    pose: str = "half_body",
-    style: str = "Realistic",
-) -> str:
-    """
-    Generate an AI look variation of the avatar.
-
-    Args:
-        group_id: Avatar group ID.
-        prompt: Description (e.g. "Professional suit in modern office").
-        orientation: "square", "horizontal", or "vertical".
-        pose: "half_body", "close_up", or "full_body".
-        style: "Realistic", "Cinematic", "Pixar", etc.
-
-    Returns:
-        generation_id for status tracking.
-    """
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            f"{API_BASE}/v2/photo_avatar/look/generate",
-            headers=_headers(),
-            json={
-                "group_id": group_id,
-                "prompt": prompt,
-                "orientation": orientation,
-                "pose": pose,
-                "style": style,
-            },
-        )
-        resp.raise_for_status()
-        result = resp.json()
-
-    if result.get("error"):
-        raise RuntimeError(f"HeyGen generate look failed: {result['error']}")
-
-    generation_id = result.get("data", {}).get("generation_id", "")
-    logger.info("HeyGen look generation started: group_id=%s, generation_id=%s", group_id, generation_id)
-    return generation_id
-
-
-async def check_look_status(generation_id: str) -> dict:
-    """Check status of look generation."""
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(
-            f"{API_BASE}/v2/photo_avatars/{generation_id}/status",
-            headers=_headers(),
-        )
-        resp.raise_for_status()
-        return resp.json().get("data", {})
-
-
-async def wait_for_look(generation_id: str, max_attempts: int = 60, interval_s: int = 10) -> dict:
-    """Poll until look generation completes. Returns look data."""
-    for attempt in range(max_attempts):
-        status_data = await check_look_status(generation_id)
-        status = status_data.get("status", "")
-        logger.info("Look poll %d/%d: status=%s", attempt + 1, max_attempts, status)
-
-        if status in ("completed", "success"):
-            return status_data
-        if status in ("failed", "error"):
-            raise RuntimeError(f"HeyGen look generation failed: {status_data}")
-
-        await asyncio.sleep(interval_s)
-
-    raise RuntimeError(f"HeyGen look generation timed out after {max_attempts * interval_s}s")
-
-
-# ──────────────────────────────────────────────
 # List Avatars & Voices
 # ──────────────────────────────────────────────
 
@@ -511,18 +429,21 @@ def _build_video_input(
         character["use_avatar_iv_model"] = True
 
     # Voice: use pre-generated audio if available, otherwise text-to-speech
+    VALID_EMOTIONS = {"Excited", "Friendly", "Serious", "Soothing", "Broadcaster", "Angry"}
     if audio_url:
         voice_config = {
             "type": "audio",
             "audio_url": audio_url,
         }
     else:
+        safe_emotion = emotion if emotion in VALID_EMOTIONS else "Friendly"
+        safe_speed = max(0.5, min(1.5, speed))
         voice_config = {
             "type": "text",
             "voice_id": voice_id,
             "input_text": narration,
-            "speed": speed,
-            "emotion": emotion,
+            "speed": safe_speed,
+            "emotion": safe_emotion,
             "locale": "pt-BR",
         }
 
@@ -660,6 +581,7 @@ async def wait_for_video(
     max_attempts: int = 180,
     interval_s: int = 10,
     on_progress: callable = None,
+    cancel_check: callable = None,
 ) -> dict:
     """
     Poll until video generation completes.
@@ -680,7 +602,10 @@ async def wait_for_video(
         data = await get_video_status(video_id)
         status = data.get("status", "unknown")
 
-        logger.info("Video poll %d/%d: status=%s", attempt + 1, max_attempts, status)
+        if attempt < 3 or attempt % 10 == 0:
+            logger.info("Video poll %d/%d: status=%s data_keys=%s", attempt + 1, max_attempts, status, list(data.keys()))
+        else:
+            logger.info("Video poll %d/%d: status=%s", attempt + 1, max_attempts, status)
 
         if on_progress:
             on_progress(status)
@@ -696,11 +621,14 @@ async def wait_for_video(
 
         await asyncio.sleep(interval_s)
 
+        if cancel_check:
+            cancel_check()  # raises RuntimeError if cancelled
+
     raise RuntimeError(f"HeyGen video timed out after {max_attempts * interval_s}s")
 
 
 # ──────────────────────────────────────────────
-# Digital Twin (required for Seedance 2.0)
+# Digital Twin
 # ──────────────────────────────────────────────
 
 async def create_digital_twin(
@@ -752,115 +680,6 @@ async def check_digital_twin_status(avatar_id: str) -> dict:
         )
         resp.raise_for_status()
         return resp.json().get("data", {})
-
-
-# ──────────────────────────────────────────────
-# Video Agent (Seedance 2.0 / Avatar Shots)
-# ──────────────────────────────────────────────
-
-async def generate_video_agent(
-    prompt: str,
-    avatar_id: str,
-    duration_sec: int = 10,
-    orientation: str = "portrait",
-) -> str:
-    """
-    Generate a cinematic video using Seedance 2.0 Avatar Shots.
-    Requires a Digital Twin avatar (not photo avatar).
-
-    Args:
-        prompt: Cinematic scene description.
-            Good: "Golden hour light, presenter walking through modern office, slow dolly-in"
-            Bad: "a person talking"
-        avatar_id: Digital Twin avatar ID.
-        duration_sec: 5-15 seconds per clip.
-        orientation: "portrait" (9:16) or "landscape" (16:9).
-
-    Returns:
-        video_id for status polling.
-    """
-    payload = {
-        "prompt": prompt,
-        "config": {
-            "avatar_id": avatar_id,
-            "duration_sec": duration_sec,
-            "orientation": orientation,
-        },
-    }
-
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(
-            f"{API_BASE}/v1/video_agent/generate",
-            headers=_headers(),
-            json=payload,
-        )
-        if resp.status_code != 200:
-            logger.error("Video Agent failed: %s %s", resp.status_code, resp.text[:500])
-            resp.raise_for_status()
-        result = resp.json()
-
-    if result.get("error"):
-        raise RuntimeError(f"Video Agent failed: {result['error']}")
-
-    video_id = result.get("data", {}).get("video_id", "")
-    logger.info("Video Agent (Seedance) started: video_id=%s", video_id)
-    return video_id
-
-
-async def generate_seedance_multi_scene(
-    scenes: list[dict],
-    avatar_id: str,
-    orientation: str = "portrait",
-) -> list[dict]:
-    """
-    Generate multiple Seedance clips for a multi-scene video.
-    Each scene generates a 5-15s clip. Results can be stitched later.
-
-    Args:
-        scenes: List of dicts with:
-            - prompt (str): Cinematic scene description.
-            - narration (str): What the avatar says (included in prompt).
-            - duration_sec (int): 5-15 seconds.
-        avatar_id: Digital Twin avatar ID.
-
-    Returns:
-        List of dicts with video_id and status for each scene.
-    """
-    results = []
-    for i, scene in enumerate(scenes):
-        # Build cinematic prompt combining visual description + narration
-        prompt_parts = []
-        if scene.get("prompt"):
-            prompt_parts.append(scene["prompt"])
-        if scene.get("narration"):
-            prompt_parts.append(f'The presenter says: "{scene["narration"]}"')
-
-        full_prompt = ". ".join(prompt_parts)
-        duration = min(15, max(5, scene.get("duration_sec", 10)))
-
-        try:
-            video_id = await generate_video_agent(
-                prompt=full_prompt,
-                avatar_id=avatar_id,
-                duration_sec=duration,
-                orientation=orientation,
-            )
-            results.append({"scene": i, "video_id": video_id, "status": "submitted"})
-            logger.info("Seedance scene %d/%d submitted: %s", i + 1, len(scenes), video_id)
-        except Exception as e:
-            logger.error("Seedance scene %d failed: %s", i + 1, e)
-            results.append({"scene": i, "video_id": "", "status": "failed", "error": str(e)})
-
-        # Stagger requests (avoid rate limits)
-        if i < len(scenes) - 1:
-            await asyncio.sleep(5)
-
-    return results
-
-
-def estimate_seedance_cost_cents(duration_s: float) -> int:
-    """Seedance costs 4 credits per second. 1 credit ≈ $1."""
-    return int(duration_s * 4 * 100)  # 4 credits/s * 100 cents/credit
 
 
 # ──────────────────────────────────────────────

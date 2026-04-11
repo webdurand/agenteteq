@@ -190,21 +190,33 @@ async def process_task_queue():
             except Exception:
                 pass
 
-            project_id = str(_uuid.uuid4())
             now = _dt.now(_tz.utc).isoformat()
+            initial_step = "initializing"
             with get_db() as session:
-                project = VideoProject(
-                    id=project_id,
-                    user_id=task["user_id"],
-                    script_id=script_id or "",
-                    source_type=payload.get("source_type", "avatar"),
-                    source_url=payload.get("photo_url") or payload.get("video_url") or "",
-                    status="generating_voice",
-                    current_step="generating_voice",
-                    created_at=now,
-                    updated_at=now,
-                )
-                session.add(project)
+                # Idempotency: reuse existing VideoProject for this task
+                existing = session.query(VideoProject).filter(
+                    VideoProject.task_id == task["id"]
+                ).first()
+                if existing:
+                    if existing.status == "failed":
+                        raise RuntimeError("Video task already failed, not retrying")
+                    project_id = existing.id
+                    logger.info("Reusing VideoProject %s for task %s", project_id[:8], task["id"][:8])
+                else:
+                    project_id = str(_uuid.uuid4())
+                    project = VideoProject(
+                        id=project_id,
+                        task_id=task["id"],
+                        user_id=task["user_id"],
+                        script_id=script_id or "",
+                        source_type=payload.get("source_type", "avatar"),
+                        source_url=payload.get("photo_url") or payload.get("video_url") or "",
+                        status=initial_step,
+                        current_step=initial_step,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    session.add(project)
 
             # Inject avatar_id into script for pipeline to use
             if payload.get("avatar_id"):
@@ -221,12 +233,51 @@ async def process_task_queue():
                 task_id=task["id"],
             )
 
-            if not is_task_cancelled(task["id"]):
+            # Pipeline handles its own errors internally (no re-raise).
+            # Check VideoProject status to determine outcome.
+            with get_db() as session:
+                vp = session.get(VideoProject, project_id)
+                vp_status = vp.status if vp else "failed"
+                vp_error = vp.error_message if vp else "VideoProject not found"
+
+            if vp_status == "failed":
+                fail_task(task["id"], vp_error or "pipeline failed")
+                await _notify_task_failure(task)
+            elif not is_task_cancelled(task["id"]):
                 complete_task(task["id"], {"status": "success", "type": "video", "project_id": project_id})
 
     except Exception as e:
         logger.error("Erro ao processar task %s: %s", task['id'], e, exc_info=True)
         final = fail_task(task["id"], str(e))
+
+        # Mark only THIS VideoProject as failed (not all user projects)
+        if task.get("task_type") == "video":
+            try:
+                from src.db.session import get_db
+                from src.db.models import VideoProject
+                from datetime import datetime as _dt, timezone as _tz
+                with get_db() as session:
+                    vp = session.query(VideoProject).filter(
+                        VideoProject.task_id == task["id"]
+                    ).first()
+                    if vp and vp.status not in ("done", "failed"):
+                        vp.status = "failed"
+                        vp.current_step = "failed"
+                        vp.error_message = str(e)[:500]
+                        vp.updated_at = _dt.now(_tz.utc).isoformat()
+                        logger.info("Marked VideoProject %s as failed for task %s", vp.id[:8], task["id"][:8])
+            except Exception as vp_err:
+                logger.error("Failed to cleanup VideoProject: %s", vp_err)
+
+            # Also clear the __VIDEO_GENERATING__ chat message
+            try:
+                from src.models.chat_messages import update_message_by_prefix
+                import json
+                error_payload = json.dumps({"error": str(e)[:200]})
+                update_message_by_prefix(task["user_id"], "__VIDEO_GENERATING__", f"__VIDEO_FAILED__{error_payload}")
+            except Exception:
+                pass
+
         if final:
             await _notify_task_failure(task)
 

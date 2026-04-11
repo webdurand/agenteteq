@@ -33,7 +33,7 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
         Args:
             topic: Tema/ideia do video. Ex: "como aumentar vendas com Instagram".
             style: Formato do video. Opcoes: tutorial, storytelling, listicle, transformation, qa, behind_the_scenes.
-            duration: Duracao alvo em segundos (30-80). Padrao: 60.
+            duration: Duracao alvo em segundos (10-120). Padrao: 60.
             reference_account: Username de conta monitorada para inspiracao (opcional).
 
         Returns:
@@ -42,30 +42,23 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
         if not topic:
             return "Informe o tema do video. Ex: create_video_script(topic='como aumentar vendas com Instagram')"
 
-        duration = max(30, min(80, duration))
+        duration = max(10, min(120, duration))
 
-        # Auto-detect: HeyGen standard (preferred — fast & cheap), seedance only if explicit
-        if source_type == "avatar":
-            try:
-                from src.db.models import UserAvatar
-                from src.db.session import get_db
-                with get_db() as session:
-                    has_avatar = (
-                        session.query(UserAvatar)
-                        .filter(UserAvatar.user_id == user_id, UserAvatar.is_active == True)
-                        .first()
-                    )
-                    if has_avatar:
-                        if has_avatar.heygen_avatar_id and has_avatar.heygen_voice_id:
-                            source_type = "heygen"
-                            logger.info("Auto-upgraded source_type to heygen (HeyGen avatar configured)")
-                        else:
-                            source_type = "ai_motion"
-                            logger.info("Auto-upgraded source_type to ai_motion (user has avatar)")
-                        if not person_description and has_avatar.label:
-                            person_description = has_avatar.label
-            except Exception:
-                pass
+        # Force heygen (only supported mode)
+        source_type = "heygen"
+        try:
+            from src.db.models import UserAvatar
+            from src.db.session import get_db
+            with get_db() as session:
+                has_avatar = (
+                    session.query(UserAvatar)
+                    .filter(UserAvatar.user_id == user_id, UserAvatar.is_active == True)
+                    .first()
+                )
+                if has_avatar and not person_description and has_avatar.label:
+                    person_description = has_avatar.label
+        except Exception:
+            pass
 
         _notify(f"Criando roteiro de video ({style}) sobre: {topic}...")
 
@@ -160,31 +153,190 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
             "Para ajustar o roteiro, peca modificacoes e gero outro."
         )
 
+    def create_video_script_direct(
+        scenes_text: str = "",
+        title: str = "",
+        style: str = "storytelling",
+        person_description: str = "",
+    ) -> str:
+        """
+        Cria roteiro direto a partir de falas JA APROVADAS pelo usuario no chat.
+        NAO usa LLM — apenas converte as falas em JSON estruturado pro HeyGen.
+
+        Use esta tool quando o usuario combinou as falas no chat e aprovou.
+        Use create_video_script quando precisa gerar roteiro do zero.
+
+        Args:
+            scenes_text: Falas separadas por '|'. Ex: "fala cena 1|fala cena 2|fala cena 3".
+            title: Titulo do video (opcional).
+            style: Formato (tutorial, storytelling, etc). Padrao: storytelling.
+            person_description: Descricao do avatar (opcional).
+
+        Returns:
+            Preview do roteiro com ID para gerar o video.
+        """
+        if not scenes_text:
+            return "Informe as falas aprovadas separadas por '|'. Ex: create_video_script_direct(scenes_text='fala 1|fala 2|fala 3')"
+
+        scenes_list = [s.strip() for s in scenes_text.split("|") if s.strip()]
+        if not scenes_list:
+            return "Nenhuma fala encontrada. Separe as falas com '|'."
+
+        # Load person_description from avatar if not provided
+        if not person_description:
+            try:
+                from src.db.models import UserAvatar
+                from src.db.session import get_db
+                with get_db() as session:
+                    avatar = (
+                        session.query(UserAvatar)
+                        .filter(UserAvatar.user_id == user_id, UserAvatar.is_active == True)
+                        .first()
+                    )
+                    if avatar and avatar.label:
+                        person_description = avatar.label
+            except Exception:
+                pass
+
+        person_desc = person_description or "o creator"
+
+        # Background color palette — alternates per scene
+        BG_PALETTE = [
+            "#0D1117", "#1a1a2e", "#2d6a4f", "#7209b7",
+            "#f77f00", "#e63946", "#264653", "#023e8a",
+        ]
+
+        # Build script JSON mechanically — no LLM
+        from src.video.templates import get_template
+
+        template = get_template(style)
+        total_words = 0
+
+        # First scene = hook, last scene = callback (if 3+), middle = scenes
+        hook_text = scenes_list[0]
+        total_words += len(hook_text.split())
+
+        hook = {
+            "type": "bold_statement",
+            "narration": hook_text,
+            "on_screen_text": "",
+            "duration_s": max(3, int(len(hook_text.split()) / 2.3)),
+            "open_loop": "",
+            "heygen_background": {"type": "color", "value": BG_PALETTE[0]},
+            "heygen_emotion": "Excited",
+            "heygen_speed": 1.0,
+        }
+
+        middle_scenes = []
+        callback = None
+
+        if len(scenes_list) >= 3:
+            # Last scene = callback
+            cb_text = scenes_list[-1]
+            total_words += len(cb_text.split())
+            callback = {
+                "narration": cb_text,
+                "on_screen_text": "",
+                "duration_s": max(3, int(len(cb_text.split()) / 2.3)),
+                "heygen_background": {"type": "color", "value": BG_PALETTE[(len(scenes_list) - 1) % len(BG_PALETTE)]},
+                "heygen_emotion": "Soothing",
+                "heygen_speed": 1.0,
+            }
+            scene_texts = scenes_list[1:-1]
+        elif len(scenes_list) == 2:
+            scene_texts = scenes_list[1:]
+        else:
+            scene_texts = []
+
+        for i, text in enumerate(scene_texts):
+            total_words += len(text.split())
+            middle_scenes.append({
+                "name": f"cena_{i + 1}",
+                "narration": text,
+                "on_screen_text": "",
+                "duration_s": max(3, int(len(text.split()) / 2.3)),
+                "heygen_background": {"type": "color", "value": BG_PALETTE[(i + 1) % len(BG_PALETTE)]},
+                "heygen_emotion": "Friendly",
+                "heygen_speed": 1.0,
+                "loop_note": "",
+            })
+
+        estimated_duration = max(10, int(total_words / 2.3))
+
+        script = {
+            "title": title or "Video",
+            "person_description": person_desc,
+            "hook": hook,
+            "scenes": middle_scenes,
+            "callback": callback or {},
+            "config": {
+                "framework": template["framework"],
+                "style": style,
+                "total_duration_s": estimated_duration,
+                "total_words": total_words,
+                "suggested_hashtags": [],
+                "suggested_caption": "",
+            },
+        }
+
+        # Save to DB
+        from src.db.session import get_db, get_engine
+        from src.db.models import VideoScript
+
+        try:
+            VideoScript.__table__.create(get_engine(), checkfirst=True)
+        except Exception:
+            pass
+
+        script_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        script_json_str = json.dumps(script, ensure_ascii=False)
+
+        try:
+            with get_db() as session:
+                db_script = VideoScript(
+                    id=script_id,
+                    user_id=user_id,
+                    topic=title or scenes_list[0][:100],
+                    style=style,
+                    framework=template["framework"],
+                    duration_target=estimated_duration,
+                    script_json=script_json_str,
+                    created_at=now,
+                )
+                session.add(db_script)
+            logger.info("Direct video script saved: %s (%d scenes, ~%ds)", script_id[:8], len(scenes_list), estimated_duration)
+        except Exception as e:
+            logger.error("FAILED to save direct video script %s: %s", script_id[:8], e)
+            script["_fallback_script_id"] = script_id
+
+        from src.video.script_generator import format_script_preview
+        preview = format_script_preview(script)
+
+        return (
+            f"**Roteiro criado (direto)!** (ID: {script_id[:8]})\n\n"
+            f"{preview}\n\n"
+            f"Duracao estimada: ~{estimated_duration}s ({total_words} palavras)\n\n"
+            "---\n"
+            "Para gerar o video, use generate_video com este roteiro.\n"
+            "Para ajustar, peca as mudancas no chat."
+        )
+
     def generate_video(
         script_id: str = "",
         topic: str = "",
-        source_type: str = "avatar",
+        source_type: str = "heygen",
         photo_url: str = "",
         video_url: str = "",
         voice: str = "",
         person_description: str = "",
     ) -> str:
         """
-        Gera um video completo a partir de um roteiro ou topico.
-        O video inclui voz, legendas dinamicas, zoom, B-roll e transicoes.
+        Gera um video com avatar HeyGen + voz do Digital Twin.
 
         Args:
-            script_id: ID do roteiro (gerado por create_video_script). Se vazio, gera roteiro automaticamente.
-            topic: Tema do video (usado se script_id nao fornecido).
-            source_type: Modo de geracao:
-                - "heygen": gera video com avatar HeyGen (voz clonada + cenarios + transicoes)
-                - "avatar": gera pessoa falando a partir de foto (D-ID talking head)
-                - "real": usa video enviado pelo criador
-                - "ai_motion": gera cenas realistas do usuario em cenarios diferentes (Kling I2V)
-            photo_url: URL da foto para modo avatar.
-            video_url: URL do video para modo real.
-            voice: Voz para narracao (opcional).
-            person_description: Descricao da aparencia da pessoa para ai_motion (opcional).
+            script_id: ID do roteiro aprovado (gerado por create_video_script).
+            topic: Tema do video (fallback se script_id nao fornecido).
 
         Returns:
             Status da geracao (enfileirada, posicao, estimativa).
@@ -215,75 +367,25 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
         if monthly_count >= max_monthly:
             return f"Limite de {max_monthly} videos por mes atingido. Aguarde o proximo mes ou faca upgrade."
 
-        # Auto-detect: HeyGen standard (preferred), seedance only if explicit
+        # Force heygen
+        source_type = "heygen"
         avatar_id = ""
-        if source_type == "avatar" and not photo_url:
-            from src.db.models import UserAvatar
-            with get_db() as session:
-                has_avatar = (
-                    session.query(UserAvatar)
-                    .filter(UserAvatar.user_id == user_id, UserAvatar.is_active == True)
-                    .first()
-                )
-                if has_avatar:
-                    if has_avatar.heygen_avatar_id and has_avatar.heygen_voice_id:
-                        source_type = "heygen"
-                        logger.info("Auto-upgraded source_type to heygen (HeyGen avatar configured)")
-                    else:
-                        source_type = "ai_motion"
-                        logger.info("Auto-upgraded source_type to ai_motion (user has active avatar)")
 
-        if source_type == "heygen":
-            # Validate HeyGen avatar
-            from src.db.models import UserAvatar
-            with get_db() as session:
-                avatar = (
-                    session.query(UserAvatar)
-                    .filter(UserAvatar.user_id == user_id, UserAvatar.is_active == True)
-                    .order_by(UserAvatar.created_at.desc())
-                    .first()
-                )
-                if not avatar or not avatar.heygen_avatar_id:
-                    return (
-                        "Avatar HeyGen nao configurado. "
-                        "Use setup_avatar para criar seu avatar no HeyGen primeiro."
-                    )
-                if not avatar.heygen_voice_id:
-                    return (
-                        "Voz HeyGen nao configurada. "
-                        "Configure sua voz no setup do avatar."
-                    )
-                avatar_id = avatar.id
-                _notify(f"Usando avatar HeyGen: {avatar.label or 'Meu Avatar'}")
-
-        elif source_type == "ai_motion":
-            if not is_feature_enabled(user_id, "ai_motion_enabled"):
+        from src.db.models import UserAvatar
+        with get_db() as session:
+            avatar = (
+                session.query(UserAvatar)
+                .filter(UserAvatar.user_id == user_id, UserAvatar.is_active == True)
+                .order_by(UserAvatar.created_at.desc())
+                .first()
+            )
+            if not avatar or not avatar.heygen_avatar_id:
                 return (
-                    "O modo AI Motion (cenarios realistas) nao esta disponivel no seu plano. "
-                    "Faca upgrade para desbloquear!"
+                    "Avatar HeyGen nao configurado. "
+                    "Use setup_avatar para criar seu avatar no HeyGen primeiro."
                 )
-            # Get active avatar — validate it exists and has valid frames
-            from src.db.models import UserAvatar
-            with get_db() as session:
-                avatar = (
-                    session.query(UserAvatar)
-                    .filter(UserAvatar.user_id == user_id, UserAvatar.is_active == True)
-                    .order_by(UserAvatar.created_at.desc())
-                    .first()
-                )
-                if not avatar:
-                    return (
-                        "Voce precisa configurar seu avatar primeiro! "
-                        "Envie 1-4 fotos suas ou 1 video curto usando setup_avatar."
-                    )
-                frames = json.loads(avatar.reference_frames or "[]")
-                if not frames:
-                    return (
-                        "Seu avatar nao tem frames de referencia validos. "
-                        "Reconfigure com setup_avatar usando fotos reais."
-                    )
-                avatar_id = avatar.id
-                _notify(f"Usando avatar: {avatar.media_type} com {len(frames)} frame(s) de referencia.")
+            avatar_id = avatar.id
+            _notify(f"Usando avatar HeyGen: {avatar.label or 'Meu Avatar'}")
 
         if not script_id:
             return (
@@ -305,9 +407,10 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
             ).scalar() or 0
 
         if active_video_tasks > 0:
+            logger.info("generate_video blocked: user %s already has %d active video task(s)", user_id, active_video_tasks)
             return (
-                "Ja tem um video sendo processado! Aguarde ele terminar ou cancele pela aba Fila.\n"
-                "Nao e possivel gerar dois videos ao mesmo tempo."
+                "Seu video ja esta sendo gerado! Aguarde ele terminar. "
+                "Vou te avisar no chat quando ficar pronto."
             )
 
         # Fetch script data for the worker (inline fallback) and progress title
@@ -343,11 +446,6 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
         # Enqueue task — include script_json inline as fallback if DB lookup may fail
         from src.queue.task_queue import enqueue_task
 
-        # Force heygen standard — seedance is disabled
-        if source_type == "heygen_seedance":
-            source_type = "heygen"
-            logger.info("Forced source_type from heygen_seedance to heygen (seedance disabled)")
-
         payload = {
             "script_id": script_id,
             "topic": effective_topic,
@@ -372,7 +470,7 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
             try:
                 from src.models.chat_messages import save_message
                 placeholder = "__VIDEO_GENERATING__" + json.dumps({
-                    "current_step": "generating_voice",
+                    "current_step": "generating_scenes",
                     "title": script_title,
                     "task_id": result.get("task_id", ""),
                 })
@@ -450,7 +548,7 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
         templates = list_templates()
         lines = ["**Templates de video disponiveis:**\n"]
         for t in templates:
-            lines.append(f"- **{t['id']}**: {t['name']} ({t['framework']}, {t['duration']})")
+            lines.append(f"- **{t['id']}**: {t['name']} ({t['framework']})")
             lines.append(f"  {t['description']}")
 
         lines.append("\nUse create_video_script(topic='...', style='template_id') para criar um roteiro.")
@@ -1734,6 +1832,7 @@ def create_video_tools(user_id: str, channel: str = "unknown", notifier=None):
 
     return (
         create_video_script,
+        create_video_script_direct,
         generate_video,
         list_videos,
         list_video_templates,

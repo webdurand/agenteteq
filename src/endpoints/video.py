@@ -60,6 +60,27 @@ async def cancel_video_generation(task_id: str, user: dict = Depends(get_current
     if not cancelled_id:
         raise HTTPException(status_code=400, detail="Task não encontrada ou não está em geração")
 
+    # Also mark any active VideoProject as failed
+    try:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        with get_db() as session:
+            stuck = (
+                session.query(VideoProject)
+                .filter(
+                    VideoProject.user_id == user_id,
+                    VideoProject.status.notin_(["done", "failed"]),
+                )
+                .all()
+            )
+            for vp in stuck:
+                vp.status = "failed"
+                vp.current_step = "failed"
+                vp.error_message = "Cancelado pelo usuario"
+                vp.updated_at = now
+    except Exception:
+        pass
+
     # Update chat message placeholder to FAILED
     try:
         import asyncio
@@ -581,6 +602,42 @@ async def api_queue_history(
             }
             for t in tasks
         ]}
+
+
+@router.post("/admin/cleanup-stuck")
+async def api_cleanup_stuck(user=Depends(get_current_user)):
+    """Mark all stuck VideoProjects as failed and clear stuck chat messages."""
+    from datetime import datetime, timezone
+    user_id = user["phone_number"]
+    now = datetime.now(timezone.utc).isoformat()
+
+    cleaned = 0
+    with get_db() as session:
+        stuck = (
+            session.query(VideoProject)
+            .filter(
+                VideoProject.user_id == user_id,
+                VideoProject.status.notin_(["done", "failed"]),
+            )
+            .all()
+        )
+        for vp in stuck:
+            vp.status = "failed"
+            vp.current_step = "failed"
+            vp.error_message = "cleaned up by admin"
+            vp.updated_at = now
+            cleaned += 1
+
+    # Clear stuck __VIDEO_GENERATING__ chat messages
+    try:
+        from src.models.chat_messages import update_message_by_prefix
+        import json
+        error_payload = json.dumps({"error": "Processo anterior foi limpo."})
+        update_message_by_prefix(user_id, "__VIDEO_GENERATING__", f"__VIDEO_FAILED__{error_payload}")
+    except Exception:
+        pass
+
+    return {"cleaned": cleaned}
 
 
 # --- Get video details (MUST be after all static routes to avoid catching /avatars etc.) ---
